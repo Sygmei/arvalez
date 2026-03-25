@@ -195,8 +195,12 @@ impl OpenApiImporter {
                     schema,
                     &InlineModelContext::RequestBody {
                         operation_name: operation_name.to_owned(),
-                        method,
-                        path: path.to_owned(),
+                        pointer: format!(
+                            "#/paths/{}/{}/requestBody/content/{}/schema",
+                            json_pointer_key(path),
+                            method_key(method),
+                            json_pointer_key(media_type)
+                        ),
                     },
                 )
             })
@@ -232,9 +236,26 @@ impl OpenApiImporter {
                     schema,
                     &InlineModelContext::Response {
                         operation_name: operation_name.to_owned(),
-                        method,
-                        path: path.to_owned(),
                         status: status.to_owned(),
+                        pointer: media_type.as_ref().map_or_else(
+                            || {
+                                format!(
+                                    "#/paths/{}/{}/responses/{}",
+                                    json_pointer_key(path),
+                                    method_key(method),
+                                    json_pointer_key(status)
+                                )
+                            },
+                            |media_type| {
+                                format!(
+                                    "#/paths/{}/{}/responses/{}/content/{}/schema",
+                                    json_pointer_key(path),
+                                    method_key(method),
+                                    json_pointer_key(status),
+                                    json_pointer_key(media_type)
+                                )
+                            }
+                        ),
                     },
                 )
             })
@@ -278,6 +299,8 @@ impl OpenApiImporter {
         schema: &Schema,
         pointer: &str,
     ) -> Result<Model> {
+        self.validate_schema_keywords(schema, pointer)?;
+
         if let Some(enum_values) = &schema.enum_values {
             let mut model = Model::new(format!("model.{}", to_snake_case(name)), name.to_owned());
             model.source = Some(SourceRef {
@@ -301,12 +324,13 @@ impl OpenApiImporter {
         }
 
         if !schema_is_object_like(schema) {
-            let imported = self.import_schema_type(
+            let imported = self.import_schema_type_inner(
                 schema,
                 &InlineModelContext::NamedSchema {
                     name: name.to_owned(),
                     pointer: pointer.to_owned(),
                 },
+                true,
             )?;
             let mut model = Model::new(format!("model.{}", to_snake_case(name)), name.to_owned());
             model.source = Some(SourceRef {
@@ -357,6 +381,11 @@ impl OpenApiImporter {
                 &InlineModelContext::Field {
                     model_name: name.to_owned(),
                     field_name: field_name.clone(),
+                    pointer: format!(
+                        "{}/properties/{}",
+                        pointer,
+                        json_pointer_key(field_name)
+                    ),
                 },
             )?;
             let mut field = Field::new(
@@ -378,14 +407,17 @@ impl OpenApiImporter {
         schema: &Schema,
         context: &InlineModelContext,
     ) -> Result<ImportedType> {
-        if schema.all_of.is_some() {
-            self.handle_unhandled(&context.describe(), "`allOf` is not supported yet")?;
-        }
-        if schema.const_value.is_some() {
-            self.handle_unhandled(&context.describe(), "`const` is not supported yet")?;
-        }
-        if schema.discriminator.is_some() {
-            self.handle_unhandled(&context.describe(), "`discriminator` is not supported yet")?;
+        self.import_schema_type_inner(schema, context, false)
+    }
+
+    fn import_schema_type_inner(
+        &mut self,
+        schema: &Schema,
+        context: &InlineModelContext,
+        skip_keyword_validation: bool,
+    ) -> Result<ImportedType> {
+        if !skip_keyword_validation {
+            self.validate_schema_keywords(schema, &context.describe())?;
         }
 
         if let Some(reference) = &schema.reference {
@@ -393,6 +425,10 @@ impl OpenApiImporter {
                 type_ref: Some(TypeRef::named(ref_name(reference)?)),
                 nullable: false,
             });
+        }
+
+        if let Some(const_value) = &schema.const_value {
+            return self.import_const_type(schema, const_value, context);
         }
 
         if let Some(any_of) = &schema.any_of {
@@ -437,12 +473,114 @@ impl OpenApiImporter {
             };
         }
 
+        if is_unconstrained_schema(schema) {
+            return Ok(ImportedType::plain(TypeRef::primitive("any")));
+        }
+
         if schema.properties.is_some() || schema.additional_properties.is_some() {
             return self.import_object_type(schema, context);
         }
 
         self.handle_unhandled(&context.describe(), "schema shape is not supported yet")?;
         Ok(ImportedType::plain(TypeRef::primitive("any")))
+    }
+
+    fn validate_schema_keywords(&mut self, schema: &Schema, context: &str) -> Result<()> {
+        if schema.all_of.is_some() {
+            self.handle_unhandled(context, "`allOf` is not supported yet")?;
+        }
+
+        for keyword in schema.extra_keywords.keys() {
+            if is_known_ignored_schema_keyword(keyword) || keyword.starts_with("x-") {
+                continue;
+            }
+
+            if is_known_but_unimplemented_schema_keyword(keyword) {
+                self.handle_unhandled(context, format!("`{keyword}` is not supported yet"))?;
+                continue;
+            }
+
+            self.handle_unhandled(context, format!("unknown schema keyword `{keyword}`"))?;
+        }
+
+        Ok(())
+    }
+
+    fn import_const_type(
+        &mut self,
+        schema: &Schema,
+        const_value: &Value,
+        context: &InlineModelContext,
+    ) -> Result<ImportedType> {
+        if let Some(schema_type) = &schema.schema_type {
+            let imported = match schema_type.as_str() {
+                "string" => {
+                    if schema.format.as_deref() == Some("binary") {
+                        ImportedType::plain(TypeRef::primitive("binary"))
+                    } else {
+                        ImportedType::plain(TypeRef::primitive("string"))
+                    }
+                }
+                "integer" => ImportedType::plain(TypeRef::primitive("integer")),
+                "number" => ImportedType::plain(TypeRef::primitive("number")),
+                "boolean" => ImportedType::plain(TypeRef::primitive("boolean")),
+                "null" => ImportedType {
+                    type_ref: Some(TypeRef::primitive("any")),
+                    nullable: true,
+                },
+                "array" => {
+                    let item_schema = schema.items.as_ref().ok_or_else(|| {
+                        anyhow!("{}: array schema is missing `items`", context.describe())
+                    })?;
+                    let imported = self.import_schema_type(item_schema, context)?;
+                    ImportedType::plain(TypeRef::array(
+                        imported
+                            .type_ref
+                            .unwrap_or_else(|| TypeRef::primitive("any")),
+                    ))
+                }
+                "object" => self.import_object_type(schema, context)?,
+                other => {
+                    self.handle_unhandled(
+                        &context.describe(),
+                        format!("unsupported schema type `{other}`"),
+                    )?;
+                    ImportedType::plain(TypeRef::primitive("any"))
+                }
+            };
+            return Ok(imported);
+        }
+
+        let imported = match const_value {
+            Value::String(_) => ImportedType::plain(TypeRef::primitive("string")),
+            Value::Bool(_) => ImportedType::plain(TypeRef::primitive("boolean")),
+            Value::Number(number) => {
+                if number.is_i64() || number.is_u64() {
+                    ImportedType::plain(TypeRef::primitive("integer"))
+                } else {
+                    ImportedType::plain(TypeRef::primitive("number"))
+                }
+            }
+            Value::Null => ImportedType {
+                type_ref: Some(TypeRef::primitive("any")),
+                nullable: true,
+            },
+            Value::Array(_) => {
+                if let Some(items) = &schema.items {
+                    let imported = self.import_schema_type(items, context)?;
+                    ImportedType::plain(TypeRef::array(
+                        imported
+                            .type_ref
+                            .unwrap_or_else(|| TypeRef::primitive("any")),
+                    ))
+                } else {
+                    ImportedType::plain(TypeRef::array(TypeRef::primitive("any")))
+                }
+            }
+            Value::Object(_) => self.import_object_type(schema, context)?,
+        };
+
+        Ok(imported)
     }
 
     fn import_any_of(
@@ -566,17 +704,16 @@ enum InlineModelContext {
     Field {
         model_name: String,
         field_name: String,
+        pointer: String,
     },
     RequestBody {
         operation_name: String,
-        method: HttpMethod,
-        path: String,
+        pointer: String,
     },
     Response {
         operation_name: String,
-        method: HttpMethod,
-        path: String,
         status: String,
+        pointer: String,
     },
     Parameter {
         name: String,
@@ -590,6 +727,7 @@ impl InlineModelContext {
             Self::Field {
                 model_name,
                 field_name,
+                ..
             } => format!("{model_name} {field_name}"),
             Self::RequestBody { operation_name, .. } => format!("{operation_name} request"),
             Self::Response {
@@ -605,30 +743,13 @@ impl InlineModelContext {
         match self {
             InlineModelContext::NamedSchema { pointer, .. } => pointer.clone(),
             InlineModelContext::Field {
-                model_name,
-                field_name,
-            } => format!("field `{model_name}.{field_name}`"),
-            InlineModelContext::RequestBody {
-                operation_name,
-                method,
-                path,
-            } => format!(
-                "request body for `{}` {} {}",
-                operation_name,
-                method_key(*method),
-                path
-            ),
+                pointer,
+                ..
+            } => pointer.clone(),
+            InlineModelContext::RequestBody { pointer, .. } => pointer.clone(),
             InlineModelContext::Response {
-                operation_name,
-                method,
-                path,
-                status,
-            } => format!(
-                "response {status} for `{}` {} {}",
-                operation_name,
-                method_key(*method),
-                path
-            ),
+                pointer, ..
+            } => pointer.clone(),
             InlineModelContext::Parameter { name } => format!("parameter `{name}`"),
         }
     }
@@ -637,26 +758,12 @@ impl InlineModelContext {
         match self {
             Self::NamedSchema { pointer, .. } => pointer.clone(),
             Self::Field {
-                model_name: parent_model,
-                field_name,
-            } => format!("#/synthetic/{}/fields/{}", parent_model, field_name),
-            Self::RequestBody { method, path, .. } => {
-                format!(
-                    "#/synthetic/{}/{}/request-body/{model_name}",
-                    method_key(*method),
-                    json_pointer_key(path)
-                )
-            }
+                pointer, ..
+            } => pointer.clone(),
+            Self::RequestBody { pointer, .. } => pointer.clone(),
             Self::Response {
-                method,
-                path,
-                status,
-                ..
-            } => format!(
-                "#/synthetic/{}/{}/responses/{status}/{model_name}",
-                method_key(*method),
-                json_pointer_key(path)
-            ),
+                pointer, ..
+            } => pointer.clone(),
             Self::Parameter { name } => format!("#/synthetic/parameters/{name}/{model_name}"),
         }
     }
@@ -757,8 +864,9 @@ struct Schema {
     #[serde(rename = "const")]
     #[serde(default)]
     const_value: Option<Value>,
+    #[serde(rename = "discriminator")]
     #[serde(default)]
-    discriminator: Option<Value>,
+    _discriminator: Option<Value>,
     #[serde(rename = "allOf")]
     #[serde(default)]
     all_of: Option<Vec<Schema>>,
@@ -780,6 +888,9 @@ struct Schema {
     #[serde(rename = "oneOf")]
     #[serde(default)]
     one_of: Option<Vec<Schema>>,
+    #[serde(flatten)]
+    #[serde(default)]
+    extra_keywords: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -802,6 +913,71 @@ fn schema_is_object_like(schema: &Schema) -> bool {
     matches!(schema.schema_type.as_deref(), Some("object"))
         || schema.properties.is_some()
         || schema.additional_properties.is_some()
+}
+
+fn is_unconstrained_schema(schema: &Schema) -> bool {
+    schema.reference.is_none()
+        && schema.schema_type.is_none()
+        && schema.format.is_none()
+        && schema.const_value.is_none()
+        && schema._discriminator.is_none()
+        && schema.all_of.is_none()
+        && schema.enum_values.is_none()
+        && schema.properties.is_none()
+        && schema.required.is_none()
+        && schema.items.is_none()
+        && schema.additional_properties.is_none()
+        && schema.any_of.is_none()
+        && schema.one_of.is_none()
+        && schema.extra_keywords.is_empty()
+}
+
+fn is_known_ignored_schema_keyword(keyword: &str) -> bool {
+    matches!(
+        keyword,
+        "default"
+            | "description"
+            | "example"
+            | "examples"
+            | "deprecated"
+            | "readOnly"
+            | "writeOnly"
+            | "minimum"
+            | "maximum"
+            | "exclusiveMinimum"
+            | "exclusiveMaximum"
+            | "multipleOf"
+            | "minLength"
+            | "maxLength"
+            | "pattern"
+            | "minItems"
+            | "maxItems"
+            | "uniqueItems"
+            | "minProperties"
+            | "maxProperties"
+            | "nullable"
+            | "$schema"
+            | "$id"
+            | "$comment"
+    )
+}
+
+fn is_known_but_unimplemented_schema_keyword(keyword: &str) -> bool {
+    matches!(
+        keyword,
+        "not"
+            | "if"
+            | "then"
+            | "else"
+            | "contains"
+            | "prefixItems"
+            | "patternProperties"
+            | "propertyNames"
+            | "dependentSchemas"
+            | "unevaluatedProperties"
+            | "unevaluatedItems"
+            | "$defs"
+    )
 }
 
 fn fallback_operation_name(method: HttpMethod, path: &str) -> String {
@@ -1002,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_on_unhandled_elements_by_default_and_warns_when_ignored() {
+    fn supports_const_scalar_fields() {
         let spec = r##"
 {
   "openapi": "3.1.0",
@@ -1024,13 +1200,134 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let result = OpenApiImporter::new(document, LoadOpenApiOptions::default())
+            .build_ir()
+            .expect("const should be supported");
+        let patch_op = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "PatchOp")
+            .expect("PatchOp model");
+        assert!(
+            patch_op
+                .fields
+                .iter()
+                .any(|field| field.name == "op" && field.type_ref == TypeRef::primitive("string"))
+        );
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn supports_discriminator_on_unions() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "AddOperation": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          }
+        }
+      },
+      "RemoveOperation": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          }
+        }
+      },
+      "PatchSchema": {
+        "type": "object",
+        "properties": {
+          "patches": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "$ref": "#/components/schemas/AddOperation" },
+                { "$ref": "#/components/schemas/RemoveOperation" }
+              ],
+              "discriminator": {
+                "propertyName": "op",
+                "mapping": {
+                  "add": "#/components/schemas/AddOperation",
+                  "remove": "#/components/schemas/RemoveOperation"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let result = OpenApiImporter::new(document, LoadOpenApiOptions::default())
+            .build_ir()
+            .expect("discriminator unions should be supported");
+        let patch_schema = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "PatchSchema")
+            .expect("PatchSchema model");
+        let patches = patch_schema
+            .fields
+            .iter()
+            .find(|field| field.name == "patches")
+            .expect("patches field");
+        assert!(
+            matches!(
+                &patches.type_ref,
+                TypeRef::Array { item }
+                    if matches!(
+                        item.as_ref(),
+                        TypeRef::Union { variants }
+                            if variants == &vec![
+                                TypeRef::named("AddOperation"),
+                                TypeRef::named("RemoveOperation")
+                            ]
+                    )
+            )
+        );
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn errors_on_unhandled_elements_by_default_and_warns_when_ignored() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "PatchSchema": {
+        "allOf": [
+          { "type": "object" }
+        ]
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
         let strict_error = OpenApiImporter::new(document.clone(), LoadOpenApiOptions::default())
             .build_ir()
             .expect_err("strict mode should fail");
         assert!(
             strict_error
                 .to_string()
-                .contains("`const` is not supported yet")
+                .contains("`allOf` is not supported yet")
         );
 
         let warning_result = OpenApiImporter::new(
@@ -1045,7 +1342,61 @@ mod tests {
             warning_result
                 .warnings
                 .iter()
-                .any(|warning| warning.contains("`const` is not supported yet"))
+                .any(|warning| warning.contains("`allOf` is not supported yet"))
         );
+    }
+
+    #[test]
+    fn errors_on_unknown_schema_keywords() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "PatchSchema": {
+        "type": "string",
+        "frobnicate": true
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let error = OpenApiImporter::new(document, LoadOpenApiOptions::default())
+            .build_ir()
+            .expect_err("unknown keyword should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown schema keyword `frobnicate`")
+        );
+    }
+
+    #[test]
+    fn ignores_known_non_codegen_schema_keywords() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "PatchSchema": {
+        "type": "string",
+        "description": "some text",
+        "default": "value",
+        "minLength": 1
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let result = OpenApiImporter::new(document, LoadOpenApiOptions::default())
+            .build_ir()
+            .expect("known ignored keywords should not fail");
+        assert!(result.warnings.is_empty());
     }
 }
