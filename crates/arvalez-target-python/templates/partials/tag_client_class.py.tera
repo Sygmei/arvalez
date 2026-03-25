@@ -1,0 +1,7 @@
+class {{ client.class_name }}(_BaseApiClient):
+    def __init__(self, owner: {{ client.owner_class_name }}) -> None:
+        self._owner = owner
+        self._client = owner._client
+        self._on_error = owner._on_error
+
+{{ client.methods_block }}

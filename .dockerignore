@@ -1,0 +1,8 @@
+.git
+.gitignore
+target
+generated
+fixtures
+openapi.json
+*.pyc
+__pycache__

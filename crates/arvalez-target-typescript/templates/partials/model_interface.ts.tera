@@ -1,0 +1,7 @@
+export interface {{ model.interface_name }} {
+{% if not model.has_fields -%}
+}
+{% else -%}
+{{ model.fields_block }}
+}
+{% endif %}

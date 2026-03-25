@@ -1,0 +1,64 @@
+{
+  "ir_version": 1,
+  "models": [
+    {
+      "id": "model.invoice",
+      "name": "Invoice",
+      "fields": [
+        {
+          "name": "id",
+          "type_ref": {
+            "kind": "primitive",
+            "name": "string"
+          },
+          "optional": false,
+          "nullable": false,
+          "attributes": {}
+        },
+        {
+          "name": "total",
+          "type_ref": {
+            "kind": "named",
+            "name": "Decimal"
+          },
+          "optional": false,
+          "nullable": false,
+          "attributes": {}
+        }
+      ],
+      "attributes": {}
+    }
+  ],
+  "operations": [
+    {
+      "id": "operation.get_invoice",
+      "name": "get_invoice",
+      "method": "get",
+      "path": "/invoices/{invoice_id}",
+      "params": [
+        {
+          "name": "invoice_id",
+          "location": "path",
+          "type_ref": {
+            "kind": "primitive",
+            "name": "string"
+          },
+          "required": true
+        }
+      ],
+      "request_body": null,
+      "responses": [
+        {
+          "status": "200",
+          "media_type": null,
+          "type_ref": {
+            "kind": "named",
+            "name": "Invoice"
+          },
+          "attributes": {}
+        }
+      ],
+      "attributes": {}
+    }
+  ]
+}

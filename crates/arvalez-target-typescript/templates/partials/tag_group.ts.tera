@@ -1,0 +1,3 @@
+  readonly {{ tag_group.property_name }} = {
+{{ tag_group.bindings_block }}
+  };

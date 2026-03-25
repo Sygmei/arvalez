@@ -1,0 +1,143 @@
+import type { {{ package.client_imports }} } from "./models";
+
+export type ErrorHandler = (response: Response) => void | Promise<void>;
+
+export interface ApiClientOptions {
+  baseUrl: string;
+  fetch?: typeof fetch;
+  headers?: HeadersInit;
+  onError?: ErrorHandler;
+}
+
+export interface RequestOptions extends Omit<RequestInit, "method" | "body" | "headers"> {
+  headers?: HeadersInit;
+  query?: URLSearchParams | Record<string, string | number | boolean | undefined | null>;
+  cookies?: Record<string, string>;
+  onError?: ErrorHandler;
+}
+
+export class ApiClient {
+  private readonly baseUrl: string;
+  private readonly fetchFn: typeof fetch;
+  private readonly defaultHeaders: Headers;
+  private readonly onError: ErrorHandler;
+{% if package.tag_group_blocks | length > 0 %}
+
+{{ package.tag_group_blocks | join(sep="\n\n") | safe }}
+{% endif %}
+
+  constructor(options: ApiClientOptions) {
+    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.fetchFn = options.fetch ?? fetch;
+    this.defaultHeaders = new Headers(options.headers);
+    this.onError = options.onError ?? ((response: Response) => {
+      throw new Error(`Request failed with status ${response.status}: ${response.statusText}`);
+    });
+  }
+
+  private createHeaders(): Headers {
+    return new Headers(this.defaultHeaders);
+  }
+
+  private mergeHeaders(headers: Headers | undefined, requestOptions?: RequestOptions): Headers | undefined {
+    const merged = headers ? new Headers(headers) : new Headers(this.defaultHeaders);
+
+    if (requestOptions?.headers) {
+      const overrideHeaders = new Headers(requestOptions.headers);
+      for (const [key, value] of overrideHeaders.entries()) {
+        merged.set(key, value);
+      }
+    }
+
+    if (requestOptions?.cookies && Object.keys(requestOptions.cookies).length > 0) {
+      const cookieHeader = Object.entries(requestOptions.cookies)
+        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+        .join("; ");
+      if (cookieHeader.length > 0) {
+        merged.set("Cookie", cookieHeader);
+      }
+    }
+
+    return Array.from(merged.keys()).length > 0 ? merged : undefined;
+  }
+
+  private mergeQuery(
+    baseQuery: URLSearchParams | undefined,
+    requestOptions?: RequestOptions,
+  ): URLSearchParams | undefined {
+    const merged = baseQuery ? new URLSearchParams(baseQuery) : new URLSearchParams();
+
+    if (requestOptions?.query instanceof URLSearchParams) {
+      for (const [key, value] of requestOptions.query.entries()) {
+        merged.set(key, value);
+      }
+    } else if (requestOptions?.query) {
+      for (const [key, value] of Object.entries(requestOptions.query)) {
+        if (value !== undefined && value !== null) {
+          merged.set(key, String(value));
+        }
+      }
+    }
+
+    return Array.from(merged.keys()).length > 0 ? merged : undefined;
+  }
+
+  private createRequestInit(requestOptions?: RequestOptions): RequestInit {
+    if (!requestOptions) {
+      return {};
+    }
+
+    const { headers: _headers, query: _query, cookies: _cookies, onError: _onError, ...requestInit } = requestOptions;
+    return { ...requestInit };
+  }
+
+  private async handleError(response: Response, requestOptions?: RequestOptions): Promise<void> {
+    if (!response.ok) {
+      await (requestOptions?.onError ?? this.onError)(response);
+    }
+  }
+
+  private buildUrl(path: string, query?: URLSearchParams): string {
+    const url = new URL(`${this.baseUrl}${path}`);
+    if (query) {
+      url.search = query.toString();
+    }
+    return url.toString();
+  }
+
+  private async parseResponse<T>(response: Response): Promise<T> {
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      return (await response.json()) as T;
+    }
+
+    return (await response.text()) as T;
+  }
+
+  private toFormData(payload: Record<string, unknown>): FormData {
+    const formData = new FormData();
+    for (const [key, value] of Object.entries(payload)) {
+      if (value === undefined || value === null) {
+        continue;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item !== undefined && item !== null) {
+            formData.append(key, item as string | Blob);
+          }
+        }
+        continue;
+      }
+      formData.append(key, value as string | Blob);
+    }
+    return formData;
+  }
+
+{% if package.method_blocks | length > 0 %}
+{{ package.method_blocks | join(sep="\n\n") | safe }}
+{% endif %}
+}

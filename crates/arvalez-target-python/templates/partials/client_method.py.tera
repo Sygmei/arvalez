@@ -1,0 +1,9 @@
+    {{ operation.def_keyword }} {{ operation.raw_method_name }}({% if operation.args_signature %}self, {{ operation.args_signature }}{% else %}self{% endif %}) -> {{ operation.raw_return_annotation }}:
+        url = {{ operation.url_template }}
+{{ operation.raw_pre_request_block }}
+        {{ operation.raw_request_call_line }}
+{{ operation.raw_post_request_block }}
+
+    {{ operation.def_keyword }} {{ operation.method_name }}({% if operation.args_signature %}self, {{ operation.args_signature }}{% else %}self{% endif %}) -> {{ operation.return_annotation }}:
+        {{ operation.wrapper_request_call_line }}
+{{ operation.post_request_block }}

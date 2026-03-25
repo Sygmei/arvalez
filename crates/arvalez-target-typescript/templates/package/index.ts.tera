@@ -1,0 +1,5 @@
+export { ApiClient } from "./client";
+export type { ApiClientOptions, ErrorHandler, RequestOptions } from "./client";
+{% if package.index_model_exports %}
+export type { {{ package.index_model_exports }} } from "./models";
+{% endif %}

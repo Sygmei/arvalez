@@ -1,0 +1,13 @@
+  async {{ operation.raw_method_name }}({{ operation.args_signature }}) : Promise<{{ operation.raw_return_annotation }}> {
+    const path = {{ operation.path_template }};
+{{ operation.query_block }}
+{{ operation.headers_block }}
+{{ operation.request_init_block }}
+{{ operation.body_block }}
+{{ operation.raw_response_block }}
+  }
+
+  async {{ operation.method_name }}({{ operation.args_signature }}) : Promise<{{ operation.return_annotation }}> {
+{{ operation.wrapper_request_call_block }}
+{{ operation.wrapper_post_request_block }}
+  }

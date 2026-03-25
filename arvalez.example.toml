@@ -1,0 +1,17 @@
+[generator]
+group_by_tag = true
+version = "0.1.0"
+
+[generator.go]
+module_path = "github.com/arvalez/client"
+package_name = "client"
+version = "0.1.0"
+
+[generator.python]
+package_name = "arvalez_client"
+version = "0.1.1"
+
+[generator.typescript]
+package_name = "@arvalez/client"
+version = "0.1.2"
+template_dir = "./templates/typescript"

@@ -1,0 +1,5 @@
+type {{ service.struct_name }} struct {
+    client *Client
+}
+
+{{ service.methods_block }}

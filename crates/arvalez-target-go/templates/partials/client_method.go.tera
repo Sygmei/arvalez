@@ -1,0 +1,11 @@
+func ({{ operation.receiver_name }} *{{ operation.receiver_type }}) {{ operation.raw_method_name }}({{ operation.args_signature }}) (*http.Response, error) {
+    client := {{ operation.client_expression }}
+{{ operation.raw_block }}
+}
+
+func ({{ operation.receiver_name }} *{{ operation.receiver_type }}) {{ operation.method_name }}({{ operation.args_signature }}) {{ operation.return_signature }} {
+    client := {{ operation.client_expression }}
+    {{ operation.wrapper_request_call_line }}
+{{ operation.wrapper_error_block }}
+{{ operation.wrapper_post_request_block }}
+}

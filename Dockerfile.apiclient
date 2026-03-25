@@ -1,0 +1,134 @@
+ARG ARVALEZ_CLI_IMAGE=arvalez/cli:1.0.0
+
+########################################################################
+# STAGE: ARVALEZ CLI
+# Purpose: reuse the prebuilt CLI image instead of building or downloading tools
+########################################################################
+FROM ${ARVALEZ_CLI_IMAGE} AS arvalez-cli
+
+########################################################################
+# STAGE: PYTHON GENERATION
+# Purpose: generate the Python client with Arvalez using the unified config
+########################################################################
+FROM python:3.12-slim AS python-generation
+
+COPY --from=arvalez-cli /usr/local/bin/arvalez-cli /usr/local/bin/arvalez-cli
+
+WORKDIR /src
+COPY . /src
+
+RUN set -eu; \
+    rm -rf /out/python-client; \
+    mkdir -p /out; \
+    arvalez-cli generate-python \
+      --config /src/arvalez.toml \
+      --openapi /src/openapi.json \
+      --output /out/python-client
+
+########################################################################
+# STAGE: PYTHON CLEANING
+# Purpose: run Python cleanup tools on the generated output
+########################################################################
+FROM python:3.12-slim AS python-cleaning
+
+RUN python -m pip install --no-cache-dir pyupgrade ruff
+
+COPY --from=python-generation /out/python-client /out/python-client
+
+RUN set -eu; \
+    find /out/python-client -type f -name "*.py" -print0 | xargs -0 -r pyupgrade --py311-plus --exit-zero-even-if-changed; \
+    ruff check --fix /out/python-client; \
+    ruff format /out/python-client
+
+########################################################################
+# STAGE: PYTHON ARTIFACT
+# Purpose: expose only /out/python-client
+########################################################################
+FROM scratch AS python
+COPY --from=python-cleaning /out/python-client /out/python-client
+
+########################################################################
+# STAGE: TYPESCRIPT GENERATION
+# Purpose: generate the TypeScript client with Arvalez using the unified config
+########################################################################
+FROM node:22-bookworm-slim AS typescript-generation
+
+COPY --from=arvalez-cli /usr/local/bin/arvalez-cli /usr/local/bin/arvalez-cli
+
+WORKDIR /src
+COPY . /src
+
+RUN set -eu; \
+    rm -rf /out/typescript-client; \
+    mkdir -p /out; \
+    arvalez-cli generate-typescript \
+      --config /src/arvalez.toml \
+      --openapi /src/openapi.json \
+      --output /out/typescript-client
+
+########################################################################
+# STAGE: TYPESCRIPT CLEANING
+# Purpose: run TypeScript cleanup tools on the generated output
+########################################################################
+FROM node:22-bookworm-slim AS typescript-cleaning
+
+RUN npm install --global --no-update-notifier --no-fund prettier typescript
+
+COPY --from=typescript-generation /out/typescript-client /out/typescript-client
+
+RUN set -eu; \
+    prettier --write /out/typescript-client
+
+########################################################################
+# STAGE: TYPESCRIPT ARTIFACT
+# Purpose: expose only /out/typescript-client
+########################################################################
+FROM scratch AS typescript
+COPY --from=typescript-cleaning /out/typescript-client /out/typescript-client
+
+########################################################################
+# STAGE: GO GENERATION
+# Purpose: generate the Go client with Arvalez using the unified config
+########################################################################
+FROM golang:1.22-bookworm AS go-generation
+
+COPY --from=arvalez-cli /usr/local/bin/arvalez-cli /usr/local/bin/arvalez-cli
+
+WORKDIR /src
+COPY . /src
+
+RUN set -eu; \
+    rm -rf /out/go-client; \
+    mkdir -p /out; \
+    arvalez-cli generate-go \
+      --config /src/arvalez.toml \
+      --openapi /src/openapi.json \
+      --output /out/go-client
+
+########################################################################
+# STAGE: GO CLEANING
+# Purpose: run Go formatting on the generated output
+########################################################################
+FROM golang:1.22-bookworm AS go-cleaning
+
+COPY --from=go-generation /out/go-client /out/go-client
+
+RUN set -eu; \
+    cd /out/go-client; \
+    find . -type f -name "*.go" -print0 | xargs -0 -r gofmt -w
+
+########################################################################
+# STAGE: GO ARTIFACT
+# Purpose: expose only /out/go-client
+########################################################################
+FROM scratch AS go
+COPY --from=go-cleaning /out/go-client /out/go-client
+
+########################################################################
+# STAGE: ALL ARTIFACTS (DEFAULT FINAL STAGE)
+# Purpose: expose Python, TypeScript, and Go generated clients
+########################################################################
+FROM scratch AS all
+COPY --from=python-cleaning /out/python-client /out/python-client
+COPY --from=typescript-cleaning /out/typescript-client /out/typescript-client
+COPY --from=go-cleaning /out/go-client /out/go-client

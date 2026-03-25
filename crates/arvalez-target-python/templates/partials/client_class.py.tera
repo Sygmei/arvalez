@@ -1,0 +1,28 @@
+class {{ client.class_name }}(_BaseApiClient):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout: float = 30.0,
+        client: {{ client.client_type }} | None = None,
+        on_error: ErrorHandler | None = None,
+    ) -> None:
+        self._owns_client = client is None
+        self._client = client or {{ client.client_type }}(base_url=base_url.rstrip("/"), timeout=timeout)
+        self._on_error = on_error or self._default_on_error
+{% if client.service_bindings_block %}
+{{ client.service_bindings_block }}
+{% endif %}
+
+    {{ client.close_method_signature }}
+{{ client.close_method_block }}
+
+    {{ client.enter_method_signature }}
+        return self
+
+    {{ client.exit_method_signature }}
+{{ client.exit_method_block }}
+
+{% if client.methods_block %}
+{{ client.methods_block }}
+{% endif %}

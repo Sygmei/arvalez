@@ -1,0 +1,5 @@
+package {{ package.package_name }}
+
+{% if package.model_blocks | length > 0 %}
+{{ package.model_blocks | join(sep="\n\n") | safe }}
+{% endif %}
