@@ -22,14 +22,14 @@ readme = "README.md"
 
 [workspace.dependencies]
 anyhow = "1.0.98"
-arvalez-cli = { version = "0.1.0", path = "crates/arvalez-cli" }
-arvalez-ir = { version = "0.1.0", path = "crates/arvalez-ir" }
-arvalez-openapi = { version = "0.1.0", path = "crates/arvalez-openapi" }
-arvalez-plugin-runtime = { version = "0.1.0", path = "crates/arvalez-plugin-runtime" }
-arvalez-plugin-sdk = { version = "0.1.0", path = "crates/arvalez-plugin-sdk" }
-arvalez-target-go = { version = "0.1.0", path = "crates/arvalez-target-go" }
-arvalez-target-python = { version = "0.1.0", path = "crates/arvalez-target-python" }
-arvalez-target-typescript = { version = "0.1.0", path = "crates/arvalez-target-typescript" }
+arvalez-cli = { version = "1.4.0", path = "crates/arvalez-cli" }
+arvalez-ir = { version = "1.4.0", path = "crates/arvalez-ir" }
+arvalez-openapi = { version = "1.4.0", path = "crates/arvalez-openapi" }
+arvalez-plugin-runtime = { version = "1.4.0", path = "crates/arvalez-plugin-runtime" }
+arvalez-plugin-sdk = { version = "1.4.0", path = "crates/arvalez-plugin-sdk" }
+arvalez-target-go = { version = "1.4.0", path = "crates/arvalez-target-go" }
+arvalez-target-python = { version = "1.4.0", path = "crates/arvalez-target-python" }
+arvalez-target-typescript = { version = "1.4.0", path = "crates/arvalez-target-typescript" }
 clap = { version = "4.5.38", features = ["derive"] }
 indexmap = { version = "2.10.0", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive"] }

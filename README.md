@@ -221,3 +221,11 @@ The workflow expects these GitHub repository secrets:
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN`
 - `CARGO_REGISTRY_TOKEN`
+
+Set up `pre-commit` once after cloning:
+
+```bash
+pre-commit install
+```
+
+The `pre-commit` config keeps internal workspace dependency versions aligned with the workspace version and regenerates `Cargo.lock` whenever Cargo manifests are part of the commit.

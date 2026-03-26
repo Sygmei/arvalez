@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: sync-workspace-dependency-versions
+        name: Sync workspace dependency versions
+        entry: python3 scripts/sync_workspace_dependency_versions.py
+        language: system
+        pass_filenames: false
+        files: ^(Cargo\.toml|crates/.+/Cargo\.toml|plugins/.+/Cargo\.toml)$
+      - id: cargo-generate-lockfile
+        name: Regenerate Cargo.lock
+        entry: cargo generate-lockfile
+        language: system
+        pass_filenames: false
+        files: ^(Cargo\.toml|Cargo\.lock|crates/.+/Cargo\.toml|plugins/.+/Cargo\.toml)$
