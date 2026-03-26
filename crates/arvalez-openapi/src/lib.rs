@@ -1209,7 +1209,10 @@ fn is_unconstrained_schema(schema: &Schema) -> bool {
         && schema.additional_properties.is_none()
         && schema.any_of.is_none()
         && schema.one_of.is_none()
-        && schema.extra_keywords.is_empty()
+        && schema
+            .extra_keywords
+            .keys()
+            .all(|keyword| is_known_ignored_schema_keyword(keyword) || keyword.starts_with("x-"))
 }
 
 fn is_known_ignored_schema_keyword(keyword: &str) -> bool {
@@ -1584,6 +1587,46 @@ mod tests {
             .map(|field| field.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(field_names, vec!["zebra", "alpha", "middle"]);
+    }
+
+    #[test]
+    fn supports_metadata_only_property_schema_as_any() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "ErrorDetail": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The value at the given location"
+          }
+        }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let result =
+            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
+                .build_ir()
+                .expect("metadata-only schema should be treated as any");
+        let error_detail = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "ErrorDetail")
+            .expect("ErrorDetail model");
+        let value = error_detail
+            .fields
+            .iter()
+            .find(|field| field.name == "value")
+            .expect("value field");
+        assert_eq!(value.type_ref, TypeRef::primitive("any"));
     }
 
     #[test]
