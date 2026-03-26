@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use thiserror::Error;
 
 pub const CURRENT_IR_VERSION: u32 = 1;
@@ -181,42 +181,8 @@ pub struct SourceRef {
     pub line: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Target {
-    Python,
-    Go,
-    Typescript,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginContextEnvelope {
-    pub plugin_name: String,
-    #[serde(default)]
-    pub target: Option<Target>,
-    #[serde(default = "default_options")]
-    pub options: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginRequest {
-    pub context: PluginContextEnvelope,
-    pub ir: CoreIr,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginResponse {
-    pub ir: CoreIr,
-    #[serde(default)]
-    pub warnings: Vec<String>,
-}
-
 fn default_ir_version() -> u32 {
     CURRENT_IR_VERSION
-}
-
-fn default_options() -> Value {
-    Value::Object(Map::new())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

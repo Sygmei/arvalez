@@ -3,33 +3,28 @@ members = [
     "crates/arvalez-cli",
     "crates/arvalez-ir",
     "crates/arvalez-openapi",
-    "crates/arvalez-plugin-runtime",
-    "crates/arvalez-plugin-sdk",
     "crates/arvalez-target-go",
     "crates/arvalez-target-python",
     "crates/arvalez-target-typescript",
-    "plugins/money-plugin",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "1.4.1"
+version = "1.5.0"
 homepage = "https://github.com/Sygmei/arvalez"
 repository = "https://github.com/Sygmei/arvalez"
 readme = "README.md"
 
 [workspace.dependencies]
 anyhow = "1.0.98"
-arvalez-cli = { version = "1.4.1", path = "crates/arvalez-cli" }
-arvalez-ir = { version = "1.4.1", path = "crates/arvalez-ir" }
-arvalez-openapi = { version = "1.4.1", path = "crates/arvalez-openapi" }
-arvalez-plugin-runtime = { version = "1.4.1", path = "crates/arvalez-plugin-runtime" }
-arvalez-plugin-sdk = { version = "1.4.1", path = "crates/arvalez-plugin-sdk" }
-arvalez-target-go = { version = "1.4.1", path = "crates/arvalez-target-go" }
-arvalez-target-python = { version = "1.4.1", path = "crates/arvalez-target-python" }
-arvalez-target-typescript = { version = "1.4.1", path = "crates/arvalez-target-typescript" }
+arvalez-cli = { version = "1.5.0", path = "crates/arvalez-cli" }
+arvalez-ir = { version = "1.5.0", path = "crates/arvalez-ir" }
+arvalez-openapi = { version = "1.5.0", path = "crates/arvalez-openapi" }
+arvalez-target-go = { version = "1.5.0", path = "crates/arvalez-target-go" }
+arvalez-target-python = { version = "1.5.0", path = "crates/arvalez-target-python" }
+arvalez-target-typescript = { version = "1.5.0", path = "crates/arvalez-target-typescript" }
 clap = { version = "4.5.38", features = ["derive"] }
 indexmap = { version = "2.10.0", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive"] }
@@ -40,5 +35,3 @@ tempfile = "3.20.0"
 tera = "1.20.0"
 thiserror = "2.0.12"
 toml = "0.8.22"
-wasmtime = "39.0.0"
-wasmtime-wasi = "39.0.0"

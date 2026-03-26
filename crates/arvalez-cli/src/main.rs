@@ -1,9 +1,8 @@
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use arvalez_ir::{CoreIr, Target, validate_ir};
+use arvalez_ir::{CoreIr, validate_ir};
 use arvalez_openapi::{LoadOpenApiOptions, OpenApiLoadResult, load_openapi_to_ir_with_options};
-use arvalez_plugin_runtime::{WasmPluginDefinition, WasmPluginRunner};
 use arvalez_target_go::{
     GoPackageConfig, generate_package as generate_go_package, write_package as write_go_package,
 };
@@ -15,7 +14,7 @@ use arvalez_target_typescript::{
     TypeScriptPackageConfig, generate_package as generate_typescript_package,
     write_package as write_typescript_package,
 };
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use serde::Deserialize;
 
 #[derive(Parser)]
@@ -119,52 +118,12 @@ enum Command {
         #[arg(long)]
         output_version: Option<String>,
     },
-    RunPlugin {
-        #[arg(long, default_value = "arvalez.toml")]
-        config: PathBuf,
-        #[arg(long)]
-        ir: Option<PathBuf>,
-        #[arg(long)]
-        openapi: Option<PathBuf>,
-        #[arg(long)]
-        ignore_unhandled: bool,
-        #[arg(long)]
-        plugin: String,
-        #[arg(long)]
-        target: Option<TargetArg>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum TargetArg {
-    Python,
-    Go,
-    Typescript,
-}
-
-impl From<TargetArg> for Target {
-    fn from(value: TargetArg) -> Self {
-        match value {
-            TargetArg::Python => Target::Python,
-            TargetArg::Go => Target::Go,
-            TargetArg::Typescript => Target::Typescript,
-        }
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct AppConfig {
     #[serde(default)]
-    plugins: BTreeMap<String, PluginConfig>,
-    #[serde(default)]
     output: OutputConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct PluginConfig {
-    path: PathBuf,
-    #[serde(default)]
-    options: toml::Table,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -210,17 +169,6 @@ struct TypeScriptConfig {
     version: Option<String>,
     template_dir: Option<PathBuf>,
     group_by_tag: Option<bool>,
-}
-
-impl PluginConfig {
-    fn to_runtime_definition(&self) -> Result<WasmPluginDefinition> {
-        let options =
-            serde_json::to_value(&self.options).context("failed to convert plugin options")?;
-        Ok(WasmPluginDefinition {
-            path: self.path.clone(),
-            options,
-        })
-    }
 }
 
 fn main() -> Result<()> {
@@ -380,34 +328,6 @@ fn main() -> Result<()> {
             let files = generate_typescript_package(&ir, &typescript_config)?;
             write_typescript_package(&output, &files)?;
             eprintln!("generated {} files into {}", files.len(), output.display());
-        }
-        Command::RunPlugin {
-            config,
-            ir,
-            openapi,
-            ignore_unhandled,
-            plugin,
-            target,
-        } => {
-            let config_data = load_config(&config)?;
-            let plugin_config = config_data.plugins.get(&plugin).with_context(|| {
-                format!("plugin `{plugin}` is not defined in `{}`", config.display())
-            })?;
-            let (ir, warnings) = load_input_ir(ir, openapi, ignore_unhandled)?;
-            print_openapi_warnings(&warnings);
-            let runner = WasmPluginRunner::new()?;
-            let response = runner.run(
-                &plugin,
-                &plugin_config.to_runtime_definition()?,
-                target.map(Into::into),
-                &ir,
-            )?;
-
-            for warning in &response.warnings {
-                eprintln!("warning: {warning}");
-            }
-
-            println!("{}", serde_json::to_string_pretty(&response.ir)?);
         }
     }
 

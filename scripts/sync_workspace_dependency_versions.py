@@ -15,8 +15,6 @@ INTERNAL_CRATES = [
     "arvalez-cli",
     "arvalez-ir",
     "arvalez-openapi",
-    "arvalez-plugin-runtime",
-    "arvalez-plugin-sdk",
     "arvalez-target-go",
     "arvalez-target-python",
     "arvalez-target-typescript",

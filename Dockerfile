@@ -4,7 +4,6 @@ WORKDIR /app
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
-COPY plugins ./plugins
 
 RUN cargo build --release -p arvalez-cli
 

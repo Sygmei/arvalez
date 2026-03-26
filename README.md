@@ -1,62 +1,33 @@
 # arvalez
 
-Modern OpenAPI client generator with a compiler-style core, typed IR, and WASM plugins.
+Modern OpenAPI client generator with a compiler-style core and typed IR.
 
 ## Current Scope
 
-This first implementation slice focuses on the plugin architecture and the first target backends:
+This first implementation slice focuses on the OpenAPI importer and the target backends:
 
 - shared IR types in Rust
-- a plugin SDK that reads and writes IR over a serde boundary
-- a WASM runtime that executes plugins as WASI programs
-- a sample `money` plugin that rewrites decimal money fields to a domain type
 - a first Python backend that emits Pydantic models plus sync and async `httpx` clients
 - a first TypeScript backend that emits typed models plus a `fetch`-based client
 - a first Go backend that emits typed models plus a `net/http` client
 
-The OpenAPI importer is in place, and the generator can now emit Python and TypeScript packages from `openapi.json`. Go is still to come.
+The OpenAPI importer is in place, and the generator can emit Python, TypeScript, and Go packages from `openapi.json`.
 
 ## Workspace Layout
 
 - `crates/arvalez-ir`: shared IR and validation
 - `crates/arvalez-openapi`: OpenAPI document loader and Core IR mapper
-- `crates/arvalez-plugin-sdk`: plugin-side protocol helpers
-- `crates/arvalez-plugin-runtime`: host-side WASM execution
+- `crates/arvalez-target-go`: Go SDK generator
 - `crates/arvalez-target-python`: Python SDK generator
 - `crates/arvalez-target-typescript`: TypeScript SDK generator
-- `crates/arvalez-cli`: local CLI for inspecting IR and running plugins
-- `plugins/money-plugin`: example WASM plugin
+- `crates/arvalez-cli`: local CLI for inspecting IR and generating SDKs
 
 ## Build
-
-Install the WASI target if needed:
-
-```bash
-rustup target add wasm32-wasip1
-```
-
-Build the example plugin:
-
-```bash
-cargo build -p money-plugin --target wasm32-wasip1
-```
-
-Run the plugin against the fixture IR:
-
-```bash
-cargo run -p arvalez-cli -- run-plugin --plugin money
-```
 
 Build Core IR from the local OpenAPI document:
 
 ```bash
 cargo run -p arvalez-cli -- build-ir --openapi openapi.json
-```
-
-Run the plugin against a real OpenAPI document:
-
-```bash
-cargo run -p arvalez-cli -- run-plugin --plugin money --openapi openapi.json
 ```
 
 Generate a Python SDK package:
