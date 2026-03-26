@@ -44,8 +44,8 @@ enum Command {
         openapi: Option<PathBuf>,
         #[arg(long, default_value = "arvalez.toml")]
         config: PathBuf,
-        #[arg(long, default_value = "generated")]
-        output_root: PathBuf,
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
         #[arg(long)]
         ignore_unhandled: bool,
         #[arg(long)]
@@ -54,6 +54,8 @@ enum Command {
         no_python: bool,
         #[arg(long)]
         no_typescript: bool,
+        #[arg(long)]
+        output_version: Option<String>,
     },
     GenerateGo {
         #[arg(long)]
@@ -62,8 +64,8 @@ enum Command {
         openapi: Option<PathBuf>,
         #[arg(long, default_value = "arvalez.toml")]
         config: PathBuf,
-        #[arg(long, default_value = "generated/go-client")]
-        output: PathBuf,
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
         #[arg(long)]
         ignore_unhandled: bool,
         #[arg(long)]
@@ -74,6 +76,8 @@ enum Command {
         template_dir: Option<PathBuf>,
         #[arg(long)]
         group_by_tag: bool,
+        #[arg(long)]
+        output_version: Option<String>,
     },
     GeneratePython {
         #[arg(long)]
@@ -82,8 +86,8 @@ enum Command {
         openapi: Option<PathBuf>,
         #[arg(long, default_value = "arvalez.toml")]
         config: PathBuf,
-        #[arg(long, default_value = "generated/python-client")]
-        output: PathBuf,
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
         #[arg(long)]
         ignore_unhandled: bool,
         #[arg(long)]
@@ -92,6 +96,8 @@ enum Command {
         template_dir: Option<PathBuf>,
         #[arg(long)]
         group_by_tag: bool,
+        #[arg(long)]
+        output_version: Option<String>,
     },
     GenerateTypescript {
         #[arg(long)]
@@ -100,8 +106,8 @@ enum Command {
         openapi: Option<PathBuf>,
         #[arg(long, default_value = "arvalez.toml")]
         config: PathBuf,
-        #[arg(long, default_value = "generated/typescript-client")]
-        output: PathBuf,
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
         #[arg(long)]
         ignore_unhandled: bool,
         #[arg(long)]
@@ -110,6 +116,8 @@ enum Command {
         template_dir: Option<PathBuf>,
         #[arg(long)]
         group_by_tag: bool,
+        #[arg(long)]
+        output_version: Option<String>,
     },
     RunPlugin {
         #[arg(long, default_value = "arvalez.toml")]
@@ -149,7 +157,7 @@ struct AppConfig {
     #[serde(default)]
     plugins: BTreeMap<String, PluginConfig>,
     #[serde(default)]
-    generator: GeneratorConfig,
+    output: OutputConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,10 +168,11 @@ struct PluginConfig {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct GeneratorConfig {
+struct OutputConfig {
     #[serde(default)]
     group_by_tag: bool,
     version: Option<String>,
+    directory: Option<PathBuf>,
     #[serde(default)]
     go: GoConfig,
     #[serde(default)]
@@ -235,26 +244,29 @@ fn main() -> Result<()> {
             ir,
             openapi,
             config,
-            output_root,
+            output_directory,
             ignore_unhandled,
             no_go,
             no_python,
             no_typescript,
+            output_version,
         } => {
             let (ir, warnings) = load_input_ir(ir, openapi, ignore_unhandled)?;
             print_openapi_warnings(&warnings);
             let config_file = load_optional_config(&config)?;
+            let output_root = resolve_output_root(&config_file, output_directory);
 
-            let go_enabled = !no_go && !config_file.generator.go.disabled;
-            let python_enabled = !no_python && !config_file.generator.python.disabled;
-            let typescript_enabled = !no_typescript && !config_file.generator.typescript.disabled;
+            let go_enabled = !no_go && !config_file.output.go.disabled;
+            let python_enabled = !no_python && !config_file.output.python.disabled;
+            let typescript_enabled = !no_typescript && !config_file.output.typescript.disabled;
 
             if !go_enabled && !python_enabled && !typescript_enabled {
                 bail!("no generation targets enabled");
             }
 
             if go_enabled {
-                let go_config = resolve_go_config(&config_file, None, None, None, false);
+                let go_config =
+                    resolve_go_config(&config_file, None, None, None, false, output_version.clone());
                 let files = generate_go_package(&ir, &go_config)?;
                 let output = output_root.join("go-client");
                 write_go_package(&output, &files)?;
@@ -262,7 +274,8 @@ fn main() -> Result<()> {
             }
 
             if python_enabled {
-                let python_config = resolve_python_config(&config_file, None, None, false);
+                let python_config =
+                    resolve_python_config(&config_file, None, None, false, output_version.clone());
                 let files = generate_python_package(&ir, &python_config)?;
                 let output = output_root.join("python-client");
                 write_python_package(&output, &files)?;
@@ -270,7 +283,13 @@ fn main() -> Result<()> {
             }
 
             if typescript_enabled {
-                let typescript_config = resolve_typescript_config(&config_file, None, None, false);
+                let typescript_config = resolve_typescript_config(
+                    &config_file,
+                    None,
+                    None,
+                    false,
+                    output_version.clone(),
+                );
                 let files = generate_typescript_package(&ir, &typescript_config)?;
                 let output = output_root.join("typescript-client");
                 write_typescript_package(&output, &files)?;
@@ -281,22 +300,25 @@ fn main() -> Result<()> {
             ir,
             openapi,
             config,
-            output,
+            output_directory,
             ignore_unhandled,
             module_path,
             package_name,
             template_dir,
             group_by_tag,
+            output_version,
         } => {
             let (ir, warnings) = load_input_ir(ir, openapi, ignore_unhandled)?;
             print_openapi_warnings(&warnings);
             let config_file = load_optional_config(&config)?;
+            let output = resolve_target_output_directory(&config_file, output_directory, "go-client");
             let go_config = resolve_go_config(
                 &config_file,
                 module_path,
                 package_name,
                 template_dir,
                 group_by_tag,
+                output_version,
             );
             let files = generate_go_package(&ir, &go_config)?;
             write_go_package(&output, &files)?;
@@ -306,17 +328,25 @@ fn main() -> Result<()> {
             ir,
             openapi,
             config,
-            output,
+            output_directory,
             ignore_unhandled,
             package_name,
             template_dir,
             group_by_tag,
+            output_version,
         } => {
             let (ir, warnings) = load_input_ir(ir, openapi, ignore_unhandled)?;
             print_openapi_warnings(&warnings);
             let config_file = load_optional_config(&config)?;
-            let python_config =
-                resolve_python_config(&config_file, package_name, template_dir, group_by_tag);
+            let output =
+                resolve_target_output_directory(&config_file, output_directory, "python-client");
+            let python_config = resolve_python_config(
+                &config_file,
+                package_name,
+                template_dir,
+                group_by_tag,
+                output_version,
+            );
             let files = generate_python_package(&ir, &python_config)?;
             write_python_package(&output, &files)?;
             eprintln!("generated {} files into {}", files.len(), output.display());
@@ -325,17 +355,28 @@ fn main() -> Result<()> {
             ir,
             openapi,
             config,
-            output,
+            output_directory,
             ignore_unhandled,
             package_name,
             template_dir,
             group_by_tag,
+            output_version,
         } => {
             let (ir, warnings) = load_input_ir(ir, openapi, ignore_unhandled)?;
             print_openapi_warnings(&warnings);
             let config_file = load_optional_config(&config)?;
-            let typescript_config =
-                resolve_typescript_config(&config_file, package_name, template_dir, group_by_tag);
+            let output = resolve_target_output_directory(
+                &config_file,
+                output_directory,
+                "typescript-client",
+            );
+            let typescript_config = resolve_typescript_config(
+                &config_file,
+                package_name,
+                template_dir,
+                group_by_tag,
+                output_version,
+            );
             let files = generate_typescript_package(&ir, &typescript_config)?;
             write_typescript_package(&output, &files)?;
             eprintln!("generated {} files into {}", files.len(), output.display());
@@ -405,31 +446,43 @@ fn load_ir(path: &PathBuf) -> Result<CoreIr> {
     Ok(ir)
 }
 
+fn resolve_output_root(config_file: &AppConfig, output_directory: Option<PathBuf>) -> PathBuf {
+    output_directory
+        .or(config_file.output.directory.clone())
+        .unwrap_or_else(|| PathBuf::from("generated"))
+}
+
+fn resolve_target_output_directory(
+    config_file: &AppConfig,
+    output_directory: Option<PathBuf>,
+    target_dir_name: &str,
+) -> PathBuf {
+    output_directory.unwrap_or_else(|| resolve_output_root(config_file, None).join(target_dir_name))
+}
+
 fn resolve_go_config(
     config_file: &AppConfig,
     module_path: Option<String>,
     package_name: Option<String>,
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
+    output_version: Option<String>,
 ) -> GoPackageConfig {
     let module_path = module_path
-        .or(config_file.generator.go.module_path.clone())
+        .or(config_file.output.go.module_path.clone())
         .unwrap_or_else(|| "github.com/arvalez/client".into());
-    let package_name = package_name.or(config_file.generator.go.package_name.clone());
-    let template_dir = template_dir.or(config_file.generator.go.template_dir.clone());
-    let version = config_file
-        .generator
-        .go
-        .version
-        .clone()
-        .or(config_file.generator.version.clone())
+    let package_name = package_name.or(config_file.output.go.package_name.clone());
+    let template_dir = template_dir.or(config_file.output.go.template_dir.clone());
+    let version = output_version
+        .or(config_file.output.go.version.clone())
+        .or(config_file.output.version.clone())
         .unwrap_or_else(|| "0.1.0".into());
     let effective_group_by_tag = group_by_tag
         || config_file
-            .generator
+            .output
             .go
             .group_by_tag
-            .unwrap_or(config_file.generator.group_by_tag);
+            .unwrap_or(config_file.output.group_by_tag);
 
     let mut config = GoPackageConfig::new(module_path)
         .with_version(version)
@@ -446,24 +499,22 @@ fn resolve_python_config(
     package_name: Option<String>,
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
+    output_version: Option<String>,
 ) -> PythonPackageConfig {
     let package_name = package_name
-        .or(config_file.generator.python.package_name.clone())
+        .or(config_file.output.python.package_name.clone())
         .unwrap_or_else(|| "arvalez_client".into());
-    let template_dir = template_dir.or(config_file.generator.python.template_dir.clone());
-    let version = config_file
-        .generator
-        .python
-        .version
-        .clone()
-        .or(config_file.generator.version.clone())
+    let template_dir = template_dir.or(config_file.output.python.template_dir.clone());
+    let version = output_version
+        .or(config_file.output.python.version.clone())
+        .or(config_file.output.version.clone())
         .unwrap_or_else(|| "0.1.0".into());
     let effective_group_by_tag = group_by_tag
         || config_file
-            .generator
+            .output
             .python
             .group_by_tag
-            .unwrap_or(config_file.generator.group_by_tag);
+            .unwrap_or(config_file.output.group_by_tag);
 
     PythonPackageConfig::new(package_name)
         .with_version(version)
@@ -476,24 +527,22 @@ fn resolve_typescript_config(
     package_name: Option<String>,
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
+    output_version: Option<String>,
 ) -> TypeScriptPackageConfig {
     let package_name = package_name
-        .or(config_file.generator.typescript.package_name.clone())
+        .or(config_file.output.typescript.package_name.clone())
         .unwrap_or_else(|| "@arvalez/client".into());
-    let template_dir = template_dir.or(config_file.generator.typescript.template_dir.clone());
-    let version = config_file
-        .generator
-        .typescript
-        .version
-        .clone()
-        .or(config_file.generator.version.clone())
+    let template_dir = template_dir.or(config_file.output.typescript.template_dir.clone());
+    let version = output_version
+        .or(config_file.output.typescript.version.clone())
+        .or(config_file.output.version.clone())
         .unwrap_or_else(|| "0.1.0".into());
     let effective_group_by_tag = group_by_tag
         || config_file
-            .generator
+            .output
             .typescript
             .group_by_tag
-            .unwrap_or(config_file.generator.group_by_tag);
+            .unwrap_or(config_file.output.group_by_tag);
 
     TypeScriptPackageConfig::new(package_name)
         .with_version(version)

@@ -1,6 +1,6 @@
-from .client import ApiClient, AsyncApiClient, ErrorHandler, RequestOptions, SyncApiClient
+from {{ package.package_name }}.client import ApiClient, AsyncApiClient, ErrorHandler, RequestOptions, SyncApiClient
 {% if package.model_names | length > 0 %}
-from .models import (
+from {{ package.package_name }}.models import (
 {{ package.model_imports_block }}
 )
 {% endif %}

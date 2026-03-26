@@ -3,6 +3,10 @@ name = "arvalez-ir"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Shared IR and validation types for Arvalez"
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [dependencies]
 serde.workspace = true

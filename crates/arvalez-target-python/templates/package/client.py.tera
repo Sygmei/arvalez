@@ -5,7 +5,7 @@ from typing import Any, Callable, TypedDict
 import httpx
 from pydantic import TypeAdapter
 
-from . import models
+import {{ package.package_name }}.models as models
 
 ErrorHandler = Callable[[httpx.Response], None]
 

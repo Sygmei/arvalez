@@ -1,17 +1,20 @@
-[generator]
+[output]
+directory = "generated"
 group_by_tag = true
 version = "0.1.0"
 
-[generator.go]
+[output.go]
 module_path = "github.com/arvalez/client"
 package_name = "client"
 version = "0.1.0"
+template_dir = "./templates/go"
 
-[generator.python]
+[output.python]
 package_name = "arvalez_client"
 version = "0.1.1"
+template_dir = "./templates/python"
 
-[generator.typescript]
+[output.typescript]
 package_name = "@arvalez/client"
 version = "0.1.2"
 template_dir = "./templates/typescript"

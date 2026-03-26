@@ -3,9 +3,10 @@ name = "money-plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 anyhow.workspace = true
-arvalez-ir = { path = "../../crates/arvalez-ir" }
-arvalez-plugin-sdk = { path = "../../crates/arvalez-plugin-sdk" }
+arvalez-ir.workspace = true
+arvalez-plugin-sdk.workspace = true
 serde.workspace = true

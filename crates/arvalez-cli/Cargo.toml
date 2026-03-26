@@ -3,15 +3,19 @@ name = "arvalez-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Modern OpenAPI client generator CLI for Python, Go, and TypeScript"
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-arvalez-ir = { path = "../arvalez-ir" }
-arvalez-openapi = { path = "../arvalez-openapi" }
-arvalez-plugin-runtime = { path = "../arvalez-plugin-runtime" }
-arvalez-target-go = { path = "../arvalez-target-go" }
-arvalez-target-python = { path = "../arvalez-target-python" }
-arvalez-target-typescript = { path = "../arvalez-target-typescript" }
+arvalez-ir.workspace = true
+arvalez-openapi.workspace = true
+arvalez-plugin-runtime.workspace = true
+arvalez-target-go.workspace = true
+arvalez-target-python.workspace = true
+arvalez-target-typescript.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true

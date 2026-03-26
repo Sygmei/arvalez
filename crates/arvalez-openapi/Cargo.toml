@@ -3,10 +3,16 @@ name = "arvalez-openapi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "OpenAPI loader and Core IR importer for Arvalez"
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-arvalez-ir = { path = "../arvalez-ir" }
+arvalez-ir.workspace = true
+indexmap.workspace = true
 serde.workspace = true
+serde_path_to_error.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

@@ -23,7 +23,7 @@ RUN set -eu; \
     arvalez-cli generate-python \
       --config /src/arvalez.toml \
       --openapi /src/openapi.json \
-      --output /out/python-client
+      --output-directory /out/python-client
 
 ########################################################################
 # STAGE: PYTHON CLEANING
@@ -64,7 +64,7 @@ RUN set -eu; \
     arvalez-cli generate-typescript \
       --config /src/arvalez.toml \
       --openapi /src/openapi.json \
-      --output /out/typescript-client
+      --output-directory /out/typescript-client
 
 ########################################################################
 # STAGE: TYPESCRIPT CLEANING
@@ -103,7 +103,7 @@ RUN set -eu; \
     arvalez-cli generate-go \
       --config /src/arvalez.toml \
       --openapi /src/openapi.json \
-      --output /out/go-client
+      --output-directory /out/go-client
 
 ########################################################################
 # STAGE: GO CLEANING

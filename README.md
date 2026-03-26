@@ -62,60 +62,67 @@ cargo run -p arvalez-cli -- run-plugin --plugin money --openapi openapi.json
 Generate a Python SDK package:
 
 ```bash
-cargo run -p arvalez-cli -- generate-python --openapi openapi.json --output generated/python-client
+cargo run -p arvalez-cli -- generate-python --openapi openapi.json --output-directory generated/python-client
 ```
 
 Generate a TypeScript SDK package:
 
 ```bash
-cargo run -p arvalez-cli -- generate-typescript --openapi openapi.json --output generated/typescript-client
+cargo run -p arvalez-cli -- generate-typescript --openapi openapi.json --output-directory generated/typescript-client
 ```
 
 Generate a Go SDK package:
 
 ```bash
-cargo run -p arvalez-cli -- generate-go --openapi openapi.json --output generated/go-client
+cargo run -p arvalez-cli -- generate-go --openapi openapi.json --output-directory generated/go-client
 ```
 
 The generators also read optional settings from `arvalez.toml`:
 
 ```toml
-[generator]
+[output]
+directory = "generated"
 group_by_tag = true
 version = "1.0.0"
 
-[generator.go]
+[output.go]
 module_path = "github.com/acme/client"
 package_name = "client"
 version = "1.0.0"
 
-[generator.python]
+[output.python]
 package_name = "arvalez_client"
 version = "1.0.1"
 template_dir = "./templates/python"
 
-[generator.typescript]
+[output.typescript]
 package_name = "@arvalez/client"
 version = "1.0.2"
 template_dir = "./templates/typescript"
 ```
 
+Override the configured output version from the CLI:
+
+```bash
+cargo run -p arvalez-cli -- generate-python --openapi openapi.json --output-directory generated/python-client --output-version 2.3.4
+```
+
 Generate all enabled backends into one output root:
 
 ```bash
-cargo run -p arvalez-cli -- generate --openapi openapi.json --output-root generated
+cargo run -p arvalez-cli -- generate --openapi openapi.json --output-directory generated
 ```
 
 Disable a backend from the CLI:
 
 ```bash
-cargo run -p arvalez-cli -- generate --openapi openapi.json --output-root generated --no-typescript
+cargo run -p arvalez-cli -- generate --openapi openapi.json --output-directory generated --no-typescript
 ```
 
 Disable a backend from config:
 
 ```toml
-[generator.typescript]
+[output.typescript]
 disabled = true
 package_name = "@arvalez/client"
 ```
@@ -138,7 +145,7 @@ Supported override names are:
 
 When `group_by_tag = true`, tagged operations are grouped under subclients. For example, Python becomes `client.ingredients.create_ingredient(...)` and TypeScript becomes `client.ingredients.createIngredient(...)`. Operations without tags stay on the root client, and multi-tag operations use the first tag.
 
-Shared settings in `[generator]` act as defaults, and `[generator.python]` / `[generator.typescript]` can override them per target. That includes `group_by_tag`, `version`, and similar cross-target options.
+Shared settings in `[output]` act as defaults, and `[output.python]` / `[output.typescript]` / `[output.go]` can override them per target. That includes `group_by_tag`, `version`, and similar cross-target options. CLI flags like `--output-version` override both.
 
 Override only selected Python templates:
 
@@ -198,5 +205,19 @@ docker run --rm -v "$PWD:/work" -w /work arvalez build-ir --openapi openapi.json
 Generate a Python SDK from inside the container:
 
 ```bash
-docker run --rm -v "$PWD:/work" -w /work arvalez generate-python --openapi openapi.json --output generated/python-client
+docker run --rm -v "$PWD:/work" -w /work arvalez generate-python --openapi openapi.json --output-directory generated/python-client
 ```
+
+## Releases
+
+Publishing a GitHub release triggers `.github/workflows/release.yml`, which:
+
+- checks that the release tag matches the workspace version in `Cargo.toml`
+- builds and pushes the multi-arch `arvalez/cli` image to Docker Hub
+- publishes the Rust crates to crates.io in dependency order
+
+The workflow expects these GitHub repository secrets:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+- `CARGO_REGISTRY_TOKEN`
