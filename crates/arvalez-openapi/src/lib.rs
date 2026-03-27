@@ -159,6 +159,8 @@ struct OpenApiImporter {
     source: OpenApiSource,
     models: BTreeMap<String, Model>,
     generated_model_names: BTreeSet<String>,
+    normalized_all_of_refs: BTreeMap<String, Schema>,
+    active_all_of_refs: Vec<String>,
     warnings: Vec<String>,
     options: LoadOpenApiOptions,
 }
@@ -170,6 +172,8 @@ impl OpenApiImporter {
             source,
             models: BTreeMap::new(),
             generated_model_names: BTreeSet::new(),
+            normalized_all_of_refs: BTreeMap::new(),
+            active_all_of_refs: Vec::new(),
             warnings: Vec::new(),
             options,
         }
@@ -266,7 +270,8 @@ impl OpenApiImporter {
         Ok(operations)
     }
 
-    fn import_parameter(&mut self, param: &ParameterSpec) -> Result<Parameter> {
+    fn import_parameter(&mut self, param: &ParameterOrRef) -> Result<Parameter> {
+        let param = self.resolve_parameter(param)?;
         let imported = self.import_schema_type(
             &param.schema,
             &InlineModelContext::Parameter {
@@ -282,6 +287,21 @@ impl OpenApiImporter {
                 .unwrap_or_else(|| TypeRef::primitive("any")),
             required: param.required,
         })
+    }
+
+    fn resolve_parameter(&self, param: &ParameterOrRef) -> Result<ParameterSpec> {
+        match param {
+            ParameterOrRef::Inline(param) => Ok(param.clone()),
+            ParameterOrRef::Ref { reference } => {
+                let name = ref_name(reference)?;
+                self.document
+                    .components
+                    .parameters
+                    .get(&name)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))
+            }
+        }
     }
 
     fn import_request_body(
@@ -416,7 +436,8 @@ impl OpenApiImporter {
         schema: &Schema,
         pointer: &str,
     ) -> Result<Model> {
-        self.validate_schema_keywords(schema, pointer)?;
+        let schema = self.normalize_schema(schema, pointer)?;
+        self.validate_schema_keywords(&schema, pointer)?;
 
         if let Some(enum_values) = &schema.enum_values {
             let mut model = Model::new(format!("model.{}", to_snake_case(name)), name.to_owned());
@@ -440,9 +461,9 @@ impl OpenApiImporter {
             return Ok(model);
         }
 
-        if !schema_is_object_like(schema) {
+        if !schema_is_object_like(&schema) {
             let imported = self.import_schema_type_inner(
-                schema,
+                &schema,
                 &InlineModelContext::NamedSchema {
                     name: name.to_owned(),
                     pointer: pointer.to_owned(),
@@ -533,8 +554,10 @@ impl OpenApiImporter {
         context: &InlineModelContext,
         skip_keyword_validation: bool,
     ) -> Result<ImportedType> {
+        let schema = self.normalize_schema(schema, &context.describe())?;
+
         if !skip_keyword_validation {
-            self.validate_schema_keywords(schema, &context.describe())?;
+            self.validate_schema_keywords(&schema, &context.describe())?;
         }
 
         if let Some(reference) = &schema.reference {
@@ -545,7 +568,7 @@ impl OpenApiImporter {
         }
 
         if let Some(const_value) = &schema.const_value {
-            return self.import_const_type(schema, const_value, context);
+            return self.import_const_type(&schema, const_value, context);
         }
 
         if let Some(any_of) = &schema.any_of {
@@ -556,16 +579,16 @@ impl OpenApiImporter {
             return self.import_any_of(one_of, context);
         }
 
-        if let Some(imported) = self.import_schema_type_from_decl(schema, context)? {
+        if let Some(imported) = self.import_schema_type_from_decl(&schema, context)? {
             return Ok(imported);
         }
 
-        if is_unconstrained_schema(schema) {
+        if is_unconstrained_schema(&schema) {
             return Ok(ImportedType::plain(TypeRef::primitive("any")));
         }
 
         if schema.properties.is_some() || schema.additional_properties.is_some() {
-            return self.import_object_type(schema, context);
+            return self.import_object_type(&schema, context);
         }
 
         self.handle_unhandled(&context.describe(), "schema shape is not supported yet")?;
@@ -657,10 +680,6 @@ impl OpenApiImporter {
     }
 
     fn validate_schema_keywords(&mut self, schema: &Schema, context: &str) -> Result<()> {
-        if schema.all_of.is_some() {
-            self.handle_unhandled(context, "`allOf` is not supported yet")?;
-        }
-
         for keyword in schema.extra_keywords.keys() {
             if is_known_ignored_schema_keyword(keyword) || keyword.starts_with("x-") {
                 continue;
@@ -675,6 +694,202 @@ impl OpenApiImporter {
         }
 
         Ok(())
+    }
+
+    fn normalize_schema(&mut self, schema: &Schema, context: &str) -> Result<Schema> {
+        if schema.all_of.is_some() {
+            self.expand_all_of_schema(schema, context)
+        } else {
+            Ok(schema.clone())
+        }
+    }
+
+    fn expand_all_of_schema(&mut self, schema: &Schema, context: &str) -> Result<Schema> {
+        let mut merged = Schema {
+            all_of: None,
+            ..schema.clone()
+        };
+
+        for member in schema.all_of.clone().unwrap_or_default() {
+            let resolved_member = self.resolve_schema_for_merge(&member, context)?;
+            merged = self.merge_schemas(merged, resolved_member, context)?;
+        }
+
+        Ok(merged)
+    }
+
+    fn resolve_schema_for_merge(&mut self, schema: &Schema, context: &str) -> Result<Schema> {
+        let mut resolved = if let Some(reference) = &schema.reference {
+            self.resolve_schema_reference_for_all_of(reference, context)?
+        } else {
+            schema.clone()
+        };
+
+        if resolved.all_of.is_some() {
+            resolved = self.expand_all_of_schema(&resolved, context)?;
+        }
+
+        if schema.reference.is_some() {
+            let mut overlay = schema.clone();
+            overlay.reference = None;
+            overlay.all_of = None;
+            resolved = self.merge_schemas(resolved, overlay, context)?;
+        }
+
+        Ok(resolved)
+    }
+
+    fn resolve_schema_reference_for_all_of(
+        &mut self,
+        reference: &str,
+        context: &str,
+    ) -> Result<Schema> {
+        if let Some(cached) = self.normalized_all_of_refs.get(reference) {
+            return Ok(cached.clone());
+        }
+
+        if self.active_all_of_refs.iter().any(|item| item == reference) {
+            self.handle_unhandled(
+                context,
+                format!("`allOf` contains a recursive reference cycle involving `{reference}`"),
+            )?;
+            return Ok(Schema::default());
+        }
+
+        self.active_all_of_refs.push(reference.to_owned());
+        let result: Result<Schema> = (|| {
+            let mut resolved = self.resolve_schema_reference(reference)?;
+            if resolved.all_of.is_some() {
+                resolved = self.expand_all_of_schema(&resolved, reference)?;
+            }
+            Ok(resolved)
+        })();
+        self.active_all_of_refs.pop();
+
+        let resolved = result?;
+        self.normalized_all_of_refs
+            .insert(reference.to_owned(), resolved.clone());
+        Ok(resolved)
+    }
+
+    fn resolve_schema_reference(&self, reference: &str) -> Result<Schema> {
+        let name = ref_name(reference)?;
+        self.document
+            .components
+            .schemas
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))
+    }
+
+    fn merge_schemas(
+        &mut self,
+        mut base: Schema,
+        overlay: Schema,
+        context: &str,
+    ) -> Result<Schema> {
+        merge_optional_field(&mut base.title, overlay.title, "title", context, self)?;
+        merge_optional_field(&mut base.format, overlay.format, "format", context, self)?;
+        merge_optional_field(
+            &mut base.schema_type,
+            overlay.schema_type,
+            "type",
+            context,
+            self,
+        )?;
+        merge_optional_field(&mut base.const_value, overlay.const_value, "const", context, self)?;
+        merge_optional_field(
+            &mut base._discriminator,
+            overlay._discriminator,
+            "discriminator",
+            context,
+            self,
+        )?;
+        merge_optional_field(
+            &mut base.enum_values,
+            overlay.enum_values,
+            "enum",
+            context,
+            self,
+        )?;
+        merge_optional_field(&mut base.any_of, overlay.any_of, "anyOf", context, self)?;
+        merge_optional_field(&mut base.one_of, overlay.one_of, "oneOf", context, self)?;
+
+        let base_required = base.required.take();
+        let overlay_required = overlay.required;
+        base.required = match (base_required, overlay_required) {
+            (None, None) => None,
+            (left, right) => Some(merge_required(
+                left.unwrap_or_default(),
+                right.unwrap_or_default(),
+            )),
+        };
+
+        match (base.items.take(), overlay.items) {
+            (Some(left), Some(right)) => {
+                base.items = Some(Box::new(self.merge_schemas(*left, *right, context)?));
+            }
+            (Some(left), None) => base.items = Some(left),
+            (None, Some(right)) => base.items = Some(right),
+            (None, None) => {}
+        }
+
+        match (base.additional_properties.take(), overlay.additional_properties) {
+            (
+                Some(AdditionalProperties::Schema(left)),
+                Some(AdditionalProperties::Schema(right)),
+            ) => {
+                base.additional_properties = Some(AdditionalProperties::Schema(Box::new(
+                    self.merge_schemas(*left, *right, context)?,
+                )));
+            }
+            (Some(AdditionalProperties::Bool(left)), Some(AdditionalProperties::Bool(right)))
+                if left == right =>
+            {
+                base.additional_properties = Some(AdditionalProperties::Bool(left));
+            }
+            (Some(value), None) => base.additional_properties = Some(value),
+            (None, Some(value)) => base.additional_properties = Some(value),
+            (Some(_), Some(_)) => {
+                self.handle_unhandled(
+                    context,
+                    "`allOf` contains incompatible `additionalProperties` declarations",
+                )?;
+            }
+            (None, None) => {}
+        }
+
+        let base_properties = base.properties.take();
+        let overlay_properties = overlay.properties;
+        base.properties = match (base_properties, overlay_properties) {
+            (None, None) => None,
+            (left, right) => Some(merge_properties(
+                self,
+                left.unwrap_or_default(),
+                right.unwrap_or_default(),
+                context,
+            )?),
+        };
+
+        for (key, value) in overlay.extra_keywords {
+            match base.extra_keywords.get(&key) {
+                Some(existing) if existing != &value => {
+                    if is_known_ignored_schema_keyword(&key) || key.starts_with("x-") {
+                        continue;
+                    }
+                    self.handle_unhandled(
+                        context,
+                        format!("`allOf` contains incompatible `{key}` declarations"),
+                    )?;
+                }
+                Some(_) => {}
+                None => {
+                    base.extra_keywords.insert(key, value);
+                }
+            }
+        }
+
+        Ok(base)
     }
 
     fn import_const_type(
@@ -1026,12 +1241,14 @@ struct OpenApiDocument {
 struct Components {
     #[serde(default)]
     schemas: BTreeMap<String, Schema>,
+    #[serde(default)]
+    parameters: BTreeMap<String, ParameterSpec>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
 struct PathItem {
     #[serde(default)]
-    parameters: Option<Vec<ParameterSpec>>,
+    parameters: Option<Vec<ParameterOrRef>>,
     #[serde(default)]
     get: Option<OperationSpec>,
     #[serde(default)]
@@ -1054,7 +1271,7 @@ struct OperationSpec {
     #[serde(default)]
     tags: Vec<String>,
     #[serde(default)]
-    parameters: Vec<ParameterSpec>,
+    parameters: Vec<ParameterOrRef>,
     #[serde(rename = "requestBody")]
     #[serde(default)]
     request_body: Option<RequestBodySpec>,
@@ -1070,6 +1287,16 @@ struct ParameterSpec {
     #[serde(default)]
     required: bool,
     schema: Schema,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+enum ParameterOrRef {
+    Ref {
+        #[serde(rename = "$ref")]
+        reference: String,
+    },
+    Inline(ParameterSpec),
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -1094,7 +1321,7 @@ struct MediaTypeSpec {
     schema: Option<Schema>,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 struct Schema {
     #[serde(rename = "$ref")]
     #[serde(default)]
@@ -1138,14 +1365,14 @@ struct Schema {
     extra_keywords: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 enum AdditionalProperties {
     Bool(bool),
     Schema(Box<Schema>),
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 enum SchemaTypeDecl {
     Single(String),
@@ -1352,6 +1579,56 @@ fn dedupe_variants(variants: Vec<TypeRef>) -> Vec<TypeRef> {
     deduped
 }
 
+fn merge_required(mut left: Vec<String>, right: Vec<String>) -> Vec<String> {
+    let mut seen = left.iter().cloned().collect::<BTreeSet<_>>();
+    for value in right {
+        if seen.insert(value.clone()) {
+            left.push(value);
+        }
+    }
+    left
+}
+
+fn merge_optional_field<T>(
+    target: &mut Option<T>,
+    incoming: Option<T>,
+    field_name: &str,
+    context: &str,
+    importer: &mut OpenApiImporter,
+) -> Result<()>
+where
+    T: PartialEq,
+{
+    match (target.as_ref(), incoming) {
+        (_, None) => {}
+        (None, Some(value)) => *target = Some(value),
+        (Some(existing), Some(value)) if *existing == value => {}
+        (Some(_), Some(_)) => {
+            importer.handle_unhandled(
+                context,
+                format!("`allOf` contains incompatible `{field_name}` declarations"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn merge_properties(
+    importer: &mut OpenApiImporter,
+    mut left: IndexMap<String, Schema>,
+    right: IndexMap<String, Schema>,
+    context: &str,
+) -> Result<IndexMap<String, Schema>> {
+    for (key, value) in right {
+        if let Some(existing) = left.shift_remove(&key) {
+            left.insert(key, importer.merge_schemas(existing, value, context)?);
+        } else {
+            left.insert(key, value);
+        }
+    }
+    Ok(left)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1424,9 +1701,10 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result = OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect("should import successfully");
+        let result =
+            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
+                .build_ir()
+                .expect("should import successfully");
         let ir = result.ir;
 
         assert_eq!(ir.models.len(), 2);
@@ -1465,6 +1743,53 @@ mod tests {
                 .type_ref,
             TypeRef::named("WidgetStatus")
         );
+    }
+
+    #[test]
+    fn supports_parameter_refs() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {
+    "/key/{PK}": {
+      "delete": {
+        "operationId": "delete_key",
+        "parameters": [
+          { "$ref": "#/components/parameters/PK" }
+        ],
+        "responses": {
+          "204": { "description": "deleted" }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "PK": {
+        "name": "PK",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let result =
+            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
+                .build_ir()
+                .expect("parameter refs should be supported");
+
+        assert_eq!(result.ir.operations.len(), 1);
+        let operation = &result.ir.operations[0];
+        assert_eq!(operation.params.len(), 1);
+        let param = &operation.params[0];
+        assert_eq!(param.name, "PK");
+        assert_eq!(param.location, ParameterLocation::Path);
+        assert!(param.required);
+        assert_eq!(param.type_ref, TypeRef::primitive("string"));
     }
 
     #[test]
@@ -1714,16 +2039,40 @@ mod tests {
     }
 
     #[test]
-    fn errors_on_unhandled_elements_by_default_and_warns_when_ignored() {
+    fn supports_all_of_object_composition() {
         let spec = r##"
 {
   "openapi": "3.1.0",
   "paths": {},
   "components": {
     "schemas": {
+      "Cursor": {
+        "type": "object",
+        "properties": {
+          "cursor": { "type": "string" }
+        },
+        "required": ["cursor"]
+      },
       "PatchSchema": {
         "allOf": [
-          { "type": "object" }
+          { "$ref": "#/components/schemas/Cursor" },
+          {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["items"]
+          }
+        ]
+      },
+      "BaseId": { "type": "string" },
+      "WrappedId": {
+        "allOf": [
+          { "$ref": "#/components/schemas/BaseId" },
+          { "description": "Identifier wrapper" }
         ]
       }
     }
@@ -1732,14 +2081,118 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let strict_error = OpenApiImporter::new(document.clone(), json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect_err("strict mode should fail");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("allOf should be supported");
+
+        let patch_schema = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "PatchSchema")
+            .expect("PatchSchema model");
+        let field_names = patch_schema
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(field_names, vec!["cursor", "items"]);
         assert!(
-            strict_error
-                .to_string()
-                .contains("`allOf` is not supported yet")
+            patch_schema
+                .fields
+                .iter()
+                .find(|field| field.name == "cursor")
+                .map(|field| !field.optional)
+                .unwrap_or(false)
         );
+        assert!(
+            patch_schema
+                .fields
+                .iter()
+                .find(|field| field.name == "items")
+                .map(|field| !field.optional)
+                .unwrap_or(false)
+        );
+
+        let wrapped_id = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "WrappedId")
+            .expect("WrappedId model");
+        assert_eq!(
+            wrapped_id.attributes.get("alias_type_ref"),
+            Some(&json!(TypeRef::primitive("string")))
+        );
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn errors_on_recursive_all_of_reference_cycles() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Node": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Node" }
+        ]
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let error = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect_err("recursive allOf cycles should fail cleanly");
+
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("recursive reference cycle"),
+            "unexpected error: {rendered}"
+        );
+        assert!(rendered.contains("#/components/schemas/Node"));
+    }
+
+    #[test]
+    fn errors_on_unhandled_elements_by_default_and_warns_when_ignored() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "PatchSchema": {
+        "not": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let strict_error = OpenApiImporter::new(
+            document.clone(),
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect_err("strict mode should fail");
+        assert!(strict_error.to_string().contains("`not` is not supported yet"));
 
         let warning_result = OpenApiImporter::new(
             document,
@@ -1754,7 +2207,7 @@ mod tests {
             warning_result
                 .warnings
                 .iter()
-                .any(|warning| warning.contains("`allOf` is not supported yet"))
+                .any(|warning| warning.contains("`not` is not supported yet"))
         );
     }
 

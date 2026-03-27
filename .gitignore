@@ -1,3 +1,5 @@
 /target
 generated/
+.arvalez/
 openapi*.json
+reports/

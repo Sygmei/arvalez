@@ -84,6 +84,17 @@ Generate all enabled backends into one output root:
 cargo run -p arvalez-cli -- generate --openapi openapi.json --output-directory generated
 ```
 
+Run the APIs.guru corpus as an on-demand generation test:
+
+```bash
+cargo run -p arvalez-cli -- test-apis-guru --report-directory reports/apis-guru
+```
+
+By default this command clones `APIs-guru/openapi-directory`, discovers every `openapi.json`, `openapi.yaml`, `swagger.json`, and `swagger.yaml`, and runs generation for each spec. Generated outputs go to a temporary directory unless you pass `--output-directory`, so the repository stays slim.
+The checkout is cached under `.arvalez/corpus/openapi-directory/` in the current workspace and refreshed on later runs, so you do not pay the full clone cost every time.
+Reports are written into the chosen directory as timestamped files like `apis-guru-1774593522.json`, and the command also updates `index.html` there so you can open a static dashboard and track support progress over time.
+Use `--jobs N` to control spec-level parallelism; by default Arvalez uses the machine's available parallelism.
+
 Disable a backend from the CLI:
 
 ```bash
