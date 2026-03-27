@@ -1,11 +1,19 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
+    io::{IsTerminal, Write},
     path::{Path, PathBuf},
-    process::{Command as ProcessCommand, Stdio},
-    sync::atomic::{AtomicUsize, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    process::{Command as ProcessCommand, ExitStatus, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 
 use anyhow::{Context, Result, bail};
 use arvalez_ir::{CoreIr, validate_ir};
@@ -22,11 +30,31 @@ use arvalez_target_typescript::{
     write_package as write_typescript_package,
 };
 use clap::{Parser, Subcommand};
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    },
+};
 use rayon::{ThreadPoolBuilder, prelude::*};
+use ratatui::{
+    Terminal,
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
+};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 const CORPUS_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+const CORPUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
+const CORPUS_UI_TICK_INTERVAL: Duration = Duration::from_millis(200);
+const CORPUS_UI_RECENT_LIMIT: usize = 8;
+const CORPUS_UI_ACTIVE_SAMPLE_LIMIT: usize = 8;
+const OPENAPI_LOAD_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Parser)]
 #[command(author, version, about = "Arvalez local development CLI")]
@@ -46,6 +74,8 @@ enum Command {
         openapi: PathBuf,
         #[arg(long)]
         ignore_unhandled: bool,
+        #[arg(long)]
+        timings: bool,
     },
     Generate {
         #[arg(long)]
@@ -66,6 +96,8 @@ enum Command {
         no_typescript: bool,
         #[arg(long)]
         output_version: Option<String>,
+        #[arg(long)]
+        timings: bool,
     },
     GenerateGo {
         #[arg(long)]
@@ -88,6 +120,8 @@ enum Command {
         group_by_tag: bool,
         #[arg(long)]
         output_version: Option<String>,
+        #[arg(long)]
+        timings: bool,
     },
     GeneratePython {
         #[arg(long)]
@@ -108,6 +142,8 @@ enum Command {
         group_by_tag: bool,
         #[arg(long)]
         output_version: Option<String>,
+        #[arg(long)]
+        timings: bool,
     },
     GenerateTypescript {
         #[arg(long)]
@@ -128,6 +164,8 @@ enum Command {
         group_by_tag: bool,
         #[arg(long)]
         output_version: Option<String>,
+        #[arg(long)]
+        timings: bool,
     },
     TestApisGuru {
         #[arg(long, default_value = "https://github.com/APIs-guru/openapi-directory.git")]
@@ -156,6 +194,29 @@ enum Command {
         limit: Option<usize>,
         #[arg(long)]
         jobs: Option<usize>,
+        #[arg(long)]
+        ui: bool,
+    },
+    #[command(hide = true)]
+    CorpusSpecWorker {
+        #[arg(long)]
+        spec_path: PathBuf,
+        #[arg(long)]
+        relative_spec: String,
+        #[arg(long, default_value = "arvalez.toml")]
+        config: PathBuf,
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
+        #[arg(long)]
+        ignore_unhandled: bool,
+        #[arg(long)]
+        no_go: bool,
+        #[arg(long)]
+        no_python: bool,
+        #[arg(long)]
+        no_typescript: bool,
+        #[arg(long)]
+        output_version: Option<String>,
     },
 }
 
@@ -253,6 +314,74 @@ struct CorpusFailureSummary {
     by_kind_and_feature: BTreeMap<String, usize>,
 }
 
+#[derive(Debug, Clone)]
+struct CompletedCorpusSpec {
+    spec: String,
+    status: &'static str,
+}
+
+#[derive(Debug, Default)]
+struct CorpusProgressSnapshot {
+    active_specs: Vec<String>,
+    recent_completed: Vec<CompletedCorpusSpec>,
+    passed_specs: usize,
+    failed_specs: usize,
+}
+
+#[derive(Debug, Default)]
+struct CorpusProgressState {
+    active_specs: BTreeSet<String>,
+    recent_completed: VecDeque<CompletedCorpusSpec>,
+    passed_specs: usize,
+    failed_specs: usize,
+}
+
+struct TimingCollector {
+    enabled: bool,
+    started_at: Instant,
+    phases: Vec<(String, Duration)>,
+}
+
+impl TimingCollector {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            started_at: Instant::now(),
+            phases: Vec::new(),
+        }
+    }
+
+    fn measure_result<T, F>(&mut self, label: impl Into<String>, task: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T>,
+    {
+        let label = label.into();
+        if self.enabled {
+            eprintln!("timing: starting {label}");
+        }
+        let started = Instant::now();
+        let value = task();
+        if self.enabled {
+            let elapsed = started.elapsed();
+            eprintln!("timing: {:<20} {}", label, format_duration(elapsed));
+            self.phases.push((label, elapsed));
+        }
+        value
+    }
+
+    fn print(&self) {
+        if !self.enabled {
+            return;
+        }
+
+        eprintln!("timings:");
+        for (label, duration) in &self.phases {
+            eprintln!("  {:<20} {}", label, format_duration(*duration));
+        }
+        eprintln!("  {:<20} {}", "total", format_duration(self.started_at.elapsed()));
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -264,11 +393,25 @@ fn main() -> Result<()> {
         Command::BuildIr {
             openapi,
             ignore_unhandled,
+            timings,
         } => {
+            let mut timing_collector = TimingCollector::new(timings);
+            let openapi = openapi.clone();
             let OpenApiLoadResult { ir, warnings } =
-                load_openapi_to_ir_with_options(&openapi, openapi_options(ignore_unhandled))?;
+                timing_collector.measure_result("openapi_load", move || {
+                    run_with_large_stack("build-ir", move || {
+                        load_openapi_to_ir_with_options(
+                            &openapi,
+                            openapi_options(ignore_unhandled, timings),
+                        )
+                    })
+                })?;
             print_openapi_warnings(&warnings);
-            println!("{}", serde_json::to_string_pretty(&ir)?);
+            let rendered_ir = timing_collector.measure_result("ir_serialize", || {
+                Ok(serde_json::to_string_pretty(&ir)?)
+            })?;
+            println!("{rendered_ir}");
+            timing_collector.print();
         }
         Command::Generate {
             ir,
@@ -280,10 +423,14 @@ fn main() -> Result<()> {
             no_python,
             no_typescript,
             output_version,
+            timings,
         } => {
-            let (ir, warnings) = load_input_ir(ir, openapi, ignore_unhandled)?;
+            let mut timing_collector = TimingCollector::new(timings);
+            let (ir, warnings) =
+                load_input_ir(ir, openapi, ignore_unhandled, &mut timing_collector)?;
             print_openapi_warnings(&warnings);
-            let config_file = load_optional_config(&config)?;
+            let config_file =
+                timing_collector.measure_result("config_load", || load_optional_config(&config))?;
             let output_root = resolve_output_root(&config_file, output_directory);
 
             let go_enabled = !no_go && !config_file.output.go.disabled;
@@ -297,18 +444,23 @@ fn main() -> Result<()> {
             if go_enabled {
                 let go_config =
                     resolve_go_config(&config_file, None, None, None, false, output_version.clone());
-                let files = generate_go_package(&ir, &go_config)?;
+                let files =
+                    timing_collector.measure_result("go_generate", || generate_go_package(&ir, &go_config))?;
                 let output = output_root.join("go-client");
-                write_go_package(&output, &files)?;
+                timing_collector.measure_result("go_write", || write_go_package(&output, &files))?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
             }
 
             if python_enabled {
                 let python_config =
                     resolve_python_config(&config_file, None, None, false, output_version.clone());
-                let files = generate_python_package(&ir, &python_config)?;
+                let files = timing_collector.measure_result("python_generate", || {
+                    generate_python_package(&ir, &python_config)
+                })?;
                 let output = output_root.join("python-client");
-                write_python_package(&output, &files)?;
+                timing_collector.measure_result("python_write", || {
+                    write_python_package(&output, &files)
+                })?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
             }
 
@@ -320,11 +472,16 @@ fn main() -> Result<()> {
                     false,
                     output_version.clone(),
                 );
-                let files = generate_typescript_package(&ir, &typescript_config)?;
+                let files = timing_collector.measure_result("typescript_generate", || {
+                    generate_typescript_package(&ir, &typescript_config)
+                })?;
                 let output = output_root.join("typescript-client");
-                write_typescript_package(&output, &files)?;
+                timing_collector.measure_result("typescript_write", || {
+                    write_typescript_package(&output, &files)
+                })?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
             }
+            timing_collector.print();
         }
         Command::GenerateGo {
             ir,
@@ -337,10 +494,14 @@ fn main() -> Result<()> {
             template_dir,
             group_by_tag,
             output_version,
+            timings,
         } => {
-            let (ir, warnings) = load_input_ir(ir, openapi, ignore_unhandled)?;
+            let mut timing_collector = TimingCollector::new(timings);
+            let (ir, warnings) =
+                load_input_ir(ir, openapi, ignore_unhandled, &mut timing_collector)?;
             print_openapi_warnings(&warnings);
-            let config_file = load_optional_config(&config)?;
+            let config_file =
+                timing_collector.measure_result("config_load", || load_optional_config(&config))?;
             let output = resolve_target_output_directory(&config_file, output_directory, "go-client");
             let go_config = resolve_go_config(
                 &config_file,
@@ -350,9 +511,11 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
-            let files = generate_go_package(&ir, &go_config)?;
-            write_go_package(&output, &files)?;
+            let files =
+                timing_collector.measure_result("go_generate", || generate_go_package(&ir, &go_config))?;
+            timing_collector.measure_result("go_write", || write_go_package(&output, &files))?;
             eprintln!("generated {} files into {}", files.len(), output.display());
+            timing_collector.print();
         }
         Command::GeneratePython {
             ir,
@@ -364,10 +527,14 @@ fn main() -> Result<()> {
             template_dir,
             group_by_tag,
             output_version,
+            timings,
         } => {
-            let (ir, warnings) = load_input_ir(ir, openapi, ignore_unhandled)?;
+            let mut timing_collector = TimingCollector::new(timings);
+            let (ir, warnings) =
+                load_input_ir(ir, openapi, ignore_unhandled, &mut timing_collector)?;
             print_openapi_warnings(&warnings);
-            let config_file = load_optional_config(&config)?;
+            let config_file =
+                timing_collector.measure_result("config_load", || load_optional_config(&config))?;
             let output =
                 resolve_target_output_directory(&config_file, output_directory, "python-client");
             let python_config = resolve_python_config(
@@ -377,9 +544,14 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
-            let files = generate_python_package(&ir, &python_config)?;
-            write_python_package(&output, &files)?;
+            let files = timing_collector.measure_result("python_generate", || {
+                generate_python_package(&ir, &python_config)
+            })?;
+            timing_collector.measure_result("python_write", || {
+                write_python_package(&output, &files)
+            })?;
             eprintln!("generated {} files into {}", files.len(), output.display());
+            timing_collector.print();
         }
         Command::GenerateTypescript {
             ir,
@@ -391,10 +563,14 @@ fn main() -> Result<()> {
             template_dir,
             group_by_tag,
             output_version,
+            timings,
         } => {
-            let (ir, warnings) = load_input_ir(ir, openapi, ignore_unhandled)?;
+            let mut timing_collector = TimingCollector::new(timings);
+            let (ir, warnings) =
+                load_input_ir(ir, openapi, ignore_unhandled, &mut timing_collector)?;
             print_openapi_warnings(&warnings);
-            let config_file = load_optional_config(&config)?;
+            let config_file =
+                timing_collector.measure_result("config_load", || load_optional_config(&config))?;
             let output = resolve_target_output_directory(
                 &config_file,
                 output_directory,
@@ -407,9 +583,14 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
-            let files = generate_typescript_package(&ir, &typescript_config)?;
-            write_typescript_package(&output, &files)?;
+            let files = timing_collector.measure_result("typescript_generate", || {
+                generate_typescript_package(&ir, &typescript_config)
+            })?;
+            timing_collector.measure_result("typescript_write", || {
+                write_typescript_package(&output, &files)
+            })?;
             eprintln!("generated {} files into {}", files.len(), output.display());
+            timing_collector.print();
         }
         Command::TestApisGuru {
             repository,
@@ -425,9 +606,11 @@ fn main() -> Result<()> {
             output_version,
             limit,
             jobs,
+            ui,
         } => {
             let config_file = load_optional_config(&config)?;
             let options = CorpusTestOptions {
+                config,
                 repository,
                 reference,
                 checkout_directory,
@@ -440,8 +623,43 @@ fn main() -> Result<()> {
                 output_version,
                 limit,
                 jobs,
+                ui,
             };
             run_apis_guru_corpus_test(&config_file, &options)?;
+        }
+        Command::CorpusSpecWorker {
+            spec_path,
+            relative_spec,
+            config,
+            output_directory,
+            ignore_unhandled,
+            no_go,
+            no_python,
+            no_typescript,
+            output_version,
+        } => {
+            let config_file = load_optional_config(&config)?;
+            let options = CorpusTestOptions {
+                config,
+                repository: String::new(),
+                reference: String::new(),
+                checkout_directory: None,
+                output_directory,
+                report_directory: None,
+                ignore_unhandled,
+                no_go,
+                no_python,
+                no_typescript,
+                output_version,
+                limit: None,
+                jobs: None,
+                ui: false,
+            };
+            let result = run_corpus_spec_inline(&config_file, &spec_path, &relative_spec, &options);
+            let stdout = std::io::stdout();
+            let mut handle = stdout.lock();
+            serde_json::to_writer(&mut handle, &result)?;
+            handle.write_all(b"\n")?;
         }
     }
 
@@ -588,24 +806,38 @@ fn load_input_ir(
     ir: Option<PathBuf>,
     openapi: Option<PathBuf>,
     ignore_unhandled: bool,
+    timing_collector: &mut TimingCollector,
 ) -> Result<(CoreIr, Vec<String>)> {
     match (ir, openapi) {
-        (Some(ir), None) => Ok((load_ir(&ir)?, Vec::new())),
+        (Some(ir), None) => timing_collector
+            .measure_result("ir_load", || Ok((load_ir(&ir)?, Vec::new()))),
         (None, Some(openapi)) => {
-            let result =
-                load_openapi_to_ir_with_options(&openapi, openapi_options(ignore_unhandled))?;
+            let emit_timings = timing_collector.enabled;
+            let result = timing_collector.measure_result("openapi_load", move || {
+                run_with_large_stack("load-openapi", move || {
+                    load_openapi_to_ir_with_options(
+                        &openapi,
+                        openapi_options(ignore_unhandled, emit_timings),
+                    )
+                })
+            })?;
             Ok((result.ir, result.warnings))
         }
-        (None, None) => Ok((
-            load_ir(&PathBuf::from("fixtures/core_ir.json"))?,
-            Vec::new(),
-        )),
+        (None, None) => timing_collector.measure_result("ir_load", || {
+            Ok((
+                load_ir(&PathBuf::from("fixtures/core_ir.json"))?,
+                Vec::new(),
+            ))
+        }),
         (Some(_), Some(_)) => bail!("pass either --ir or --openapi, not both"),
     }
 }
 
-fn openapi_options(ignore_unhandled: bool) -> LoadOpenApiOptions {
-    LoadOpenApiOptions { ignore_unhandled }
+fn openapi_options(ignore_unhandled: bool, emit_timings: bool) -> LoadOpenApiOptions {
+    LoadOpenApiOptions {
+        ignore_unhandled,
+        emit_timings,
+    }
 }
 
 fn print_openapi_warnings(warnings: &[String]) {
@@ -614,7 +846,35 @@ fn print_openapi_warnings(warnings: &[String]) {
     }
 }
 
+fn format_duration(duration: Duration) -> String {
+    if duration.as_secs() >= 1 {
+        format!("{:.3}s", duration.as_secs_f64())
+    } else if duration.as_millis() >= 1 {
+        format!("{}ms", duration.as_millis())
+    } else {
+        format!("{}us", duration.as_micros())
+    }
+}
+
+fn run_with_large_stack<T, F>(thread_name: &str, task: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let handle = thread::Builder::new()
+        .name(thread_name.to_owned())
+        .stack_size(OPENAPI_LOAD_STACK_SIZE_BYTES)
+        .spawn(task)
+        .with_context(|| format!("failed to spawn `{thread_name}` worker"))?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
 struct CorpusTestOptions {
+    config: PathBuf,
     repository: String,
     reference: String,
     checkout_directory: Option<PathBuf>,
@@ -627,6 +887,7 @@ struct CorpusTestOptions {
     output_version: Option<String>,
     limit: Option<usize>,
     jobs: Option<usize>,
+    ui: bool,
 }
 
 fn run_apis_guru_corpus_test(config_file: &AppConfig, options: &CorpusTestOptions) -> Result<()> {
@@ -667,39 +928,33 @@ fn run_apis_guru_corpus_test(config_file: &AppConfig, options: &CorpusTestOption
         bail!("no generation targets enabled");
     }
 
-    let go_config = go_enabled.then(|| {
-        resolve_go_config(
-            config_file,
-            None,
-            None,
-            None,
-            false,
-            options.output_version.clone(),
-        )
-    });
-    let python_config = python_enabled.then(|| {
-        resolve_python_config(
-            config_file,
-            None,
-            None,
-            false,
-            options.output_version.clone(),
-        )
-    });
-    let typescript_config = typescript_enabled.then(|| {
-        resolve_typescript_config(
-            config_file,
-            None,
-            None,
-            false,
-            options.output_version.clone(),
-        )
-    });
-
     let jobs = resolve_corpus_jobs(options.jobs)?;
     eprintln!("running corpus analysis with {jobs} worker(s)...");
-    let completed = AtomicUsize::new(0);
+    let completed = Arc::new(AtomicUsize::new(0));
+    let progress_state = Arc::new(Mutex::new(CorpusProgressState::default()));
+    let heartbeat_done = Arc::new(AtomicBool::new(false));
     let total_specs = specs.len();
+    let use_ui = options.ui && std::io::stderr().is_terminal();
+    let ui_active = Arc::new(AtomicBool::new(use_ui));
+    if options.ui && !use_ui {
+        eprintln!("`--ui` requested, but stderr is not a terminal; falling back to plain output.");
+    }
+    let monitor = if use_ui {
+        CorpusMonitor::Ui(spawn_corpus_ui(
+            Arc::clone(&completed),
+            Arc::clone(&progress_state),
+            Arc::clone(&heartbeat_done),
+            Arc::clone(&ui_active),
+            total_specs,
+        ))
+    } else {
+        CorpusMonitor::Heartbeat(spawn_corpus_heartbeat(
+            Arc::clone(&completed),
+            Arc::clone(&progress_state),
+            Arc::clone(&heartbeat_done),
+            total_specs,
+        ))
+    };
 
     let mut indexed_results = ThreadPoolBuilder::new()
         .num_threads(jobs)
@@ -715,14 +970,19 @@ fn run_apis_guru_corpus_test(config_file: &AppConfig, options: &CorpusTestOption
                         .unwrap_or(spec_path)
                         .to_string_lossy()
                         .replace('\\', "/");
+                    {
+                        let mut progress = progress_state
+                            .lock()
+                            .expect("corpus progress state should not be poisoned");
+                        progress.active_specs.insert(relative_spec.clone());
+                    }
 
-                    let spec_result = run_corpus_spec(
+                    let spec_result = run_corpus_spec_subprocess(
+                        config_file,
                         spec_path,
                         &relative_spec,
+                        &options.config,
                         options,
-                        go_config.as_ref(),
-                        python_config.as_ref(),
-                        typescript_config.as_ref(),
                     );
 
                     let failed = spec_result.failure.is_some()
@@ -730,14 +990,36 @@ fn run_apis_guru_corpus_test(config_file: &AppConfig, options: &CorpusTestOption
                             .targets
                             .iter()
                             .any(|target| target.failure.is_some());
+                    {
+                        let mut progress = progress_state
+                            .lock()
+                            .expect("corpus progress state should not be poisoned");
+                        progress.active_specs.remove(&relative_spec);
+                        if failed {
+                            progress.failed_specs += 1;
+                        } else {
+                            progress.passed_specs += 1;
+                        }
+                        progress.recent_completed.push_front(CompletedCorpusSpec {
+                            spec: relative_spec.clone(),
+                            status: if failed { "failed" } else { "passed" },
+                        });
+                        while progress.recent_completed.len() > CORPUS_UI_RECENT_LIMIT {
+                            progress.recent_completed.pop_back();
+                        }
+                    }
                     let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                     let status = if failed { "failed" } else { "passed" };
-                    eprintln!("[{done}/{total_specs}] {relative_spec} ({status})");
+                    if !ui_active.load(Ordering::Relaxed) {
+                        eprintln!("[{done}/{total_specs}] {relative_spec} ({status})");
+                    }
 
                     (index, spec_result)
                 })
                 .collect::<Vec<_>>()
         });
+    heartbeat_done.store(true, Ordering::Relaxed);
+    monitor.join();
     indexed_results.sort_by_key(|(index, _)| *index);
     let results = indexed_results
         .into_iter()
@@ -792,22 +1074,53 @@ fn run_apis_guru_corpus_test(config_file: &AppConfig, options: &CorpusTestOption
     Ok(())
 }
 
-fn run_corpus_spec(
+fn run_corpus_spec_inline(
+    config_file: &AppConfig,
     spec_path: &Path,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    go_config: Option<&GoPackageConfig>,
-    python_config: Option<&PythonPackageConfig>,
-    typescript_config: Option<&TypeScriptPackageConfig>,
 ) -> CorpusSpecResult {
-    match load_openapi_to_ir_with_options(spec_path, openapi_options(options.ignore_unhandled)) {
+    let go_config = (!options.no_go && !config_file.output.go.disabled).then(|| {
+        resolve_go_config(
+            config_file,
+            None,
+            None,
+            None,
+            false,
+            options.output_version.clone(),
+        )
+    });
+    let python_config = (!options.no_python && !config_file.output.python.disabled).then(|| {
+        resolve_python_config(
+            config_file,
+            None,
+            None,
+            false,
+            options.output_version.clone(),
+        )
+    });
+    let typescript_config =
+        (!options.no_typescript && !config_file.output.typescript.disabled).then(|| {
+            resolve_typescript_config(
+                config_file,
+                None,
+                None,
+                false,
+                options.output_version.clone(),
+            )
+        });
+
+    match load_openapi_to_ir_with_options(
+        spec_path,
+        openapi_options(options.ignore_unhandled, false),
+    ) {
         Ok(OpenApiLoadResult { ir, warnings }) => {
             let mut targets = Vec::new();
 
-            if let Some(go_config) = go_config {
+            if let Some(go_config) = go_config.as_ref() {
                 targets.push(run_go_corpus_target(&ir, relative_spec, options, go_config));
             }
-            if let Some(python_config) = python_config {
+            if let Some(python_config) = python_config.as_ref() {
                 targets.push(run_python_corpus_target(
                     &ir,
                     relative_spec,
@@ -815,7 +1128,7 @@ fn run_corpus_spec(
                     python_config,
                 ));
             }
-            if let Some(typescript_config) = typescript_config {
+            if let Some(typescript_config) = typescript_config.as_ref() {
                 targets.push(run_typescript_corpus_target(
                     &ir,
                     relative_spec,
@@ -838,6 +1151,385 @@ fn run_corpus_spec(
             failure: Some(classify_failure(&format!("{error:#}"), None)),
         },
     }
+}
+
+fn run_corpus_spec_subprocess(
+    config_file: &AppConfig,
+    spec_path: &Path,
+    relative_spec: &str,
+    config_path: &Path,
+    options: &CorpusTestOptions,
+) -> CorpusSpecResult {
+    let current_exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            return CorpusSpecResult {
+                spec: relative_spec.to_owned(),
+                warning_count: 0,
+                targets: Vec::new(),
+                failure: Some(classify_failure(
+                    &format!(
+                        "failed to locate current executable for corpus worker `{relative_spec}`: {error:#}"
+                    ),
+                    None,
+                )),
+            };
+        }
+    };
+
+    let mut command = ProcessCommand::new(current_exe);
+    command
+        .arg("corpus-spec-worker")
+        .arg("--spec-path")
+        .arg(spec_path)
+        .arg("--relative-spec")
+        .arg(relative_spec)
+        .arg("--config")
+        .arg(config_path);
+
+    if let Some(output_directory) = &options.output_directory {
+        command.arg("--output-directory").arg(output_directory);
+    }
+    if options.ignore_unhandled {
+        command.arg("--ignore-unhandled");
+    }
+    if config_file.output.go.disabled || options.no_go {
+        command.arg("--no-go");
+    }
+    if config_file.output.python.disabled || options.no_python {
+        command.arg("--no-python");
+    }
+    if config_file.output.typescript.disabled || options.no_typescript {
+        command.arg("--no-typescript");
+    }
+    if let Some(output_version) = &options.output_version {
+        command.arg("--output-version").arg(output_version);
+    }
+
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(error) => {
+            return CorpusSpecResult {
+                spec: relative_spec.to_owned(),
+                warning_count: 0,
+                targets: Vec::new(),
+                failure: Some(classify_failure(
+                    &format!(
+                        "failed to spawn corpus worker for `{relative_spec}`: {error:#}"
+                    ),
+                    None,
+                )),
+            };
+        }
+    };
+
+    if output.status.success() {
+        return match serde_json::from_slice::<CorpusSpecResult>(&output.stdout) {
+            Ok(result) => result,
+            Err(error) => CorpusSpecResult {
+                spec: relative_spec.to_owned(),
+                warning_count: 0,
+                targets: Vec::new(),
+                failure: Some(classify_failure(
+                    &format!(
+                        "failed to parse corpus worker output for `{relative_spec}`: {error:#}\nstdout:\n{}\nstderr:\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ),
+                    None,
+                )),
+            },
+        };
+    }
+
+    let signal = exit_status_signal(&output.status);
+    let message = match signal {
+        Some(signal) => format!(
+            "corpus worker crashed for `{relative_spec}` with signal {signal}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ),
+        None => format!(
+            "corpus worker failed for `{relative_spec}` with exit code {:?}\nstderr:\n{}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    };
+
+    CorpusSpecResult {
+        spec: relative_spec.to_owned(),
+        warning_count: 0,
+        targets: Vec::new(),
+        failure: Some(classify_failure(&message, None)),
+    }
+}
+
+enum CorpusMonitor {
+    Heartbeat(thread::JoinHandle<()>),
+    Ui(thread::JoinHandle<()>),
+}
+
+impl CorpusMonitor {
+    fn join(self) {
+        match self {
+            Self::Heartbeat(handle) | Self::Ui(handle) => {
+                let _ = handle.join();
+            }
+        }
+    }
+}
+
+fn spawn_corpus_heartbeat(
+    completed: Arc<AtomicUsize>,
+    progress_state: Arc<Mutex<CorpusProgressState>>,
+    done: Arc<AtomicBool>,
+    total_specs: usize,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let frames = ["|", "/", "-", "\\"];
+        let mut frame_index = 0usize;
+
+        loop {
+            thread::sleep(CORPUS_HEARTBEAT_INTERVAL);
+            if done.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let completed_count = completed.load(Ordering::Relaxed);
+            let snapshot = {
+                let progress = progress_state
+                    .lock()
+                    .expect("corpus progress state should not be poisoned");
+                build_corpus_progress_snapshot(&progress)
+            };
+            let active_count = snapshot.active_specs.len();
+            let sample = snapshot
+                .active_specs
+                .into_iter()
+                .take(3)
+                .collect::<Vec<_>>();
+
+            if active_count == 0 || completed_count >= total_specs {
+                continue;
+            }
+
+            let remaining = total_specs.saturating_sub(completed_count);
+            let suffix = if active_count > sample.len() {
+                format!(" | ... +{}", active_count - sample.len())
+            } else {
+                String::new()
+            };
+            let sample_text = if sample.is_empty() {
+                "working...".to_owned()
+            } else {
+                format!("{}{}", sample.join(" | "), suffix)
+            };
+
+            eprintln!(
+                "[heartbeat {}] active {} worker(s), completed {}/{} (remaining {}): {}",
+                frames[frame_index % frames.len()],
+                active_count,
+                completed_count,
+                total_specs,
+                remaining,
+                sample_text
+            );
+            frame_index += 1;
+        }
+    })
+}
+
+fn spawn_corpus_ui(
+    completed: Arc<AtomicUsize>,
+    progress_state: Arc<Mutex<CorpusProgressState>>,
+    done: Arc<AtomicBool>,
+    ui_active: Arc<AtomicBool>,
+    total_specs: usize,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        if let Err(error) = run_corpus_ui(completed, progress_state, done, ui_active, total_specs)
+        {
+            eprintln!("failed to render corpus UI: {error:#}");
+        }
+    })
+}
+
+fn run_corpus_ui(
+    completed: Arc<AtomicUsize>,
+    progress_state: Arc<Mutex<CorpusProgressState>>,
+    done: Arc<AtomicBool>,
+    ui_active: Arc<AtomicBool>,
+    total_specs: usize,
+) -> Result<()> {
+    enable_raw_mode().context("failed to enable raw mode for corpus UI")?;
+    let mut stdout = std::io::stderr();
+    execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend).context("failed to initialize corpus UI")?;
+    let spinner_frames = ["|", "/", "-", "\\"];
+    let mut spinner_index = 0usize;
+
+    loop {
+        let completed_count = completed.load(Ordering::Relaxed);
+        let snapshot = {
+            let progress = progress_state
+                .lock()
+                .expect("corpus progress state should not be poisoned");
+            build_corpus_progress_snapshot(&progress)
+        };
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(3),
+                        Constraint::Length(7),
+                        Constraint::Min(8),
+                        Constraint::Length(6),
+                    ])
+                    .split(area);
+
+                let progress_ratio = if total_specs == 0 {
+                    0.0
+                } else {
+                    completed_count as f64 / total_specs as f64
+                };
+                let progress_label = format!(
+                    "{} {}/{} ({:.1}%)",
+                    spinner_frames[spinner_index % spinner_frames.len()],
+                    completed_count,
+                    total_specs,
+                    progress_ratio * 100.0
+                );
+                let gauge = Gauge::default()
+                    .block(Block::default().title("Corpus Progress").borders(Borders::ALL))
+                    .gauge_style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .bg(Color::Black)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .label(progress_label)
+                    .ratio(progress_ratio);
+                frame.render_widget(gauge, chunks[0]);
+
+                let active_count = snapshot.active_specs.len();
+                let remaining = total_specs.saturating_sub(completed_count);
+                let stats = Paragraph::new(vec![
+                    Line::from(vec![
+                        Span::styled(
+                            format!("Passed: {}", snapshot.passed_specs),
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("    "),
+                        Span::styled(
+                            format!("Failed: {}", snapshot.failed_specs),
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        ),
+                    ]),
+                    Line::from(format!("Active workers: {active_count}")),
+                    Line::from(format!("Remaining specs: {remaining}")),
+                    Line::from("Press q to hide the UI and continue with plain progress."),
+                ])
+                .block(Block::default().title("Run Stats").borders(Borders::ALL));
+                frame.render_widget(stats, chunks[1]);
+
+                let middle = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                    .split(chunks[2]);
+
+                let active_items = if snapshot.active_specs.is_empty() {
+                    vec![ListItem::new("No active specs right now")]
+                } else {
+                    snapshot
+                        .active_specs
+                        .iter()
+                        .take(CORPUS_UI_ACTIVE_SAMPLE_LIMIT)
+                        .map(|spec| ListItem::new(spec.clone()))
+                        .collect::<Vec<_>>()
+                };
+                let active_list = List::new(active_items)
+                    .block(Block::default().title("Active Specs").borders(Borders::ALL));
+                frame.render_widget(active_list, middle[0]);
+
+                let recent_items = if snapshot.recent_completed.is_empty() {
+                    vec![ListItem::new("No completed specs yet")]
+                } else {
+                    snapshot
+                        .recent_completed
+                        .iter()
+                        .map(|entry| {
+                            let style = if entry.status == "passed" {
+                                Style::default().fg(Color::Green)
+                            } else {
+                                Style::default().fg(Color::Red)
+                            };
+                            ListItem::new(Line::from(vec![
+                                Span::styled(format!("[{}] ", entry.status), style),
+                                Span::raw(entry.spec.clone()),
+                            ]))
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let recent_list = List::new(recent_items).block(
+                    Block::default()
+                        .title("Recent Completions")
+                        .borders(Borders::ALL),
+                );
+                frame.render_widget(recent_list, middle[1]);
+
+                let footer = Paragraph::new(vec![
+                    Line::from("The corpus run continues even if one spec crashes."),
+                    Line::from("Close the UI with q if you want the plain line-based progress instead."),
+                ])
+                .block(Block::default().title("Notes").borders(Borders::ALL));
+                frame.render_widget(footer, chunks[3]);
+            })
+            .context("failed to draw corpus UI")?;
+
+        spinner_index += 1;
+
+        if done.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if event::poll(CORPUS_UI_TICK_INTERVAL).context("failed while polling corpus UI")? {
+            if let Event::Key(key) = event::read().context("failed while reading corpus UI input")?
+            {
+                if key.code == KeyCode::Char('q') {
+                    ui_active.store(false, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
+    }
+
+    disable_raw_mode().context("failed to disable raw mode for corpus UI")?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)
+        .context("failed to leave alternate screen")?;
+    terminal.show_cursor().context("failed to restore cursor")?;
+    Ok(())
+}
+
+fn build_corpus_progress_snapshot(progress: &CorpusProgressState) -> CorpusProgressSnapshot {
+    CorpusProgressSnapshot {
+        active_specs: progress.active_specs.iter().cloned().collect(),
+        recent_completed: progress.recent_completed.iter().cloned().collect(),
+        passed_specs: progress.passed_specs,
+        failed_specs: progress.failed_specs,
+    }
+}
+
+#[cfg(unix)]
+fn exit_status_signal(status: &ExitStatus) -> Option<i32> {
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_status_signal(_status: &ExitStatus) -> Option<i32> {
+    None
 }
 
 fn run_go_corpus_target(
@@ -1609,6 +2301,19 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
         return CorpusFailure {
             kind: "ir_validation_error".into(),
             feature: "invalid_ir".into(),
+            pointer,
+            target: target.map(str::to_owned),
+            message: message.to_owned(),
+        };
+    }
+
+    if message.contains("corpus worker crashed")
+        || message.contains("stack overflow")
+        || message.contains("terminated by SIGABRT")
+    {
+        return CorpusFailure {
+            kind: "process_crash".into(),
+            feature: "stack_overflow".into(),
             pointer,
             target: target.map(str::to_owned),
             message: message.to_owned(),

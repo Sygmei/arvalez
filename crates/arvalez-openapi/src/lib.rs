@@ -1,7 +1,10 @@
+use std::borrow::Cow;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
+    sync::OnceLock,
+    time::Instant,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -16,6 +19,7 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoadOpenApiOptions {
     pub ignore_unhandled: bool,
+    pub emit_timings: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -33,21 +37,49 @@ pub fn load_openapi_to_ir_with_options(
     options: LoadOpenApiOptions,
 ) -> Result<OpenApiLoadResult> {
     let path = path.as_ref();
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read OpenAPI document `{}`", path.display()))?;
+    let raw = measure_openapi_phase(options.emit_timings, "openapi_read", || {
+        fs::read_to_string(path)
+            .with_context(|| format!("failed to read OpenAPI document `{}`", path.display()))
+    })?;
 
-    let loaded = match path.extension().and_then(|ext| ext.to_str()) {
-        Some("yaml") | Some("yml") => parse_yaml_openapi_document(path, &raw)?,
-        _ => parse_json_openapi_document(path, &raw)?,
-    };
+    let loaded = measure_openapi_phase(options.emit_timings, "openapi_parse", || match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+    {
+        Some("yaml") | Some("yml") => parse_yaml_openapi_document(path, &raw),
+        _ => parse_json_openapi_document(path, &raw),
+    })?;
 
     OpenApiImporter::new(loaded.document, loaded.source, options).build_ir()
 }
 
+fn measure_openapi_phase<T, F>(enabled: bool, label: &str, task: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    if enabled {
+        eprintln!("timing: starting {label}");
+    }
+    let started = Instant::now();
+    let value = task();
+    if enabled {
+        eprintln!("timing: {:<20} {}", label, format_duration(started.elapsed()));
+    }
+    value
+}
+
+fn format_duration(duration: std::time::Duration) -> String {
+    let micros = duration.as_micros();
+    if micros < 1_000 {
+        format!("{micros}us")
+    } else if micros < 1_000_000 {
+        format!("{}ms", duration.as_millis())
+    } else {
+        format!("{:.2}s", duration.as_secs_f64())
+    }
+}
+
 fn parse_json_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDocument> {
-    let source_value: Value = serde_json::from_str(raw).with_context(|| {
-        format!("failed to parse JSON OpenAPI document `{}`", path.display())
-    })?;
     let mut deserializer = serde_json::Deserializer::from_str(raw);
     let document = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
         let schema_path = error.path().to_string();
@@ -72,25 +104,16 @@ fn parse_json_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDo
 
     Ok(LoadedOpenApiDocument {
         document,
-        source: OpenApiSource {
-            format: SourceFormat::Json,
-            value: source_value,
-        },
+        source: OpenApiSource::new(SourceFormat::Json, raw.to_owned()),
     })
 }
 
 fn parse_yaml_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDocument> {
-    let yaml_value: serde_yaml::Value = serde_yaml::from_str(raw)
-        .with_context(|| format!("failed to parse YAML OpenAPI document `{}`", path.display()))?;
-    let source_value: Value = serde_json::to_value(yaml_value).with_context(|| {
-        format!(
-            "failed to convert YAML OpenAPI document `{}` into preview data",
-            path.display()
-        )
-    })?;
-
-    let document = serde_yaml::from_str(raw).map_err(|error| {
-        let (line, column) = error
+    let deserializer = serde_yaml::Deserializer::from_str(raw);
+    let document = serde_path_to_error::deserialize(deserializer).map_err(|error| {
+        let schema_path = error.path().to_string();
+        let inner = error.into_inner();
+        let (line, column) = inner
             .location()
             .map(|location| (location.line(), location.column()))
             .unwrap_or((0, 0));
@@ -98,19 +121,20 @@ fn parse_yaml_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDo
             "YAML",
             path,
             raw,
-            None,
+            if schema_path.is_empty() {
+                None
+            } else {
+                Some(schema_path.as_str())
+            },
             line,
             column,
-            &error.to_string(),
+            &inner.to_string(),
         ))
     })?;
 
     Ok(LoadedOpenApiDocument {
         document,
-        source: OpenApiSource {
-            format: SourceFormat::Yaml,
-            value: source_value,
-        },
+        source: OpenApiSource::new(SourceFormat::Yaml, raw.to_owned()),
     })
 }
 
@@ -161,6 +185,7 @@ struct OpenApiImporter {
     generated_model_names: BTreeSet<String>,
     normalized_all_of_refs: BTreeMap<String, Schema>,
     active_all_of_refs: Vec<String>,
+    active_object_view_refs: Vec<String>,
     warnings: Vec<String>,
     options: LoadOpenApiOptions,
 }
@@ -174,19 +199,25 @@ impl OpenApiImporter {
             generated_model_names: BTreeSet::new(),
             normalized_all_of_refs: BTreeMap::new(),
             active_all_of_refs: Vec::new(),
+            active_object_view_refs: Vec::new(),
             warnings: Vec::new(),
             options,
         }
     }
 
     fn build_ir(mut self) -> Result<OpenApiLoadResult> {
-        self.import_component_models()?;
+        measure_openapi_phase(self.options.emit_timings, "openapi_component_models", || {
+            self.import_component_models()
+        })?;
 
         let mut operations = Vec::new();
-        let paths = self.document.paths.clone();
-        for (path, item) in &paths {
-            operations.extend(self.import_path_item(path, item)?);
-        }
+        measure_openapi_phase(self.options.emit_timings, "openapi_operations", || {
+            let paths = self.document.paths.clone();
+            for (path, item) in &paths {
+                operations.extend(self.import_path_item(path, item)?);
+            }
+            Ok(())
+        })?;
 
         let ir = CoreIr {
             models: self.models.into_values().collect(),
@@ -194,7 +225,9 @@ impl OpenApiImporter {
             ..Default::default()
         };
 
-        validate_ir(&ir).context("generated IR is invalid")?;
+        measure_openapi_phase(self.options.emit_timings, "openapi_validate_ir", || {
+            validate_ir(&ir).context("generated IR is invalid")
+        })?;
         Ok(OpenApiLoadResult {
             ir,
             warnings: self.warnings,
@@ -202,10 +235,29 @@ impl OpenApiImporter {
     }
 
     fn import_component_models(&mut self) -> Result<()> {
-        let schemas = self.document.components.schemas.clone();
-        for (name, schema) in schemas {
+        let schemas: Vec<(String, Schema)> = self.document.components.schemas.clone().into_iter().collect();
+        let total = schemas.len();
+        for (index, (name, schema)) in schemas.into_iter().enumerate() {
+            if self.options.emit_timings {
+                eprintln!(
+                    "timing: starting component_model [{}/{}] {}",
+                    index + 1,
+                    total,
+                    name
+                );
+            }
+            let started = Instant::now();
             let pointer = format!("#/components/schemas/{name}");
             self.ensure_named_schema_model(&name, &schema, &pointer)?;
+            if self.options.emit_timings {
+                eprintln!(
+                    "timing: component_model [{}/{}] {:<40} {}",
+                    index + 1,
+                    total,
+                    name,
+                    format_duration(started.elapsed())
+                );
+            }
         }
         Ok(())
     }
@@ -436,8 +488,13 @@ impl OpenApiImporter {
         schema: &Schema,
         pointer: &str,
     ) -> Result<Model> {
+        if schema.all_of.is_some() && schema_is_object_like(schema) {
+            return self.build_object_model_from_all_of(name, schema, pointer);
+        }
+
         let schema = self.normalize_schema(schema, pointer)?;
-        self.validate_schema_keywords(&schema, pointer)?;
+        let schema = schema.as_ref();
+        self.validate_schema_keywords(schema, pointer)?;
 
         if let Some(enum_values) = &schema.enum_values {
             let mut model = Model::new(format!("model.{}", to_snake_case(name)), name.to_owned());
@@ -461,9 +518,9 @@ impl OpenApiImporter {
             return Ok(model);
         }
 
-        if !schema_is_object_like(&schema) {
-            let imported = self.import_schema_type_inner(
-                &schema,
+        if !schema_is_object_like(schema) {
+            let imported = self.import_schema_type_normalized(
+                schema,
                 &InlineModelContext::NamedSchema {
                     name: name.to_owned(),
                     pointer: pointer.to_owned(),
@@ -540,6 +597,49 @@ impl OpenApiImporter {
         Ok(model)
     }
 
+    fn build_object_model_from_all_of(
+        &mut self,
+        name: &str,
+        schema: &Schema,
+        pointer: &str,
+    ) -> Result<Model> {
+        let view = self.collect_object_schema_view(schema, pointer)?;
+        let required = view.required;
+
+        let mut model = Model::new(format!("model.{}", to_snake_case(name)), name.to_owned());
+        model.source = Some(SourceRef {
+            pointer: pointer.to_owned(),
+            line: None,
+        });
+        if let Some(title) = view.title {
+            model
+                .attributes
+                .insert("title".into(), Value::String(title));
+        }
+
+        for (field_name, property_schema) in view.properties {
+            let imported = self.import_schema_type(
+                &property_schema,
+                &InlineModelContext::Field {
+                    model_name: name.to_owned(),
+                    field_name: field_name.clone(),
+                    pointer: format!("{}/properties/{}", pointer, json_pointer_key(&field_name)),
+                },
+            )?;
+            let mut field = Field::new(
+                field_name.clone(),
+                imported
+                    .type_ref
+                    .unwrap_or_else(|| TypeRef::primitive("any")),
+            );
+            field.optional = !required.contains(field_name.as_str());
+            field.nullable = imported.nullable;
+            model.fields.push(field);
+        }
+
+        Ok(model)
+    }
+
     fn import_schema_type(
         &mut self,
         schema: &Schema,
@@ -554,10 +654,63 @@ impl OpenApiImporter {
         context: &InlineModelContext,
         skip_keyword_validation: bool,
     ) -> Result<ImportedType> {
+        if let Some(imported) = self.import_decorated_reference_type(schema, context)? {
+            return Ok(imported);
+        }
         let schema = self.normalize_schema(schema, &context.describe())?;
+        self.import_schema_type_normalized(schema.as_ref(), context, skip_keyword_validation)
+    }
 
+    fn import_decorated_reference_type(
+        &mut self,
+        schema: &Schema,
+        context: &InlineModelContext,
+    ) -> Result<Option<ImportedType>> {
+        if matches!(context, InlineModelContext::NamedSchema { .. }) {
+            return Ok(None);
+        }
+
+        let all_of = match &schema.all_of {
+            Some(all_of) => all_of,
+            None => return Ok(None),
+        };
+
+        if schema_has_non_all_of_shape(schema) {
+            return Ok(None);
+        }
+
+        let mut reference: Option<&str> = None;
+        for member in all_of {
+            if let Some(member_ref) = member.reference.as_deref() {
+                if reference.replace(member_ref).is_some() {
+                    return Ok(None);
+                }
+                continue;
+            }
+
+            if !is_unconstrained_schema(member) {
+                return Ok(None);
+            }
+        }
+
+        let Some(reference) = reference else {
+            return Ok(None);
+        };
+
+        Ok(Some(ImportedType {
+            type_ref: Some(TypeRef::named(ref_name(reference)?)),
+            nullable: false,
+        }))
+    }
+
+    fn import_schema_type_normalized(
+        &mut self,
+        schema: &Schema,
+        context: &InlineModelContext,
+        skip_keyword_validation: bool,
+    ) -> Result<ImportedType> {
         if !skip_keyword_validation {
-            self.validate_schema_keywords(&schema, &context.describe())?;
+            self.validate_schema_keywords(schema, &context.describe())?;
         }
 
         if let Some(reference) = &schema.reference {
@@ -696,12 +849,13 @@ impl OpenApiImporter {
         Ok(())
     }
 
-    fn normalize_schema(&mut self, schema: &Schema, context: &str) -> Result<Schema> {
-        if schema.all_of.is_some() {
-            self.expand_all_of_schema(schema, context)
-        } else {
-            Ok(schema.clone())
+    fn normalize_schema<'a>(&mut self, schema: &'a Schema, context: &str) -> Result<Cow<'a, Schema>> {
+        if schema.all_of.is_none() {
+            return Ok(Cow::Borrowed(schema));
         }
+
+        let normalized = self.expand_all_of_schema(schema, context)?;
+        Ok(Cow::Owned(normalized))
     }
 
     fn expand_all_of_schema(&mut self, schema: &Schema, context: &str) -> Result<Schema> {
@@ -890,6 +1044,68 @@ impl OpenApiImporter {
         }
 
         Ok(base)
+    }
+
+    fn collect_object_schema_view(
+        &mut self,
+        schema: &Schema,
+        context: &str,
+    ) -> Result<ObjectSchemaView> {
+        let mut view = ObjectSchemaView::default();
+        self.collect_object_schema_view_into(schema, context, &mut view)?;
+        Ok(view)
+    }
+
+    fn collect_object_schema_view_into(
+        &mut self,
+        schema: &Schema,
+        context: &str,
+        view: &mut ObjectSchemaView,
+    ) -> Result<()> {
+        self.validate_schema_keywords(schema, context)?;
+
+        if let Some(reference) = &schema.reference {
+            if self.active_object_view_refs.iter().any(|item| item == reference) {
+                self.handle_unhandled(
+                    context,
+                    format!("`allOf` contains a recursive reference cycle involving `{reference}`"),
+                )?;
+                return Ok(());
+            }
+
+            self.active_object_view_refs.push(reference.clone());
+            let resolved = self.resolve_schema_reference(reference)?;
+            self.collect_object_schema_view_into(&resolved, reference, view)?;
+            self.active_object_view_refs.pop();
+        }
+
+        if let Some(members) = &schema.all_of {
+            for member in members {
+                self.collect_object_schema_view_into(member, context, view)?;
+            }
+        }
+
+        merge_optional_field(&mut view.title, schema.title.clone(), "title", context, self)?;
+
+        if let Some(required) = &schema.required {
+            view.required.extend(required.iter().cloned());
+        }
+
+        if let Some(properties) = &schema.properties {
+            for (field_name, property_schema) in properties {
+                if let Some(existing) = view.properties.shift_remove(field_name) {
+                    view.properties.insert(
+                        field_name.clone(),
+                        self.merge_schemas(existing, property_schema.clone(), context)?,
+                    );
+                } else {
+                    view.properties
+                        .insert(field_name.clone(), property_schema.clone());
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn import_const_type(
@@ -1105,7 +1321,8 @@ struct LoadedOpenApiDocument {
 #[derive(Debug)]
 struct OpenApiSource {
     format: SourceFormat,
-    value: Value,
+    raw: String,
+    value: OnceLock<Option<Value>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1115,13 +1332,35 @@ enum SourceFormat {
 }
 
 impl OpenApiSource {
+    fn new(format: SourceFormat, raw: String) -> Self {
+        Self {
+            format,
+            raw,
+            value: OnceLock::new(),
+        }
+    }
+
     fn render_pointer_preview(&self, pointer: &str) -> Option<String> {
-        let node = self.value.pointer(pointer.strip_prefix('#').unwrap_or(pointer))?;
+        let node = self
+            .value
+            .get_or_init(|| self.parse_value())
+            .as_ref()?
+            .pointer(pointer.strip_prefix('#').unwrap_or(pointer))?;
         let rendered = match self.format {
             SourceFormat::Json => serde_json::to_string_pretty(node).ok()?,
             SourceFormat::Yaml => serde_yaml::to_string(node).ok()?,
         };
         Some(truncate_preview(&rendered, 10))
+    }
+
+    fn parse_value(&self) -> Option<Value> {
+        match self.format {
+            SourceFormat::Json => serde_json::from_str(&self.raw).ok(),
+            SourceFormat::Yaml => {
+                let yaml_value: serde_yaml::Value = serde_yaml::from_str(&self.raw).ok()?;
+                serde_json::to_value(yaml_value).ok()
+            }
+        }
     }
 }
 
@@ -1153,6 +1392,13 @@ impl ImportedType {
             nullable: false,
         }
     }
+}
+
+#[derive(Default)]
+struct ObjectSchemaView {
+    title: Option<String>,
+    properties: IndexMap<String, Schema>,
+    required: BTreeSet<String>,
 }
 
 #[derive(Debug)]
@@ -1442,6 +1688,21 @@ fn is_unconstrained_schema(schema: &Schema) -> bool {
             .all(|keyword| is_known_ignored_schema_keyword(keyword) || keyword.starts_with("x-"))
 }
 
+fn schema_has_non_all_of_shape(schema: &Schema) -> bool {
+    schema.reference.is_some()
+        || schema.schema_type.is_some()
+        || schema.format.is_some()
+        || schema.const_value.is_some()
+        || schema.enum_values.is_some()
+        || schema.properties.is_some()
+        || schema.required.is_some()
+        || schema.items.is_some()
+        || schema.additional_properties.is_some()
+        || schema.any_of.is_some()
+        || schema.one_of.is_some()
+        || schema._discriminator.is_some()
+}
+
 fn is_known_ignored_schema_keyword(keyword: &str) -> bool {
     matches!(
         keyword,
@@ -1628,6 +1889,7 @@ fn merge_properties(
     }
     Ok(left)
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -2074,6 +2336,17 @@ mod tests {
           { "$ref": "#/components/schemas/BaseId" },
           { "description": "Identifier wrapper" }
         ]
+      },
+      "Wrapper": {
+        "type": "object",
+        "properties": {
+          "cursorRef": {
+            "allOf": [
+              { "$ref": "#/components/schemas/Cursor" },
+              { "description": "Keep the named component reference" }
+            ]
+          }
+        }
       }
     }
   }
@@ -2127,6 +2400,20 @@ mod tests {
         assert_eq!(
             wrapped_id.attributes.get("alias_type_ref"),
             Some(&json!(TypeRef::primitive("string")))
+        );
+        let wrapper = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "Wrapper")
+            .expect("Wrapper model");
+        assert_eq!(
+            wrapper
+                .fields
+                .iter()
+                .find(|field| field.name == "cursorRef")
+                .map(|field| &field.type_ref),
+            Some(&TypeRef::named("Cursor"))
         );
         assert!(result.warnings.is_empty());
     }
@@ -2199,6 +2486,7 @@ mod tests {
             json_test_source(spec),
             LoadOpenApiOptions {
                 ignore_unhandled: true,
+                ..Default::default()
             },
         )
         .build_ir()

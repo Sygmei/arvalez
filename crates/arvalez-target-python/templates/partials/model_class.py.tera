@@ -2,7 +2,7 @@
 class {{ model.class_name }}({{ model.enum_base_classes }}):
 {{ model.enum_members_block }}
 {% elif model.is_alias -%}
-{{ model.class_name }} = {{ model.alias_expression }}
+{{ model.class_name }}: TypeAlias = "{{ model.alias_expression }}"
 {% else -%}
 class {{ model.class_name }}(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")

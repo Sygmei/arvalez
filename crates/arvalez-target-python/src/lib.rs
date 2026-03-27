@@ -1097,10 +1097,19 @@ fn render_python_path_template(path: &str) -> String {
 fn sanitize_class_name(name: &str) -> String {
     let mut out = String::new();
     for part in split_words(name) {
-        let mut chars = part.chars();
-        if let Some(first) = chars.next() {
-            out.extend(first.to_uppercase());
-            out.push_str(chars.as_str());
+        if part.len() > 1
+            && part
+                .chars()
+                .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+            && part.chars().any(|ch| ch.is_ascii_uppercase())
+        {
+            out.push_str(&part);
+        } else {
+            let mut chars = part.chars();
+            if let Some(first) = chars.next() {
+                out.extend(first.to_uppercase());
+                out.push_str(&chars.as_str().to_ascii_lowercase());
+            }
         }
     }
     if out.is_empty() {
@@ -1117,7 +1126,11 @@ fn sanitize_identifier(name: &str) -> String {
     let mut candidate = if words.is_empty() {
         "value".into()
     } else {
-        words.join("_")
+        words
+            .into_iter()
+            .map(|word| word.to_ascii_lowercase())
+            .collect::<Vec<_>>()
+            .join("_")
     };
     if candidate
         .chars()
@@ -1133,15 +1146,31 @@ fn sanitize_identifier(name: &str) -> String {
 }
 
 fn split_words(input: &str) -> Vec<String> {
+    let chars = input.chars().collect::<Vec<_>>();
     let mut words = Vec::new();
     let mut current = String::new();
-    for ch in input.chars() {
+    for (index, ch) in chars.iter().copied().enumerate() {
         if ch.is_ascii_alphanumeric() {
-            if ch.is_uppercase() && !current.is_empty() {
+            let previous = index.checked_sub(1).and_then(|value| chars.get(value)).copied();
+            let next = chars.get(index + 1).copied();
+            let next_next = chars.get(index + 2).copied();
+            let should_split = !current.is_empty()
+                && previous.is_some_and(|prev| {
+                    (prev.is_ascii_lowercase() && ch.is_ascii_uppercase())
+                        || (prev.is_ascii_digit() && ch.is_ascii_alphabetic())
+                        || (prev.is_ascii_uppercase()
+                            && ch.is_ascii_uppercase()
+                            && (current.len() > 1
+                                || (current.len() == 1
+                                    && next_next
+                                        .is_some_and(|candidate| candidate.is_ascii_lowercase())))
+                            && next.is_some_and(|candidate| candidate.is_ascii_lowercase()))
+                });
+            if should_split {
                 words.push(current.clone());
                 current.clear();
             }
-            current.push(ch.to_ascii_lowercase());
+            current.push(ch);
         } else if !current.is_empty() {
             words.push(current.clone());
             current.clear();
@@ -1315,7 +1344,8 @@ mod tests {
         assert!(init.contents.contains("RequestOptions"));
         assert!(init.contents.contains("SyncApiClient"));
         assert!(models.contents.contains("from enum import Enum"));
-        assert!(models.contents.contains("WidgetPath = str"));
+        assert!(models.contents.contains("from typing import Any, TypeAlias"));
+        assert!(models.contents.contains("WidgetPath: TypeAlias = \"str\""));
         assert!(models.contents.contains("class WidgetStatus(str, Enum):"));
         assert!(
             models.contents.contains("READY = \"READY\"")
@@ -1448,5 +1478,19 @@ mod tests {
         assert!(client.contents.contains("def get_widget"));
         assert!(client.contents.contains("async def healthcheck"));
         assert!(client.contents.contains("def healthcheck"));
+    }
+
+    #[test]
+    fn preserves_common_acronyms_in_python_names() {
+        assert_eq!(sanitize_identifier("CreateAPIKey"), "create_api_key");
+        assert_eq!(sanitize_identifier("AssociateWebACL"), "associate_web_acl");
+        assert_eq!(sanitize_identifier("HTTPHeader"), "http_header");
+        assert_eq!(sanitize_identifier("XAmzContentSHA256"), "x_amz_content_sha256");
+        assert_eq!(sanitize_identifier("UTF8String"), "utf8_string");
+        assert_eq!(sanitize_identifier("IPv4Address"), "ipv4_address");
+        assert_eq!(sanitize_class_name("APIKeySummary"), "APIKeySummary");
+        assert_eq!(sanitize_class_name("WebACL"), "WebACL");
+        assert_eq!(sanitize_class_name("HTTPHeader"), "HTTPHeader");
+        assert_eq!(sanitize_class_name("SHA256Checksum"), "SHA256Checksum");
     }
 }

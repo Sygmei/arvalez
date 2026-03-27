@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use arvalez_ir::{CoreIr, HttpMethod, Operation, ParameterLocation, TypeRef};
 use serde::Serialize;
+use serde_json::{Value, from_value};
 use tera::{Context as TeraContext, Tera};
 
 const TEMPLATE_PACKAGE_JSON: &str = "package/package.json.tera";
@@ -274,13 +275,41 @@ impl PackageTemplateContext {
 
 #[derive(Debug, Serialize)]
 struct ModelView {
-    interface_name: String,
+    type_name: String,
     has_fields: bool,
+    is_enum: bool,
+    is_alias: bool,
+    enum_expression: String,
+    alias_expression: String,
     fields_block: String,
 }
 
 impl ModelView {
     fn from_model(model: &arvalez_ir::Model) -> Self {
+        let enum_expression = model
+            .attributes
+            .get("enum_values")
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .map(render_typescript_enum_variant)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .unwrap_or_default();
+        let is_enum = !enum_expression.is_empty();
+        let alias_type_ref = model
+            .attributes
+            .get("alias_type_ref")
+            .cloned()
+            .and_then(|value| from_value::<TypeRef>(value).ok());
+        let alias_nullable = model
+            .attributes
+            .get("alias_nullable")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let is_alias = alias_type_ref.is_some();
         let field_lines = model
             .fields
             .iter()
@@ -297,8 +326,14 @@ impl ModelView {
             .collect::<Vec<_>>();
 
         Self {
-            interface_name: sanitize_type_name(&model.name),
+            type_name: sanitize_type_name(&model.name),
             has_fields: !field_lines.is_empty(),
+            is_enum,
+            is_alias,
+            enum_expression,
+            alias_expression: alias_type_ref
+                .map(|type_ref| typescript_field_type(&type_ref, alias_nullable))
+                .unwrap_or_default(),
             fields_block: indent_block(&field_lines, 2),
         }
     }
@@ -697,6 +732,16 @@ fn typescript_type_ref(type_ref: &TypeRef) -> String {
     }
 }
 
+fn render_typescript_enum_variant(value: &Value) -> String {
+    match value {
+        Value::String(value) => format!("{value:?}"),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::Null => "null".into(),
+        _ => "unknown".into(),
+    }
+}
+
 fn http_method_string(method: HttpMethod) -> &'static str {
     match method {
         HttpMethod::Get => "GET",
@@ -976,7 +1021,7 @@ mod tests {
         assert!(client.contents.contains("export interface RequestOptions"));
         assert!(
             client.contents.contains(
-                "export type ErrorHandler = (response: Response) => void | Promise<void>;"
+                "export type ErrorHandler = (response: globalThis.Response) => void | Promise<void>;"
             )
         );
         assert!(client.contents.contains("async _getWidgetRaw("));
@@ -1009,6 +1054,45 @@ mod tests {
                 .contents
                 .contains("export type { ApiClientOptions, ErrorHandler, RequestOptions }")
         );
+    }
+
+    #[test]
+    fn renders_aliases_and_enums_as_typescript_types() {
+        let ir = CoreIr {
+            models: vec![
+                arvalez_ir::Model {
+                    id: "model.widget_path".into(),
+                    name: "WidgetPath".into(),
+                    fields: vec![],
+                    attributes: Attributes::from([(
+                        "alias_type_ref".into(),
+                        json!(TypeRef::primitive("string")),
+                    )]),
+                    source: None,
+                },
+                arvalez_ir::Model {
+                    id: "model.widget_status".into(),
+                    name: "WidgetStatus".into(),
+                    fields: vec![],
+                    attributes: Attributes::from([(
+                        "enum_values".into(),
+                        json!(["READY", "PAUSED"]),
+                    )]),
+                    source: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let files = generate_package(&ir, &TypeScriptPackageConfig::new("@demo/client"))
+            .expect("package should render");
+        let models = files
+            .iter()
+            .find(|file| file.path.ends_with("models.ts"))
+            .expect("models.ts");
+
+        assert!(models.contents.contains("export type WidgetPath = string;"));
+        assert!(models.contents.contains("export type WidgetStatus = \"READY\" | \"PAUSED\";"));
     }
 
     #[test]

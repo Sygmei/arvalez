@@ -30,6 +30,12 @@ Build Core IR from the local OpenAPI document:
 cargo run -p arvalez-cli -- build-ir --openapi openapi.json
 ```
 
+Add `--timings` to print a per-phase breakdown for import and generation work:
+
+```bash
+cargo run -p arvalez-cli -- generate --openapi openapi.json --output-directory generated --timings
+```
+
 Generate a Python SDK package:
 
 ```bash
@@ -94,6 +100,7 @@ By default this command clones `APIs-guru/openapi-directory`, discovers every `o
 The checkout is cached under `.arvalez/corpus/openapi-directory/` in the current workspace and refreshed on later runs, so you do not pay the full clone cost every time.
 Reports are written into the chosen directory as timestamped files like `apis-guru-1774593522.json`, and the command also updates `index.html` there so you can open a static dashboard and track support progress over time.
 Use `--jobs N` to control spec-level parallelism; by default Arvalez uses the machine's available parallelism.
+Pass `--ui` on a local terminal to get a live `ratatui` dashboard with progress, active specs, and recent completions. Press `q` to hide the UI and fall back to plain progress lines while the run continues.
 
 Disable a backend from the CLI:
 

@@ -1,7 +1,13 @@
-export interface {{ model.interface_name }} {
+{% if model.is_enum -%}
+export type {{ model.type_name }} = {{ model.enum_expression }};
+{% elif model.is_alias -%}
+export type {{ model.type_name }} = {{ model.alias_expression }};
+{% else -%}
+export interface {{ model.type_name }} {
 {% if not model.has_fields -%}
 }
 {% else -%}
 {{ model.fields_block }}
 }
+{% endif %}
 {% endif %}

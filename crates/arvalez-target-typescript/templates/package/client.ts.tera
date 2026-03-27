@@ -1,25 +1,25 @@
 import type { {{ package.client_imports }} } from "./models";
 
-export type ErrorHandler = (response: Response) => void | Promise<void>;
+export type ErrorHandler = (response: globalThis.Response) => void | Promise<void>;
 
 export interface ApiClientOptions {
   baseUrl: string;
-  fetch?: typeof fetch;
-  headers?: HeadersInit;
+  fetch?: typeof globalThis.fetch;
+  headers?: globalThis.HeadersInit;
   onError?: ErrorHandler;
 }
 
-export interface RequestOptions extends Omit<RequestInit, "method" | "body" | "headers"> {
-  headers?: HeadersInit;
-  query?: URLSearchParams | Record<string, string | number | boolean | undefined | null>;
+export interface RequestOptions extends Omit<globalThis.RequestInit, "method" | "body" | "headers"> {
+  headers?: globalThis.HeadersInit;
+  query?: globalThis.URLSearchParams | Record<string, string | number | boolean | undefined | null>;
   cookies?: Record<string, string>;
   onError?: ErrorHandler;
 }
 
 export class ApiClient {
   private readonly baseUrl: string;
-  private readonly fetchFn: typeof fetch;
-  private readonly defaultHeaders: Headers;
+  private readonly fetchFn: typeof globalThis.fetch;
+  private readonly defaultHeaders: globalThis.Headers;
   private readonly onError: ErrorHandler;
 {% if package.tag_group_blocks | length > 0 %}
 
@@ -28,22 +28,22 @@ export class ApiClient {
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
-    this.fetchFn = options.fetch ?? fetch;
-    this.defaultHeaders = new Headers(options.headers);
-    this.onError = options.onError ?? ((response: Response) => {
+    this.fetchFn = options.fetch ?? globalThis.fetch;
+    this.defaultHeaders = new globalThis.Headers(options.headers);
+    this.onError = options.onError ?? ((response: globalThis.Response) => {
       throw new Error(`Request failed with status ${response.status}: ${response.statusText}`);
     });
   }
 
-  private createHeaders(): Headers {
-    return new Headers(this.defaultHeaders);
+  private createHeaders(): globalThis.Headers {
+    return new globalThis.Headers(this.defaultHeaders);
   }
 
-  private mergeHeaders(headers: Headers | undefined, requestOptions?: RequestOptions): Headers | undefined {
-    const merged = headers ? new Headers(headers) : new Headers(this.defaultHeaders);
+  private mergeHeaders(headers: globalThis.Headers | undefined, requestOptions?: RequestOptions): globalThis.Headers | undefined {
+    const merged = headers ? new globalThis.Headers(headers) : new globalThis.Headers(this.defaultHeaders);
 
     if (requestOptions?.headers) {
-      const overrideHeaders = new Headers(requestOptions.headers);
+      const overrideHeaders = new globalThis.Headers(requestOptions.headers);
       for (const [key, value] of overrideHeaders.entries()) {
         merged.set(key, value);
       }
@@ -62,12 +62,12 @@ export class ApiClient {
   }
 
   private mergeQuery(
-    baseQuery: URLSearchParams | undefined,
+    baseQuery: globalThis.URLSearchParams | undefined,
     requestOptions?: RequestOptions,
-  ): URLSearchParams | undefined {
-    const merged = baseQuery ? new URLSearchParams(baseQuery) : new URLSearchParams();
+  ): globalThis.URLSearchParams | undefined {
+    const merged = baseQuery ? new globalThis.URLSearchParams(baseQuery) : new globalThis.URLSearchParams();
 
-    if (requestOptions?.query instanceof URLSearchParams) {
+    if (requestOptions?.query instanceof globalThis.URLSearchParams) {
       for (const [key, value] of requestOptions.query.entries()) {
         merged.set(key, value);
       }
@@ -82,7 +82,7 @@ export class ApiClient {
     return Array.from(merged.keys()).length > 0 ? merged : undefined;
   }
 
-  private createRequestInit(requestOptions?: RequestOptions): RequestInit {
+  private createRequestInit(requestOptions?: RequestOptions): globalThis.RequestInit {
     if (!requestOptions) {
       return {};
     }
@@ -91,21 +91,21 @@ export class ApiClient {
     return { ...requestInit };
   }
 
-  private async handleError(response: Response, requestOptions?: RequestOptions): Promise<void> {
+  private async handleError(response: globalThis.Response, requestOptions?: RequestOptions): Promise<void> {
     if (!response.ok) {
       await (requestOptions?.onError ?? this.onError)(response);
     }
   }
 
-  private buildUrl(path: string, query?: URLSearchParams): string {
-    const url = new URL(`${this.baseUrl}${path}`);
+  private buildUrl(path: string, query?: globalThis.URLSearchParams): string {
+    const url = new globalThis.URL(`${this.baseUrl}${path}`);
     if (query) {
       url.search = query.toString();
     }
     return url.toString();
   }
 
-  private async parseResponse<T>(response: Response): Promise<T> {
+  private async parseResponse<T>(response: globalThis.Response): Promise<T> {
     if (response.status === 204) {
       return undefined as T;
     }
