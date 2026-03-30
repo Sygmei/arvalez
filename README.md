@@ -98,7 +98,15 @@ cargo run -p arvalez-cli -- test-apis-guru --report-directory reports/apis-guru
 
 By default this command clones `APIs-guru/openapi-directory`, discovers every `openapi.json`, `openapi.yaml`, `swagger.json`, and `swagger.yaml`, and runs generation for each spec. Generated outputs go to a temporary directory unless you pass `--output-directory`, so the repository stays slim.
 The checkout is cached under `.arvalez/corpus/openapi-directory/` in the current workspace and refreshed on later runs, so you do not pay the full clone cost every time.
-Reports are written into the chosen directory as timestamped files like `apis-guru-1774593522.json`, and the command also updates `index.html` there so you can open a static dashboard and track support progress over time.
+Reports are written into the chosen directory only as timestamped JSON files like `apis-guru-1774593522.json`.
+The report dashboard is now a SvelteKit app in [web/corpus-dashboard](/Users/sygmei/Projects/arvalez/web/corpus-dashboard). It serves the report directory through a small local server, watches for new report JSON files, and updates the UI in real time.
+For local dashboard development, run `npm install` once in `web/corpus-dashboard/`, then:
+
+```bash
+REPORT_DIRECTORY=/absolute/path/to/reports/apis-guru npm run dev
+```
+
+If `REPORT_DIRECTORY` is not set, the app defaults to `../../reports/apis-guru` relative to `web/corpus-dashboard/`.
 Use `--jobs N` to control spec-level parallelism; by default Arvalez uses the machine's available parallelism.
 Pass `--ui` on a local terminal to get a live `ratatui` dashboard with progress, active specs, and recent completions. Press `q` to hide the UI and fall back to plain progress lines while the run continues.
 

@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use arvalez_ir::{CoreIr, HttpMethod, Operation, ParameterLocation, RequestBody, TypeRef};
 use serde::Serialize;
+use serde_json::Value;
 use tera::{Context as TeraContext, Tera};
 
 const TEMPLATE_GO_MOD: &str = "package/go.mod.tera";
@@ -411,6 +412,8 @@ struct OperationMethodView {
     raw_method_name: String,
     args_signature: String,
     return_signature: String,
+    raw_doc_block: String,
+    doc_block: String,
     raw_block: String,
     wrapper_request_call_line: String,
     wrapper_error_block: String,
@@ -443,6 +446,8 @@ impl OperationMethodView {
             raw_method_name: format!("{}Raw", sanitize_exported_identifier(&operation.name)),
             args_signature: build_method_args(operation).join(", "),
             return_signature: return_shape.signature.clone(),
+            raw_doc_block: render_go_doc_block(operation, true),
+            doc_block: render_go_doc_block(operation, false),
             raw_block: build_raw_block(operation),
             wrapper_request_call_line: format!(
                 "response, err := {receiver_name}.{}({wrapper_forward_arguments})",
@@ -452,6 +457,54 @@ impl OperationMethodView {
             wrapper_post_request_block: indent_block(&return_shape.post_response_lines, 4),
         }
     }
+}
+
+fn render_go_doc_block(operation: &Operation, raw: bool) -> String {
+    let method_name = sanitize_exported_identifier(&operation.name);
+    let prefix = if raw {
+        format!("{method_name}Raw")
+    } else {
+        method_name
+    };
+
+    let mut lines = Vec::new();
+    if let Some(summary) = operation.attributes.get("summary").and_then(Value::as_str) {
+        let summary = summary.trim();
+        if !summary.is_empty() {
+            lines.push(format!("{prefix} {}", sanitize_go_comment_text(summary)));
+        }
+    }
+    if raw {
+        lines.push(format!(
+            "{prefix} returns the raw HTTP response without decoding it or converting HTTP errors."
+        ));
+    }
+    for param in &operation.params {
+        if let Some(description) = param.attributes.get("description").and_then(Value::as_str) {
+            let description = description.trim();
+            if !description.is_empty() {
+                lines.push(format!(
+                    "{} parameter {}: {}",
+                    prefix,
+                    sanitize_identifier(&param.name),
+                    sanitize_go_comment_text(description)
+                ));
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        String::new()
+    } else {
+        lines.into_iter()
+            .map(|line| format!("// {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn sanitize_go_comment_text(value: &str) -> String {
+    value.replace('\n', " ").replace('\r', " ")
 }
 
 #[derive(Debug, Clone)]
@@ -466,6 +519,7 @@ fn go_return_shape(operation: &Operation) -> GoReturnShape {
         .responses
         .iter()
         .find(|response| response.status.starts_with('2'));
+    let response_content_encoding = success.and_then(|response| content_encoding_attribute(&response.attributes));
 
     match success.and_then(|response| response.type_ref.as_ref()) {
         Some(type_ref) => {
@@ -509,6 +563,19 @@ fn go_return_shape(operation: &Operation) -> GoReturnShape {
                 post_response_lines.push("    return zero, err".into());
             }
             post_response_lines.push("}".into());
+            if let Some(content_encoding) = response_content_encoding {
+                post_response_lines.push(format!(
+                    "if err := client.validateStringEncoding(result, {:?}, \"response body\", requestOptions); err != nil {{",
+                    content_encoding
+                ));
+                if returns_nil_on_error(type_ref) {
+                    post_response_lines.push("    return nil, err".into());
+                } else {
+                    post_response_lines.push(format!("    var zero {result_type}"));
+                    post_response_lines.push("    return zero, err".into());
+                }
+                post_response_lines.push("}".into());
+            }
             if returns_pointer_result(type_ref) {
                 post_response_lines.push("return &result, nil".into());
             } else {
@@ -548,13 +615,48 @@ fn build_raw_block(operation: &Operation) -> String {
     for param in operation
         .params
         .iter()
+        .filter(|param| matches!(param.location, ParameterLocation::Path))
+    {
+        let name = sanitize_identifier(&param.name);
+        if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+            lines.push(format!(
+                "if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
+                content_encoding,
+                format!("path parameter `{}`", param.name)
+            ));
+            lines.push("    return nil, err".into());
+            lines.push("}".into());
+        }
+    }
+
+    for param in operation
+        .params
+        .iter()
         .filter(|param| matches!(param.location, ParameterLocation::Query))
     {
         let name = sanitize_identifier(&param.name);
         if param.required {
+            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                lines.push(format!(
+                    "if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
+                    content_encoding,
+                    format!("query parameter `{}`", param.name)
+                ));
+                lines.push("    return nil, err".into());
+                lines.push("}".into());
+            }
             lines.push(format!("query.Set({:?}, fmt.Sprint({name}))", param.name));
         } else {
             lines.push(format!("if {name} != nil {{"));
+            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                lines.push(format!(
+                    "    if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
+                    content_encoding,
+                    format!("query parameter `{}`", param.name)
+                ));
+                lines.push("        return nil, err".into());
+                lines.push("    }".into());
+            }
             lines.push(format!(
                 "    query.Set({:?}, fmt.Sprint(*{name}))",
                 param.name
@@ -572,9 +674,27 @@ fn build_raw_block(operation: &Operation) -> String {
     {
         let name = sanitize_identifier(&param.name);
         if param.required {
+            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                lines.push(format!(
+                    "if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
+                    content_encoding,
+                    format!("header `{}`", param.name)
+                ));
+                lines.push("    return nil, err".into());
+                lines.push("}".into());
+            }
             lines.push(format!("headers.Set({:?}, fmt.Sprint({name}))", param.name));
         } else {
             lines.push(format!("if {name} != nil {{"));
+            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                lines.push(format!(
+                    "    if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
+                    content_encoding,
+                    format!("header `{}`", param.name)
+                ));
+                lines.push("        return nil, err".into());
+                lines.push("    }".into());
+            }
             lines.push(format!(
                 "    headers.Set({:?}, fmt.Sprint(*{name}))",
                 param.name
@@ -591,12 +711,30 @@ fn build_raw_block(operation: &Operation) -> String {
     {
         let name = sanitize_identifier(&param.name);
         if param.required {
+            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                lines.push(format!(
+                    "if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
+                    content_encoding,
+                    format!("cookie `{}`", param.name)
+                ));
+                lines.push("    return nil, err".into());
+                lines.push("}".into());
+            }
             lines.push(format!(
                 "cookies = append(cookies, &http.Cookie{{Name: {:?}, Value: fmt.Sprint({name})}})",
                 param.name
             ));
         } else {
             lines.push(format!("if {name} != nil {{"));
+            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                lines.push(format!(
+                    "    if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
+                    content_encoding,
+                    format!("cookie `{}`", param.name)
+                ));
+                lines.push("        return nil, err".into());
+                lines.push("    }".into());
+            }
             lines.push(format!(
                 "    cookies = append(cookies, &http.Cookie{{Name: {:?}, Value: fmt.Sprint(*{name})}})",
                 param.name
@@ -613,12 +751,28 @@ fn build_raw_block(operation: &Operation) -> String {
             RequestBodyKind::Json => {
                 lines.push("headers.Set(\"Content-Type\", \"application/json\")".into());
                 if request_body.required {
+                    if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
+                        lines.push(format!(
+                            "if err := client.validateStringEncoding(body, {:?}, \"request body\", requestOptions); err != nil {{",
+                            content_encoding
+                        ));
+                        lines.push("    return nil, err".into());
+                        lines.push("}".into());
+                    }
                     lines.push("bodyReader, err = client.encodeJSONBody(body)".into());
                     lines.push("if err != nil {".into());
                     lines.push("    return nil, err".into());
                     lines.push("}".into());
                 } else {
                     lines.push("if body != nil {".into());
+                    if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
+                        lines.push(format!(
+                            "    if err := client.validateStringEncoding(body, {:?}, \"request body\", requestOptions); err != nil {{",
+                            content_encoding
+                        ));
+                        lines.push("        return nil, err".into());
+                        lines.push("    }".into());
+                    }
                     lines.push("    bodyReader, err = client.encodeJSONBody(body)".into());
                     lines.push("    if err != nil {".into());
                     lines.push("        return nil, err".into());
@@ -629,6 +783,14 @@ fn build_raw_block(operation: &Operation) -> String {
             RequestBodyKind::Multipart => {
                 lines.push("var contentType string".into());
                 if request_body.required {
+                    if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
+                        lines.push(format!(
+                            "if err := client.validateStringEncoding(body, {:?}, \"request body\", requestOptions); err != nil {{",
+                            content_encoding
+                        ));
+                        lines.push("    return nil, err".into());
+                        lines.push("}".into());
+                    }
                     lines.push(
                         "bodyReader, contentType, err = client.encodeMultipartBody(body)".into(),
                     );
@@ -638,6 +800,14 @@ fn build_raw_block(operation: &Operation) -> String {
                     lines.push("headers.Set(\"Content-Type\", contentType)".into());
                 } else {
                     lines.push("if body != nil {".into());
+                    if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
+                        lines.push(format!(
+                            "    if err := client.validateStringEncoding(body, {:?}, \"request body\", requestOptions); err != nil {{",
+                            content_encoding
+                        ));
+                        lines.push("        return nil, err".into());
+                        lines.push("    }".into());
+                    }
                     lines.push(
                         "    bodyReader, contentType, err = client.encodeMultipartBody(body)"
                             .into(),
@@ -673,6 +843,10 @@ fn build_raw_block(operation: &Operation) -> String {
     lines.push("return client.httpClient.Do(request)".into());
 
     indent_block(&lines, 4)
+}
+
+fn content_encoding_attribute(attributes: &BTreeMap<String, Value>) -> Option<&str> {
+    attributes.get("content_encoding").and_then(Value::as_str)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1125,18 +1299,24 @@ mod tests {
                         location: ParameterLocation::Path,
                         type_ref: TypeRef::primitive("string"),
                         required: true,
+                        attributes: BTreeMap::from([(
+                            "description".into(),
+                            Value::String("Unique widget identifier.".into()),
+                        )]),
                     },
                     Parameter {
                         name: "include_count".into(),
                         location: ParameterLocation::Query,
                         type_ref: TypeRef::primitive("boolean"),
                         required: false,
+                        attributes: BTreeMap::new(),
                     },
                 ],
                 request_body: Some(RequestBody {
                     required: false,
                     media_type: "application/json".into(),
                     type_ref: Some(TypeRef::named("Widget")),
+                    attributes: BTreeMap::new(),
                 }),
                 responses: vec![Response {
                     status: "200".into(),
@@ -1187,6 +1367,11 @@ mod tests {
         assert!(client.contents.contains("type RequestOptions struct"));
         assert!(client.contents.contains("func (c *Client) GetWidgetRaw("));
         assert!(client.contents.contains("func (c *Client) GetWidget("));
+        assert!(
+            client
+                .contents
+                .contains("GetWidget parameter widgetId: Unique widget identifier.")
+        );
         assert!(client.contents.contains("requestOptions *RequestOptions"));
         assert!(
             client

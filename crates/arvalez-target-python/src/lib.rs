@@ -606,6 +606,8 @@ struct OperationMethodView {
     args_signature: String,
     return_annotation: String,
     raw_return_annotation: String,
+    raw_docstring_block: String,
+    docstring_block: String,
     url_template: String,
     raw_request_call_line: String,
     raw_pre_request_block: String,
@@ -621,6 +623,20 @@ impl OperationMethodView {
         let mut params_name = "None".to_owned();
         let mut headers_name = "None".to_owned();
 
+        for param in operation
+            .params
+            .iter()
+            .filter(|param| matches!(param.location, ParameterLocation::Path))
+        {
+            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                let param_name = sanitize_identifier(&param.name);
+                pre_request_lines.push(format!(
+                    "self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
+                    format!("path parameter `{}`", param.name)
+                ));
+            }
+        }
+
         let query_params = operation
             .params
             .iter()
@@ -632,9 +648,21 @@ impl OperationMethodView {
             for param in query_params {
                 let param_name = sanitize_identifier(&param.name);
                 if param.required {
+                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                        pre_request_lines.push(format!(
+                            "self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
+                            format!("query parameter `{}`", param.name)
+                        ));
+                    }
                     pre_request_lines.push(format!("params[{:?}] = {param_name}", param.name));
                 } else {
                     pre_request_lines.push(format!("if {param_name} is not None:"));
+                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                        pre_request_lines.push(format!(
+                            "    self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
+                            format!("query parameter `{}`", param.name)
+                        ));
+                    }
                     pre_request_lines.push(format!("    params[{:?}] = {param_name}", param.name));
                 }
             }
@@ -652,9 +680,21 @@ impl OperationMethodView {
             for param in header_params {
                 let param_name = sanitize_identifier(&param.name);
                 if param.required {
+                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                        pre_request_lines.push(format!(
+                            "self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
+                            format!("header `{}`", param.name)
+                        ));
+                    }
                     pre_request_lines.push(format!("headers[{:?}] = {param_name}", param.name));
                 } else {
                     pre_request_lines.push(format!("if {param_name} is not None:"));
+                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                        pre_request_lines.push(format!(
+                            "    self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
+                            format!("header `{}`", param.name)
+                        ));
+                    }
                     pre_request_lines.push(format!("    headers[{:?}] = {param_name}", param.name));
                 }
             }
@@ -665,8 +705,19 @@ impl OperationMethodView {
         pre_request_lines.push("request_kwargs: dict[str, Any] = {}".into());
         if let Some(request_body) = &operation.request_body {
             if request_body.required {
+                if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
+                    pre_request_lines.push(format!(
+                        "self._validate_string_encoding(body, {content_encoding:?}, \"request body\", request_options)"
+                    ));
+                }
                 call_arguments.push(required_request_body_argument(request_body));
             } else {
+                if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
+                    pre_request_lines.push("if body is not None:".into());
+                    pre_request_lines.push(format!(
+                        "    self._validate_string_encoding(body, {content_encoding:?}, \"request body\", request_options)"
+                    ));
+                }
                 pre_request_lines.extend(optional_request_body_lines(request_body));
             }
         }
@@ -676,12 +727,25 @@ impl OperationMethodView {
 
         let return_type = operation_return_type(operation);
         let mut post_request_lines = vec!["self._handle_error(response, request_options)".into()];
+        let response_encoding = operation
+            .responses
+            .iter()
+            .find(|response| response.status.starts_with('2'))
+            .and_then(|response| content_encoding_attribute(&response.attributes));
         if let Some(parse_expression) = return_type.parse_expression.clone() {
             post_request_lines.push(format!(
-                "return self._parse_response(response, {parse_expression})"
+                "return self._parse_response(response, {parse_expression}, response_encoding={}, request_options=request_options)",
+                response_encoding
+                    .map(|encoding| format!("{encoding:?}"))
+                    .unwrap_or_else(|| "None".into())
             ));
         } else {
-            post_request_lines.push("return self._parse_response(response)".into());
+            post_request_lines.push(format!(
+                "return self._parse_response(response, response_encoding={}, request_options=request_options)",
+                response_encoding
+                    .map(|encoding| format!("{encoding:?}"))
+                    .unwrap_or_else(|| "None".into())
+            ));
         }
 
         let request_suffix = render_request_arguments(&call_arguments, uses_request_kwargs);
@@ -718,6 +782,8 @@ impl OperationMethodView {
             args_signature: build_method_args(operation).join(", "),
             return_annotation: return_type.annotation.unwrap_or_else(|| "None".into()),
             raw_return_annotation: "httpx.Response".into(),
+            raw_docstring_block: render_python_method_docstring(operation, true),
+            docstring_block: render_python_method_docstring(operation, false),
             url_template: render_python_path_template(&operation.path),
             raw_request_call_line,
             raw_pre_request_block: indent_block(&pre_request_lines, 8),
@@ -726,6 +792,59 @@ impl OperationMethodView {
             post_request_block: indent_block(&post_request_lines, 8),
         }
     }
+}
+
+fn render_python_method_docstring(operation: &Operation, raw: bool) -> String {
+    let mut lines = Vec::new();
+    if let Some(summary) = operation.attributes.get("summary").and_then(Value::as_str) {
+        let summary = summary.trim();
+        if !summary.is_empty() {
+            lines.push(summary.to_owned());
+        }
+    }
+    if raw {
+        lines.push("Returns the raw HTTP response without parsing it or raising for HTTP errors.".into());
+    }
+
+    let described_params = operation
+        .params
+        .iter()
+        .filter_map(|param| {
+            param.attributes
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
+                .map(|description| (sanitize_identifier(&param.name), description.to_owned()))
+        })
+        .collect::<Vec<_>>();
+
+    if !described_params.is_empty() {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("Args:".into());
+        for (name, description) in described_params {
+            lines.push(format!("    {name}: {}", sanitize_doc_text(&description)));
+        }
+    }
+
+    if lines.is_empty() {
+        String::new()
+    } else {
+        let mut block = vec!["\"\"\"".to_owned()];
+        block.extend(lines);
+        block.push("\"\"\"".into());
+        indent_block(&block, 8)
+    }
+}
+
+fn sanitize_doc_text(value: &str) -> String {
+    value.replace("\"\"\"", "\"\\\"\\\"")
+}
+
+fn content_encoding_attribute(attributes: &BTreeMap<String, Value>) -> Option<&str> {
+    attributes.get("content_encoding").and_then(Value::as_str)
 }
 
 fn render_request_arguments(call_arguments: &[String], uses_request_kwargs: bool) -> String {
@@ -1286,11 +1405,16 @@ mod tests {
                         location: ParameterLocation::Path,
                         type_ref: TypeRef::primitive("string"),
                         required: true,
+                        attributes: Attributes::from([(
+                            "description".into(),
+                            Value::String("Unique widget identifier.".into()),
+                        )]),
                     }],
                     request_body: Some(RequestBody {
                         required: false,
                         media_type: "application/json".into(),
                         type_ref: Some(TypeRef::named("Widget")),
+                        attributes: Attributes::default(),
                     }),
                     responses: vec![Response {
                         status: "200".into(),
@@ -1379,6 +1503,12 @@ mod tests {
         assert!(client.contents.contains("async def _get_widget_raw"));
         assert!(client.contents.contains("def get_widget"));
         assert!(client.contents.contains("def _get_widget_raw"));
+        assert!(client.contents.contains("Args:"));
+        assert!(
+            client
+                .contents
+                .contains("widget_id: Unique widget identifier.")
+        );
         assert!(
             client
                 .contents

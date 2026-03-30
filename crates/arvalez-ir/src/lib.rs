@@ -101,6 +101,8 @@ pub struct RequestBody {
     pub media_type: String,
     #[serde(default)]
     pub type_ref: Option<TypeRef>,
+    #[serde(default)]
+    pub attributes: Attributes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -110,6 +112,8 @@ pub struct Parameter {
     pub type_ref: TypeRef,
     #[serde(default)]
     pub required: bool,
+    #[serde(default)]
+    pub attributes: Attributes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

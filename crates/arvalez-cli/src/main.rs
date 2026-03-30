@@ -54,7 +54,11 @@ const CORPUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const CORPUS_UI_TICK_INTERVAL: Duration = Duration::from_millis(200);
 const CORPUS_UI_RECENT_LIMIT: usize = 8;
 const CORPUS_UI_ACTIVE_SAMPLE_LIMIT: usize = 8;
-const OPENAPI_LOAD_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
+// Some real-world Azure/Codat specs still recurse deeply enough during import
+// that the default Rust thread stack and our earlier 64 MiB budget were not
+// sufficient. Keep this comfortably high so corpus runs record real importer
+// errors instead of aborting on stack overflow.
+const OPENAPI_LOAD_STACK_SIZE_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Parser)]
 #[command(author, version, about = "Arvalez local development CLI")]
@@ -302,12 +306,24 @@ struct CorpusTargetResult {
 struct CorpusFailure {
     kind: String,
     feature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pointer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schema_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     target: Option<String>,
     message: String,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct CorpusFailureSummary {
     total_failures: usize,
     by_kind: BTreeMap<String, usize>,
@@ -1055,12 +1071,7 @@ fn run_apis_guru_corpus_test(config_file: &AppConfig, options: &CorpusTestOption
         .clone()
         .unwrap_or_else(default_report_directory);
     let report_path = write_corpus_report(&report_directory, &report_data)?;
-    write_corpus_dashboard(&report_directory)?;
     eprintln!("wrote report to {}", report_path.display());
-    eprintln!(
-        "updated dashboard at {}",
-        report_directory.join("index.html").display()
-    );
 
     eprintln!(
         "completed APIs.guru corpus run: {passed_specs}/{total_specs} specs passed"
@@ -1849,334 +1860,6 @@ fn write_corpus_report(report_directory: &Path, report: &CorpusReport) -> Result
     Ok(report_path)
 }
 
-fn write_corpus_dashboard(report_directory: &Path) -> Result<()> {
-    let reports = load_corpus_reports(report_directory)?;
-    let latest_report = reports.last();
-    let dashboard = render_corpus_dashboard(report_directory, &reports, latest_report);
-    let dashboard_path = report_directory.join("index.html");
-    fs::write(&dashboard_path, dashboard)
-        .with_context(|| format!("failed to write dashboard `{}`", dashboard_path.display()))?;
-    Ok(())
-}
-
-fn load_corpus_reports(report_directory: &Path) -> Result<Vec<CorpusReport>> {
-    let mut reports = Vec::new();
-
-    if !report_directory.exists() {
-        return Ok(reports);
-    }
-
-    let mut report_paths = Vec::new();
-    for entry in fs::read_dir(report_directory).with_context(|| {
-        format!(
-            "failed to read report directory `{}`",
-            report_directory.display()
-        )
-    })? {
-        let entry = entry.with_context(|| {
-            format!(
-                "failed to read entry from report directory `{}`",
-                report_directory.display()
-            )
-        })?;
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) == Some("json") {
-            report_paths.push(path);
-        }
-    }
-
-    report_paths.sort();
-
-    for path in report_paths {
-        let raw = fs::read(&path)
-            .with_context(|| format!("failed to read report `{}`", path.display()))?;
-        let report: CorpusReport = serde_json::from_slice(&raw)
-            .with_context(|| format!("failed to parse report `{}`", path.display()))?;
-        reports.push(report);
-    }
-
-    reports.sort_by_key(|report| report.generated_at_unix_seconds);
-    Ok(reports)
-}
-
-fn render_corpus_dashboard(
-    report_directory: &Path,
-    reports: &[CorpusReport],
-    latest_report: Option<&CorpusReport>,
-) -> String {
-    let reports_json = serde_json::to_string(reports).expect("reports should serialize");
-    let latest_title = latest_report
-        .map(|report| {
-            format!(
-                "{} / {} specs passed",
-                report.passed_specs, report.total_specs
-            )
-        })
-        .unwrap_or_else(|| "No reports yet".into());
-    let report_dir_label = report_directory.display().to_string();
-
-    format!(
-        r##"<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Arvalez Corpus Dashboard</title>
-    <style>
-      :root {{
-        color-scheme: light;
-        --bg: #f7f4ec;
-        --panel: #fffdf7;
-        --ink: #1f2933;
-        --muted: #52606d;
-        --line: #d9d0bf;
-        --accent: #0f766e;
-        --accent-soft: #d9f3ef;
-        --danger: #b42318;
-        --danger-soft: #fde8e8;
-      }}
-      * {{ box-sizing: border-box; }}
-      body {{
-        margin: 0;
-        font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
-        background:
-          radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 28rem),
-          linear-gradient(180deg, #f9f5ea 0%, var(--bg) 100%);
-        color: var(--ink);
-      }}
-      main {{
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 2rem 1.25rem 3rem;
-      }}
-      h1, h2 {{ margin: 0 0 0.75rem; }}
-      p {{ color: var(--muted); }}
-      .hero {{
-        display: grid;
-        gap: 1rem;
-        grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-        margin-bottom: 1.5rem;
-      }}
-      .card {{
-        background: color-mix(in srgb, var(--panel) 94%, white);
-        border: 1px solid var(--line);
-        border-radius: 1rem;
-        padding: 1rem 1.1rem;
-        box-shadow: 0 10px 30px rgba(31, 41, 51, 0.06);
-      }}
-      .metric {{
-        font-size: 2rem;
-        line-height: 1;
-        margin-top: 0.3rem;
-      }}
-      .progress-shell {{
-        margin-top: 0.75rem;
-        height: 0.9rem;
-        border-radius: 999px;
-        background: #ece6d7;
-        overflow: hidden;
-      }}
-      .progress-bar {{
-        height: 100%;
-        background: linear-gradient(90deg, #0f766e 0%, #14b8a6 100%);
-      }}
-      .grid {{
-        display: grid;
-        gap: 1rem;
-        grid-template-columns: 1.5fr 1fr;
-      }}
-      .chart {{
-        width: 100%;
-        height: 280px;
-      }}
-      .axis {{
-        stroke: #cabfae;
-        stroke-width: 1;
-      }}
-      .series {{
-        fill: none;
-        stroke: var(--accent);
-        stroke-width: 3;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-      }}
-      .point {{
-        fill: #fff;
-        stroke: var(--accent);
-        stroke-width: 2;
-      }}
-      table {{
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.95rem;
-      }}
-      th, td {{
-        padding: 0.65rem 0.5rem;
-        border-bottom: 1px solid var(--line);
-        text-align: left;
-        vertical-align: top;
-      }}
-      th {{
-        color: var(--muted);
-        font-weight: 600;
-      }}
-      .pill {{
-        display: inline-block;
-        padding: 0.2rem 0.55rem;
-        border-radius: 999px;
-        font-size: 0.8rem;
-        background: var(--accent-soft);
-        color: var(--accent);
-      }}
-      .pill.danger {{
-        background: var(--danger-soft);
-        color: var(--danger);
-      }}
-      code {{
-        font-family: "SFMono-Regular", ui-monospace, Menlo, monospace;
-        font-size: 0.84em;
-      }}
-      @media (max-width: 900px) {{
-        .grid {{ grid-template-columns: 1fr; }}
-      }}
-    </style>
-  </head>
-  <body>
-    <main>
-      <div class="card" style="margin-bottom: 1rem;">
-        <h1>Arvalez Corpus Dashboard</h1>
-        <p>Report directory: <code>{report_dir_label}</code></p>
-        <p>{latest_title}</p>
-      </div>
-
-      <section class="hero">
-        <div class="card">
-          <div>Latest Support</div>
-          <div id="latest-support" class="metric">-</div>
-          <div class="progress-shell"><div id="latest-progress" class="progress-bar" style="width: 0%;"></div></div>
-        </div>
-        <div class="card">
-          <div>Latest Failures</div>
-          <div id="latest-failures" class="metric">-</div>
-        </div>
-        <div class="card">
-          <div>Report Count</div>
-          <div id="report-count" class="metric">-</div>
-        </div>
-      </section>
-
-      <section class="grid">
-        <div class="card">
-          <h2>Support Trend</h2>
-          <svg id="trend-chart" class="chart" viewBox="0 0 960 280" preserveAspectRatio="none"></svg>
-        </div>
-        <div class="card">
-          <h2>Latest Top Failures</h2>
-          <table id="top-failures-table">
-            <thead><tr><th>Kind / Feature</th><th>Count</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="card" style="margin-top: 1rem;">
-        <h2>Report History</h2>
-        <table id="history-table">
-          <thead>
-            <tr>
-              <th>Generated</th>
-              <th>Support</th>
-              <th>Passed</th>
-              <th>Failed</th>
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </section>
-    </main>
-    <script>
-      const reports = {reports_json};
-      const latest = reports.length > 0 ? reports[reports.length - 1] : null;
-
-      const formatDate = (unixSeconds) => new Date(unixSeconds * 1000).toLocaleString();
-      const supportPercent = (report) => report.total_specs === 0 ? 0 : (report.passed_specs / report.total_specs) * 100;
-
-      document.getElementById("report-count").textContent = reports.length.toString();
-      if (latest) {{
-        const percent = supportPercent(latest);
-        document.getElementById("latest-support").textContent = `${{percent.toFixed(1)}}%`;
-        document.getElementById("latest-progress").style.width = `${{percent}}%`;
-        document.getElementById("latest-failures").textContent = latest.failed_specs.toString();
-
-        const tbody = document.querySelector("#top-failures-table tbody");
-        const entries = Object.entries(latest.summary.by_kind_and_feature)
-          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-          .slice(0, 12);
-        for (const [key, count] of entries) {{
-          const row = document.createElement("tr");
-          row.innerHTML = `<td><code>${{key}}</code></td><td>${{count}}</td>`;
-          tbody.appendChild(row);
-        }}
-      }}
-
-      const historyTbody = document.querySelector("#history-table tbody");
-      for (const report of [...reports].reverse()) {{
-        const percent = supportPercent(report);
-        const row = document.createElement("tr");
-        row.innerHTML = `
-          <td>${{formatDate(report.generated_at_unix_seconds)}}</td>
-          <td><span class="pill">${{percent.toFixed(1)}}%</span></td>
-          <td>${{report.passed_specs}}</td>
-          <td><span class="pill danger">${{report.failed_specs}}</span></td>
-          <td>${{report.total_specs}}</td>
-        `;
-        historyTbody.appendChild(row);
-      }}
-
-      const chart = document.getElementById("trend-chart");
-      if (reports.length > 0) {{
-        const width = 960;
-        const height = 280;
-        const padLeft = 44;
-        const padRight = 18;
-        const padTop = 18;
-        const padBottom = 30;
-        const plotWidth = width - padLeft - padRight;
-        const plotHeight = height - padTop - padBottom;
-        const xs = reports.map((_, i) => reports.length === 1 ? padLeft + plotWidth / 2 : padLeft + (plotWidth * i) / (reports.length - 1));
-        const ys = reports.map((report) => padTop + plotHeight - (supportPercent(report) / 100) * plotHeight);
-
-        chart.innerHTML = `
-          <line class="axis" x1="${{padLeft}}" y1="${{padTop}}" x2="${{padLeft}}" y2="${{padTop + plotHeight}}"></line>
-          <line class="axis" x1="${{padLeft}}" y1="${{padTop + plotHeight}}" x2="${{padLeft + plotWidth}}" y2="${{padTop + plotHeight}}"></line>
-          <text x="${{padLeft}}" y="${{padTop + 4}}" fill="#52606d" font-size="12">100%</text>
-          <text x="${{padLeft}}" y="${{padTop + plotHeight + 20}}" fill="#52606d" font-size="12">0%</text>
-        `;
-
-        const path = xs.map((x, i) => `${{i === 0 ? "M" : "L"}} ${{x}} ${{ys[i]}}`).join(" ");
-        const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        pathEl.setAttribute("d", path);
-        pathEl.setAttribute("class", "series");
-        chart.appendChild(pathEl);
-
-        reports.forEach((report, i) => {{
-          const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-          point.setAttribute("cx", xs[i]);
-          point.setAttribute("cy", ys[i]);
-          point.setAttribute("r", 4);
-          point.setAttribute("class", "point");
-          point.setAttribute("title", `${{formatDate(report.generated_at_unix_seconds)}}: ${{supportPercent(report).toFixed(1)}}%`);
-          chart.appendChild(point);
-        }});
-      }}
-    </script>
-  </body>
-</html>
-"##
-    )
-}
-
 fn summarize_failures(results: &[CorpusSpecResult]) -> CorpusFailureSummary {
     let mut summary = CorpusFailureSummary::default();
 
@@ -2228,127 +1911,133 @@ fn print_failure_summary(summary: &CorpusFailureSummary) {
 fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
     let pointer = extract_pointer(message);
     let schema_path = extract_between(message, "schema mismatch at `", "`:");
+    let (line, column) = extract_line_and_column(message);
+    let source_preview = extract_source_preview(message);
+    let note = extract_note(message);
+
+    let make_failure = |kind: String, feature: String| CorpusFailure {
+        kind,
+        feature,
+        pointer: pointer.clone(),
+        schema_path: schema_path.map(str::to_owned),
+        line,
+        column,
+        source_preview: source_preview.clone(),
+        note: note.clone(),
+        target: target.map(str::to_owned),
+        message: message.to_owned(),
+    };
 
     if let Some(keyword) = extract_between(message, "unknown schema keyword `", "`") {
-        return CorpusFailure {
-            kind: "unsupported_schema_keyword".into(),
-            feature: keyword.to_owned(),
-            pointer,
-            target: target.map(str::to_owned),
-            message: message.to_owned(),
-        };
+        return make_failure("unsupported_schema_keyword".into(), keyword.to_owned());
     }
 
     if let Some(schema_type) = extract_between(message, "unsupported schema type `", "`") {
-        return CorpusFailure {
-            kind: "unsupported_schema_type".into(),
-            feature: schema_type.to_owned(),
-            pointer,
-            target: target.map(str::to_owned),
-            message: message.to_owned(),
-        };
+        return make_failure("unsupported_schema_type".into(), schema_type.to_owned());
     }
 
     if let Some(reference) = extract_between(message, "unsupported reference `", "`") {
-        return CorpusFailure {
-            kind: "unsupported_reference".into(),
-            feature: reference.to_owned(),
-            pointer,
-            target: target.map(str::to_owned),
-            message: message.to_owned(),
-        };
+        return make_failure("unsupported_reference".into(), reference.to_owned());
+    }
+
+    if message.contains("request body has no content entries") {
+        return make_failure(
+            "unsupported_request_body_shape".into(),
+            "empty_content".into(),
+        );
+    }
+
+    if let Some(field) = extract_between(message, "`allOf` contains incompatible `", "` declarations")
+    {
+        return make_failure("unsupported_all_of_merge".into(), field.to_owned());
     }
 
     if let Some(feature) = extract_between(message, "`", "` is not supported yet") {
-        return CorpusFailure {
-            kind: classify_not_supported_kind(pointer.as_deref(), feature),
-            feature: feature.to_owned(),
-            pointer,
-            target: target.map(str::to_owned),
-            message: message.to_owned(),
-        };
+        return make_failure(
+            classify_not_supported_kind(pointer.as_deref(), feature),
+            feature.to_owned(),
+        );
     }
 
     if message.contains("schema shape is not supported yet") {
-        return CorpusFailure {
-            kind: "unsupported_schema_shape".into(),
-            feature: pointer
+        return make_failure(
+            "unsupported_schema_shape".into(),
+            pointer
                 .as_deref()
                 .map(pointer_tail_feature)
                 .or_else(|| schema_path.map(normalize_feature))
                 .unwrap_or_else(|| "schema_shape".into()),
-            pointer,
-            target: target.map(str::to_owned),
-            message: message.to_owned(),
-        };
+        );
     }
 
     if message.contains("failed to parse JSON OpenAPI document")
         || message.contains("failed to parse YAML OpenAPI document")
     {
-        return CorpusFailure {
-            kind: "invalid_openapi_document".into(),
-            feature: schema_path
+        return make_failure(
+            "invalid_openapi_document".into(),
+            schema_path
                 .map(normalize_feature)
                 .unwrap_or_else(|| "deserialization".into()),
-            pointer,
-            target: target.map(str::to_owned),
-            message: message.to_owned(),
-        };
+        );
     }
 
     if message.contains("generated IR is invalid") {
-        return CorpusFailure {
-            kind: "ir_validation_error".into(),
-            feature: "invalid_ir".into(),
-            pointer,
-            target: target.map(str::to_owned),
-            message: message.to_owned(),
-        };
+        return make_failure("ir_validation_error".into(), "invalid_ir".into());
     }
 
     if message.contains("corpus worker crashed")
         || message.contains("stack overflow")
         || message.contains("terminated by SIGABRT")
     {
-        return CorpusFailure {
-            kind: "process_crash".into(),
-            feature: "stack_overflow".into(),
-            pointer,
-            target: target.map(str::to_owned),
-            message: message.to_owned(),
-        };
+        return make_failure("process_crash".into(), "stack_overflow".into());
     }
 
     if let Some(target_name) = target {
         if message.contains("failed to write generated files") {
-            return CorpusFailure {
-                kind: "target_write_error".into(),
-                feature: format!("{target_name}.write_output"),
-                pointer,
-                target: Some(target_name.to_owned()),
-                message: message.to_owned(),
-            };
+            return make_failure(
+                "target_write_error".into(),
+                format!("{target_name}.write_output"),
+            );
         }
 
         if message.contains("failed to generate") {
-            return CorpusFailure {
-                kind: "target_generation_error".into(),
-                feature: format!("{target_name}.generation"),
-                pointer,
-                target: Some(target_name.to_owned()),
-                message: message.to_owned(),
-            };
+            return make_failure(
+                "target_generation_error".into(),
+                format!("{target_name}.generation"),
+            );
         }
     }
 
-    CorpusFailure {
-        kind: "unknown_error".into(),
-        feature: "unknown".into(),
-        pointer,
-        target: target.map(str::to_owned),
-        message: message.to_owned(),
+    if message.contains("parameter has no schema or type")
+        || message.contains("formData parameter has no schema or type")
+    {
+        let param_name = extract_between(message, "parameter `", "`:")
+            .map(normalize_feature)
+            .unwrap_or_else(|| "parameter_missing_schema".into());
+        return make_failure("invalid_openapi_document".into(), param_name);
     }
+
+    if message.contains("has an empty name") {
+        return make_failure(
+            "invalid_openapi_document".into(),
+            pointer
+                .as_deref()
+                .map(pointer_tail_feature)
+                .unwrap_or_else(|| "empty_name".into()),
+        );
+    }
+
+    if message.contains("array schema is missing `items`") {
+        return make_failure(
+            "invalid_openapi_document".into(),
+            pointer
+                .as_deref()
+                .map(pointer_tail_feature)
+                .unwrap_or_else(|| "missing_array_items".into()),
+        );
+    }
+
+    make_failure("unknown_error".into(), "unknown".into())
 }
 
 fn classify_not_supported_kind(pointer: Option<&str>, feature: &str) -> String {
@@ -2382,6 +2071,83 @@ fn extract_pointer(message: &str) -> Option<String> {
     None
 }
 
+fn extract_line_and_column(message: &str) -> (Option<usize>, Option<usize>) {
+    for line in message.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("location: line ") {
+            let (line_number, column_part) = match rest.split_once(", column ") {
+                Some(values) => values,
+                None => continue,
+            };
+            let line_value = line_number.trim().parse::<usize>().ok();
+            let column_value = column_part.trim().parse::<usize>().ok();
+            return (line_value, column_value);
+        }
+    }
+
+    (None, None)
+}
+
+fn extract_source_preview(message: &str) -> Option<String> {
+    if let Some(preview) = extract_indented_block(message, "preview:") {
+        return Some(preview);
+    }
+
+    let lines = message.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if let Some(source_line) = trimmed.strip_prefix("source: ") {
+            let mut preview = source_line.to_owned();
+            if let Some(next_line) = lines.get(index + 1) {
+                let next_trimmed = next_line.trim_start();
+                if next_trimmed.starts_with('^') {
+                    preview.push('\n');
+                    preview.push_str(next_trimmed);
+                }
+            }
+            return Some(preview);
+        }
+    }
+
+    None
+}
+
+fn extract_note(message: &str) -> Option<String> {
+    for line in message.lines() {
+        let trimmed = line.trim_start();
+        if let Some(note) = trimmed.strip_prefix("note: ") {
+            return Some(note.to_owned());
+        }
+    }
+    None
+}
+
+fn extract_indented_block(message: &str, label: &str) -> Option<String> {
+    let lines = message.lines().collect::<Vec<_>>();
+    let start_index = lines
+        .iter()
+        .position(|line| line.trim_start() == label)?;
+
+    let mut block = Vec::new();
+    for line in lines.into_iter().skip(start_index + 1) {
+        if let Some(rest) = line.strip_prefix("    ") {
+            block.push(rest);
+            continue;
+        }
+        if line.trim().is_empty() && !block.is_empty() {
+            block.push("");
+            continue;
+        }
+        break;
+    }
+
+    if block.is_empty() {
+        None
+    } else {
+        Some(block.join("\n"))
+    }
+}
+
 fn extract_between<'a>(message: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
     let start = message.find(prefix)? + prefix.len();
     let rest = &message[start..];
@@ -2405,4 +2171,82 @@ fn normalize_feature(value: &str) -> String {
         .replace('.', "_")
         .replace('/', "_")
         .replace('`', "")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_failure;
+
+    #[test]
+    fn classifies_empty_request_body_content() {
+        let failure = classify_failure(
+            "OpenAPI document issue\nCaused by:\n  request body has no content entries\n  location: #/paths/~1widgets/post/requestBody/content\n  note: Arvalez expects at least one media type under `requestBody.content`.",
+            None,
+        );
+        assert_eq!(failure.kind, "unsupported_request_body_shape");
+        assert_eq!(failure.feature, "empty_content");
+        assert_eq!(
+            failure.pointer.as_deref(),
+            Some("#/paths/~1widgets/post/requestBody/content")
+        );
+    }
+
+    #[test]
+    fn classifies_incompatible_all_of_declarations() {
+        let failure = classify_failure(
+            "OpenAPI document issue\nCaused by:\n  `allOf` contains incompatible `title` declarations\n  location: #/components/schemas/Foo\n  preview:\n    allOf:\n    - $ref: '#/components/schemas/Bar'\n  note: Use `--ignore-unhandled` to turn this into a warning while keeping generation going.",
+            None,
+        );
+        assert_eq!(failure.kind, "unsupported_all_of_merge");
+        assert_eq!(failure.feature, "title");
+        assert_eq!(failure.pointer.as_deref(), Some("#/components/schemas/Foo"));
+    }
+
+    #[test]
+    fn classifies_parameter_missing_schema() {
+        let failure = classify_failure(
+            "parameter `x-apideck-metadata`: parameter has no schema or type\nnote: Arvalez currently expects non-body parameters to declare either `schema` (OpenAPI 3) or `type` (Swagger 2).",
+            None,
+        );
+        assert_eq!(failure.kind, "invalid_openapi_document");
+        assert_eq!(failure.feature, "x-apideck-metadata");
+    }
+
+    #[test]
+    fn classifies_parameter_with_empty_name() {
+        let failure = classify_failure(
+            "operation `customers`: parameter #1 has an empty name\nnote: Use `--ignore-unhandled` to turn this into a warning while keeping generation going.",
+            None,
+        );
+        assert_eq!(failure.kind, "invalid_openapi_document");
+        assert_eq!(failure.feature, "empty_name");
+    }
+
+    #[test]
+    fn classifies_property_with_empty_name() {
+        let failure = classify_failure(
+            "OpenAPI document issue\nCaused by:\n  property #1 has an empty name\n  location: #/components/schemas/shared-user/properties\n  preview:\n    '':\n      type: string\n    username:\n      type: string\n  note: Use `--ignore-unhandled` to turn this into a warning while keeping generation going.",
+            None,
+        );
+        assert_eq!(failure.kind, "invalid_openapi_document");
+        assert_eq!(failure.feature, "properties");
+        assert_eq!(
+            failure.pointer.as_deref(),
+            Some("#/components/schemas/shared-user/properties")
+        );
+    }
+
+    #[test]
+    fn classifies_array_missing_items() {
+        let failure = classify_failure(
+            "OpenAPI document issue\nCaused by:\n  array schema is missing `items`\n  location: #/definitions/DBResp/properties/Data\n  preview:\n    example:\n    - <array of data objects>\n    type: array\n  note: Add an `items` schema to describe the array element type.",
+            None,
+        );
+        assert_eq!(failure.kind, "invalid_openapi_document");
+        assert_eq!(failure.feature, "Data");
+        assert_eq!(
+            failure.pointer.as_deref(),
+            Some("#/definitions/DBResp/properties/Data")
+        );
+    }
 }

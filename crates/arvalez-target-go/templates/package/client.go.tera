@@ -1,6 +1,7 @@
 package {{ package.package_name }}
 
 import (
+    "encoding/base64"
     "bytes"
     "context"
     "encoding/json"
@@ -18,17 +19,19 @@ const SDKVersion = "{{ package.version }}"
 type ErrorHandler func(*http.Response) error
 
 type ClientOptions struct {
-    HTTPClient *http.Client
-    Headers    http.Header
-    OnError    ErrorHandler
+    HTTPClient               *http.Client
+    Headers                  http.Header
+    OnError                  ErrorHandler
+    ValidateContentEncodings *bool
 }
 
 type RequestOptions struct {
-    Context context.Context
-    Headers http.Header
-    Query   url.Values
-    Cookies []*http.Cookie
-    OnError ErrorHandler
+    Context                  context.Context
+    Headers                  http.Header
+    Query                    url.Values
+    Cookies                  []*http.Cookie
+    OnError                  ErrorHandler
+    ValidateContentEncodings *bool
 }
 
 type Client struct {
@@ -36,6 +39,7 @@ type Client struct {
     httpClient *http.Client
     headers    http.Header
     onError    ErrorHandler
+    validateContentEncodings bool
 {% if package.service_fields_block %}
 {{ package.service_fields_block }}
 {% endif %}
@@ -47,6 +51,7 @@ func NewClient(baseURL string, options *ClientOptions) *Client {
         httpClient: http.DefaultClient,
         headers:    cloneHeaders(nil),
         onError:    defaultOnError,
+        validateContentEncodings: true,
     }
 
     if options != nil {
@@ -58,6 +63,9 @@ func NewClient(baseURL string, options *ClientOptions) *Client {
         }
         if options.OnError != nil {
             client.onError = options.OnError
+        }
+        if options.ValidateContentEncodings != nil {
+            client.validateContentEncodings = *options.ValidateContentEncodings
         }
     }
 
@@ -165,6 +173,42 @@ func (c *Client) buildURL(path string, query url.Values) string {
         return c.baseURL + path
     }
     return c.baseURL + path + "?" + query.Encode()
+}
+
+func (c *Client) shouldValidateContentEncodings(requestOptions *RequestOptions) bool {
+    if requestOptions != nil && requestOptions.ValidateContentEncodings != nil {
+        return *requestOptions.ValidateContentEncodings
+    }
+    return c.validateContentEncodings
+}
+
+func (c *Client) validateStringEncoding(value any, encoding string, context string, requestOptions *RequestOptions) error {
+    if !c.shouldValidateContentEncodings(requestOptions) || value == nil {
+        return nil
+    }
+    if encoding != "base64" {
+        return nil
+    }
+
+    var candidate string
+    switch typed := value.(type) {
+    case string:
+        candidate = typed
+    case *string:
+        if typed == nil {
+            return nil
+        }
+        candidate = *typed
+    case []byte:
+        candidate = string(typed)
+    default:
+        return fmt.Errorf("%s must be a base64 string", context)
+    }
+
+    if _, err := base64.StdEncoding.DecodeString(candidate); err != nil {
+        return fmt.Errorf("%s must be valid base64: %w", context, err)
+    }
+    return nil
 }
 
 func (c *Client) encodeJSONBody(payload any) (io.Reader, error) {

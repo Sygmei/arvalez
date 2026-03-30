@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from typing import Any, Callable, TypedDict
 
 import httpx
@@ -19,13 +21,46 @@ class RequestOptions(TypedDict, total=False):
     extensions: dict[str, Any]
     extra: dict[str, Any]
     on_error: ErrorHandler
+    validate_content_encodings: bool
 
 class _BaseApiClient:
     _on_error: ErrorHandler
+    _validate_content_encodings: bool
 
     @staticmethod
     def _default_on_error(response: httpx.Response) -> None:
         response.raise_for_status()
+
+    def _should_validate_content_encodings(
+        self,
+        request_options: RequestOptions | None,
+    ) -> bool:
+        if request_options is not None and "validate_content_encodings" in request_options:
+            return request_options["validate_content_encodings"]
+        return self._validate_content_encodings
+
+    def _validate_string_encoding(
+        self,
+        value: Any,
+        encoding: str,
+        context: str,
+        request_options: RequestOptions | None,
+    ) -> None:
+        if not self._should_validate_content_encodings(request_options) or value is None:
+            return
+        if encoding != "base64":
+            return
+
+        candidate = value
+        if isinstance(candidate, bytes):
+            candidate = candidate.decode("ascii")
+        if not isinstance(candidate, str):
+            raise ValueError(f"{context} must be a base64 string")
+
+        try:
+            base64.b64decode(candidate, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise ValueError(f"{context} must be valid base64") from error
 
     @staticmethod
     def _serialize_body(body: Any, *, json_mode: bool) -> Any:
@@ -37,11 +72,23 @@ class _BaseApiClient:
             return body.model_dump(by_alias=True, exclude_none=True)
         return body
 
-    @staticmethod
-    def _parse_response(response: httpx.Response, response_type: Any | None = None) -> Any:
+    def _parse_response(
+        self,
+        response: httpx.Response,
+        response_type: Any | None = None,
+        *,
+        response_encoding: str | None = None,
+        request_options: RequestOptions | None = None,
+    ) -> Any:
         if response.status_code == 204 or not response.content:
             return None
-        payload = response.json()
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type:
+            payload = response.json()
+        else:
+            payload = response.text
+        if response_encoding is not None:
+            self._validate_string_encoding(payload, response_encoding, "response body", request_options)
         if response_type is None:
             return payload
         return TypeAdapter(response_type).validate_python(payload)

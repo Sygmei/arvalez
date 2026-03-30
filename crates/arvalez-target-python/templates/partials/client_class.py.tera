@@ -4,10 +4,12 @@ class {{ client.class_name }}(_BaseApiClient):
         client: {{ client.client_type }},
         *,
         on_error: ErrorHandler | None = None,
+        validate_content_encodings: bool = True,
     ) -> None:
         self._owns_client = False
         self._client = client
         self._on_error = on_error or self._default_on_error
+        self._validate_content_encodings = validate_content_encodings
 {% if client.service_bindings_block %}
 {{ client.service_bindings_block }}
 {% endif %}

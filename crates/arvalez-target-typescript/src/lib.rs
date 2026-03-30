@@ -379,7 +379,10 @@ struct OperationMethodView {
     args_signature: String,
     return_annotation: String,
     raw_return_annotation: String,
+    raw_doc_block: String,
+    doc_block: String,
     path_template: String,
+    validation_block: String,
     query_block: String,
     headers_block: String,
     request_init_block: String,
@@ -391,6 +394,22 @@ struct OperationMethodView {
 
 impl OperationMethodView {
     fn from_operation(operation: &Operation) -> Self {
+        let mut validation_lines = Vec::new();
+        for param in operation
+            .params
+            .iter()
+            .filter(|param| matches!(param.location, ParameterLocation::Path))
+        {
+            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                validation_lines.push(format!(
+                    "this.validateStringEncoding({}, {:?}, {:?}, requestOptions);",
+                    sanitize_identifier(&param.name),
+                    content_encoding,
+                    format!("path parameter `{}`", param.name)
+                ));
+            }
+        }
+
         let mut query_lines = Vec::new();
         let query_params = operation
             .params
@@ -402,12 +421,28 @@ impl OperationMethodView {
             for param in &query_params {
                 let name = sanitize_identifier(&param.name);
                 if param.required {
+                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                        validation_lines.push(format!(
+                            "this.validateStringEncoding({}, {:?}, {:?}, requestOptions);",
+                            name,
+                            content_encoding,
+                            format!("query parameter `{}`", param.name)
+                        ));
+                    }
                     query_lines.push(format!(
                         "baseQuery.set({:?}, String({}));",
                         param.name, name
                     ));
                 } else {
                     query_lines.push(format!("if ({} !== undefined) {{", name));
+                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                        query_lines.push(format!(
+                            "  this.validateStringEncoding({}, {:?}, {:?}, requestOptions);",
+                            name,
+                            content_encoding,
+                            format!("query parameter `{}`", param.name)
+                        ));
+                    }
                     query_lines.push(format!(
                         "  baseQuery.set({:?}, String({}));",
                         param.name, name
@@ -440,9 +475,25 @@ impl OperationMethodView {
             for param in &header_params {
                 let name = sanitize_identifier(&param.name);
                 if param.required {
+                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                        validation_lines.push(format!(
+                            "this.validateStringEncoding({}, {:?}, {:?}, requestOptions);",
+                            name,
+                            content_encoding,
+                            format!("header `{}`", param.name)
+                        ));
+                    }
                     headers_lines.push(format!("headers.set({:?}, String({}));", param.name, name));
                 } else {
                     headers_lines.push(format!("if ({} !== undefined) {{", name));
+                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
+                        headers_lines.push(format!(
+                            "  this.validateStringEncoding({}, {:?}, {:?}, requestOptions);",
+                            name,
+                            content_encoding,
+                            format!("header `{}`", param.name)
+                        ));
+                    }
                     headers_lines.push(format!(
                         "  headers.set({:?}, String({}));",
                         param.name, name
@@ -481,6 +532,12 @@ impl OperationMethodView {
         if let Some(request_body) = &operation.request_body {
             let body_name = "body";
             if request_body.required {
+                if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
+                    validation_lines.push(format!(
+                        "this.validateStringEncoding({body_name}, {:?}, \"request body\", requestOptions);",
+                        content_encoding
+                    ));
+                }
                 if has_json_body {
                     body_lines.push(format!(
                         "{request_init_name}.body = JSON.stringify({body_name});"
@@ -496,6 +553,12 @@ impl OperationMethodView {
                 }
             } else {
                 body_lines.push(format!("if ({body_name} !== undefined) {{"));
+                if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
+                    body_lines.push(format!(
+                        "  this.validateStringEncoding({body_name}, {:?}, \"request body\", requestOptions);",
+                        content_encoding
+                    ));
+                }
                 if has_json_body {
                     body_lines.push(format!(
                         "  {request_init_name}.body = JSON.stringify({body_name});"
@@ -530,8 +593,15 @@ impl OperationMethodView {
             &[
                 "await this.handleError(response, requestOptions);".into(),
                 format!(
-                    "return await this.parseResponse<{}>(response);",
-                    operation_return_type(operation)
+                    "return await this.parseResponse<{}>(response, {}, requestOptions);",
+                    operation_return_type(operation),
+                    operation
+                        .responses
+                        .iter()
+                        .find(|response| response.status.starts_with('2'))
+                        .and_then(|response| content_encoding_attribute(&response.attributes))
+                        .map(|encoding| format!("{encoding:?}"))
+                        .unwrap_or_else(|| "undefined".into())
                 ),
             ],
             4,
@@ -543,7 +613,10 @@ impl OperationMethodView {
             args_signature: build_method_args(operation).join(", "),
             return_annotation: operation_return_type(operation),
             raw_return_annotation: "Response".into(),
+            raw_doc_block: render_typescript_doc_block(operation, true),
+            doc_block: render_typescript_doc_block(operation, false),
             path_template: render_typescript_path(&operation.path),
+            validation_block: indent_block(&validation_lines, 4),
             query_block: indent_block(&query_lines, 4),
             headers_block: indent_block(&headers_lines, 4),
             request_init_block: indent_block(&request_init_lines, 4),
@@ -553,6 +626,50 @@ impl OperationMethodView {
             wrapper_post_request_block,
         }
     }
+}
+
+fn content_encoding_attribute(attributes: &BTreeMap<String, Value>) -> Option<&str> {
+    attributes.get("content_encoding").and_then(Value::as_str)
+}
+
+fn render_typescript_doc_block(operation: &Operation, raw: bool) -> String {
+    let mut lines = Vec::new();
+    if let Some(summary) = operation.attributes.get("summary").and_then(Value::as_str) {
+        let summary = summary.trim();
+        if !summary.is_empty() {
+            lines.push(summary.to_owned());
+        }
+    }
+    if raw {
+        lines.push("Returns the raw HTTP response without parsing it or throwing for HTTP errors.".into());
+    }
+    for param in &operation.params {
+        if let Some(description) = param.attributes.get("description").and_then(Value::as_str) {
+            let description = description.trim();
+            if !description.is_empty() {
+                lines.push(format!(
+                    "@param {} {}",
+                    sanitize_identifier(&param.name),
+                    sanitize_doc_text(description)
+                ));
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        String::new()
+    } else {
+        let mut block = vec!["/**".to_owned()];
+        for line in lines {
+            block.push(format!(" * {line}"));
+        }
+        block.push(" */".into());
+        indent_block(&block, 2)
+    }
+}
+
+fn sanitize_doc_text(value: &str) -> String {
+    value.replace("*/", "*\\/")
 }
 
 fn render_model_block(tera: &Tera, model: ModelView) -> Result<String> {
@@ -966,18 +1083,24 @@ mod tests {
                         location: ParameterLocation::Path,
                         type_ref: TypeRef::primitive("string"),
                         required: true,
+                        attributes: Attributes::from([(
+                            "description".into(),
+                            Value::String("Unique widget identifier.".into()),
+                        )]),
                     },
                     Parameter {
                         name: "include_count".into(),
                         location: ParameterLocation::Query,
                         type_ref: TypeRef::primitive("boolean"),
                         required: false,
+                        attributes: Attributes::default(),
                     },
                 ],
                 request_body: Some(RequestBody {
                     required: false,
                     media_type: "application/json".into(),
                     type_ref: Some(TypeRef::named("Widget")),
+                    attributes: Attributes::default(),
                 }),
                 responses: vec![Response {
                     status: "200".into(),
@@ -1026,6 +1149,11 @@ mod tests {
         );
         assert!(client.contents.contains("async _getWidgetRaw("));
         assert!(client.contents.contains("async getWidget("));
+        assert!(
+            client
+                .contents
+                .contains("@param widgetId Unique widget identifier.")
+        );
         assert!(client.contents.contains("requestOptions?: RequestOptions"));
         assert!(client.contents.contains("onError?: ErrorHandler;"));
         assert!(

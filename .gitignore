@@ -3,3 +3,5 @@ generated/
 .arvalez/
 openapi*.json
 reports/
+web/corpus-dashboard/node_modules/
+web/corpus-dashboard/dist/
