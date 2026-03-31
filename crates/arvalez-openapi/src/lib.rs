@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     path::Path,
     sync::OnceLock,
@@ -36,19 +36,44 @@ pub struct OpenApiDiagnostic {
     pub source_preview: Option<String>,
     /// Human-readable context when there is no pointer (e.g. `"parameter \`foo\`"`).
     pub context: Option<String>,
+    /// Approximate 1-based source line for the node at `pointer`, when resolvable.
+    pub line: Option<usize>,
 }
 
 impl OpenApiDiagnostic {
-    pub fn from_pointer(kind: DiagnosticKind, pointer: impl Into<String>, source_preview: Option<String>) -> Self {
-        OpenApiDiagnostic { kind, pointer: Some(pointer.into()), source_preview, context: None }
+    pub fn from_pointer(
+        kind: DiagnosticKind,
+        pointer: impl Into<String>,
+        source_preview: Option<String>,
+        line: Option<usize>,
+    ) -> Self {
+        OpenApiDiagnostic {
+            kind,
+            pointer: Some(pointer.into()),
+            source_preview,
+            context: None,
+            line,
+        }
     }
 
     pub fn from_named_context(kind: DiagnosticKind, context: impl Into<String>) -> Self {
-        OpenApiDiagnostic { kind, pointer: None, source_preview: None, context: Some(context.into()) }
+        OpenApiDiagnostic {
+            kind,
+            pointer: None,
+            source_preview: None,
+            context: Some(context.into()),
+            line: None,
+        }
     }
 
     pub fn simple(kind: DiagnosticKind) -> Self {
-        OpenApiDiagnostic { kind, pointer: None, source_preview: None, context: None }
+        OpenApiDiagnostic {
+            kind,
+            pointer: None,
+            source_preview: None,
+            context: None,
+            line: None,
+        }
     }
 
     /// Returns the human-readable note text for this diagnostic, if any.
@@ -64,51 +89,77 @@ impl OpenApiDiagnostic {
     /// variant produces a compile error at the definition site.
     pub fn classify(&self) -> (&'static str, String) {
         match &self.kind {
-            DiagnosticKind::UnknownSchemaKeyword { keyword } =>
-                ("unsupported_schema_keyword", keyword.clone()),
-            DiagnosticKind::UnsupportedSchemaKeyword { keyword } =>
-                (Self::unsupported_kind_for_pointer(self.pointer.as_deref(), keyword), keyword.clone()),
-            DiagnosticKind::UnsupportedSchemaType { schema_type } =>
-                ("unsupported_schema_type", schema_type.clone()),
+            DiagnosticKind::UnknownSchemaKeyword { keyword } => {
+                ("unsupported_schema_keyword", keyword.clone())
+            }
+            DiagnosticKind::UnsupportedSchemaKeyword { keyword } => (
+                Self::unsupported_kind_for_pointer(self.pointer.as_deref(), keyword),
+                keyword.clone(),
+            ),
+            DiagnosticKind::UnsupportedSchemaType { schema_type } => {
+                ("unsupported_schema_type", schema_type.clone())
+            }
             DiagnosticKind::UnsupportedSchemaShape => (
                 "unsupported_schema_shape",
-                self.pointer.as_deref().map(diagnostic_pointer_tail).unwrap_or_else(|| "schema_shape".into()),
+                self.pointer
+                    .as_deref()
+                    .map(diagnostic_pointer_tail)
+                    .unwrap_or_else(|| "schema_shape".into()),
             ),
-            DiagnosticKind::UnsupportedReference { reference } =>
-                ("unsupported_reference", reference.clone()),
-            DiagnosticKind::AllOfRecursiveCycle { .. } =>
-                ("unsupported_all_of_merge", "recursive_cycle".into()),
-            DiagnosticKind::RecursiveParameterCycle { .. } =>
-                ("invalid_openapi_document", "recursive_parameter_cycle".into()),
-            DiagnosticKind::RecursiveRequestBodyCycle { .. } =>
-                ("invalid_openapi_document", "recursive_request_body_cycle".into()),
-            DiagnosticKind::IncompatibleAllOfField { field } =>
-                ("unsupported_all_of_merge", field.clone()),
-            DiagnosticKind::EmptyRequestBodyContent =>
-                ("unsupported_request_body_shape", "empty_content".into()),
-            DiagnosticKind::EmptyParameterName { .. } =>
-                ("invalid_openapi_document", "empty_parameter_name".into()),
-            DiagnosticKind::EmptyPropertyKey { .. } =>
-                ("invalid_openapi_document", "empty_property_key".into()),
-            DiagnosticKind::ArrayMissingItems => (
+            DiagnosticKind::UnsupportedReference { reference } => {
+                ("unsupported_reference", categorize_reference(reference))
+            }
+            DiagnosticKind::AllOfRecursiveCycle { .. } => {
+                ("unsupported_all_of_merge", "recursive_cycle".into())
+            }
+            DiagnosticKind::RecursiveParameterCycle { .. } => (
                 "invalid_openapi_document",
-                self.pointer.as_deref().map(diagnostic_pointer_tail).unwrap_or_else(|| "missing_array_items".into()),
+                "recursive_parameter_cycle".into(),
             ),
-            DiagnosticKind::ParameterMissingSchema { name } =>
-                ("invalid_openapi_document", normalize_diagnostic_feature(name)),
-            DiagnosticKind::UnsupportedParameterLocation { name } =>
-                ("invalid_openapi_document", normalize_diagnostic_feature(name)),
-            DiagnosticKind::MultipleRequestBodyDeclarations { .. } =>
-                ("invalid_openapi_document", "multiple_request_body_declarations".into()),
-            DiagnosticKind::BodyParameterMissingSchema { name } =>
-                ("invalid_openapi_document", normalize_diagnostic_feature(name)),
-            DiagnosticKind::FormDataParameterMissingSchema { name } =>
-                ("invalid_openapi_document", normalize_diagnostic_feature(name)),
+            DiagnosticKind::RecursiveRequestBodyCycle { .. } => (
+                "invalid_openapi_document",
+                "recursive_request_body_cycle".into(),
+            ),
+            DiagnosticKind::IncompatibleAllOfField { field } => {
+                ("unsupported_all_of_merge", field.clone())
+            }
+            DiagnosticKind::EmptyRequestBodyContent => {
+                ("unsupported_request_body_shape", "empty_content".into())
+            }
+            DiagnosticKind::EmptyParameterName { .. } => {
+                ("invalid_openapi_document", "empty_parameter_name".into())
+            }
+            DiagnosticKind::EmptyPropertyKey { .. } => {
+                ("invalid_openapi_document", "empty_property_key".into())
+            }
+            DiagnosticKind::ParameterMissingSchema { name } => (
+                "invalid_openapi_document",
+                normalize_diagnostic_feature(name),
+            ),
+            DiagnosticKind::UnsupportedParameterLocation { name } => (
+                "invalid_openapi_document",
+                normalize_diagnostic_feature(name),
+            ),
+            DiagnosticKind::MultipleRequestBodyDeclarations { .. } => (
+                "invalid_openapi_document",
+                "multiple_request_body_declarations".into(),
+            ),
+            DiagnosticKind::BodyParameterMissingSchema { name } => (
+                "invalid_openapi_document",
+                normalize_diagnostic_feature(name),
+            ),
+            DiagnosticKind::FormDataParameterMissingSchema { name } => (
+                "invalid_openapi_document",
+                normalize_diagnostic_feature(name),
+            ),
         }
     }
 
     pub fn unsupported_kind_for_pointer(pointer: Option<&str>, feature: &str) -> &'static str {
-        if matches!(feature, "allOf" | "anyOf" | "oneOf" | "not" | "discriminator" | "const") {
+        if matches!(
+            feature,
+            "allOf" | "anyOf" | "oneOf" | "not" | "discriminator" | "const"
+        ) {
             return "unsupported_schema_keyword";
         }
         match pointer {
@@ -126,6 +177,25 @@ impl OpenApiDiagnostic {
             _ => "unsupported_feature",
         }
     }
+}
+
+pub fn categorize_reference(reference: &str) -> String {
+    // External references (http/https/relative paths without #) are their own category.
+    if !reference.starts_with('#') {
+        return "external".into();
+    }
+    // Strip `#/` and split into path segments, ignoring percent-encoded path globs
+    // and numeric indices so only structural keywords remain.
+    let inner = reference.strip_prefix("#/").unwrap_or("");
+    let structural: Vec<&str> = inner
+        .split('/')
+        .filter(|s| !s.is_empty() && !s.chars().all(|c| c.is_ascii_digit()) && !s.contains('~') && !s.contains('%'))
+        .take(2)
+        .collect();
+    if structural.is_empty() {
+        return "unknown".into();
+    }
+    structural.join("_")
 }
 
 pub fn diagnostic_pointer_tail(pointer: &str) -> String {
@@ -211,8 +281,6 @@ pub enum DiagnosticKind {
     EmptyParameterName { counter: usize },
     /// An object schema property key is the empty string.
     EmptyPropertyKey { counter: usize },
-    /// An `array`-typed schema is missing an `items` declaration.
-    ArrayMissingItems,
     /// A non-body parameter has neither a `schema` nor a `type`.
     ParameterMissingSchema { name: String },
     /// A parameter uses a location (`in`) value Arvalez cannot handle.
@@ -229,23 +297,42 @@ impl DiagnosticKind {
     fn message_text(&self) -> String {
         match self {
             Self::UnknownSchemaKeyword { keyword } => format!("unknown schema keyword `{keyword}`"),
-            Self::UnsupportedSchemaKeyword { keyword } => format!("`{keyword}` is not supported yet"),
-            Self::UnsupportedSchemaType { schema_type } => format!("unsupported schema type `{schema_type}`"),
+            Self::UnsupportedSchemaKeyword { keyword } => {
+                format!("`{keyword}` is not supported yet")
+            }
+            Self::UnsupportedSchemaType { schema_type } => {
+                format!("unsupported schema type `{schema_type}`")
+            }
             Self::UnsupportedSchemaShape => "schema shape is not supported yet".into(),
-            Self::UnsupportedReference { reference } => format!("unsupported reference `{reference}`"),
-            Self::AllOfRecursiveCycle { reference } => format!("`allOf` contains a recursive reference cycle involving `{reference}`"),
-            Self::RecursiveParameterCycle { reference } => format!("parameter reference contains a recursive cycle involving `{reference}`"),
-            Self::RecursiveRequestBodyCycle { reference } => format!("request body reference contains a recursive cycle involving `{reference}`"),
-            Self::IncompatibleAllOfField { field } => format!("`allOf` contains incompatible `{field}` declarations"),
+            Self::UnsupportedReference { reference } => {
+                format!("unsupported reference `{reference}`")
+            }
+            Self::AllOfRecursiveCycle { reference } => {
+                format!("`allOf` contains a recursive reference cycle involving `{reference}`")
+            }
+            Self::RecursiveParameterCycle { reference } => {
+                format!("parameter reference contains a recursive cycle involving `{reference}`")
+            }
+            Self::RecursiveRequestBodyCycle { reference } => {
+                format!("request body reference contains a recursive cycle involving `{reference}`")
+            }
+            Self::IncompatibleAllOfField { field } => {
+                format!("`allOf` contains incompatible `{field}` declarations")
+            }
             Self::EmptyRequestBodyContent => "request body has no content entries".into(),
-            Self::EmptyParameterName { counter } => format!("parameter #{counter} has an empty name"),
+            Self::EmptyParameterName { counter } => {
+                format!("parameter #{counter} has an empty name")
+            }
             Self::EmptyPropertyKey { counter } => format!("property #{counter} has an empty name"),
-            Self::ArrayMissingItems => "array schema is missing `items`".into(),
             Self::ParameterMissingSchema { .. } => "parameter has no schema or type".into(),
             Self::UnsupportedParameterLocation { .. } => "unsupported parameter location".into(),
-            Self::MultipleRequestBodyDeclarations { .. } => "multiple request body declarations are not supported".into(),
+            Self::MultipleRequestBodyDeclarations { .. } => {
+                "multiple request body declarations are not supported".into()
+            }
             Self::BodyParameterMissingSchema { .. } => "body parameter has no schema".into(),
-            Self::FormDataParameterMissingSchema { .. } => "formData parameter has no schema or type".into(),
+            Self::FormDataParameterMissingSchema { .. } => {
+                "formData parameter has no schema or type".into()
+            }
         }
     }
 
@@ -260,9 +347,6 @@ impl DiagnosticKind {
             | Self::EmptyParameterName { .. }
             | Self::EmptyPropertyKey { .. } => {
                 "Use `--ignore-unhandled` to turn this into a warning while keeping generation going."
-            }
-            Self::ArrayMissingItems => {
-                "Add an `items` schema to describe the array element type."
             }
             Self::EmptyRequestBodyContent => {
                 "Arvalez defaulted this request body to `application/octet-stream` with an untyped payload."
@@ -311,12 +395,11 @@ pub fn load_openapi_to_ir_with_options(
             .with_context(|| format!("failed to read OpenAPI document `{}`", path.display()))
     })?;
 
-    let loaded = measure_openapi_phase(options.emit_timings, "openapi_parse", || match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-    {
-        Some("yaml") | Some("yml") => parse_yaml_openapi_document(path, &raw),
-        _ => parse_json_openapi_document(path, &raw),
+    let loaded = measure_openapi_phase(options.emit_timings, "openapi_parse", || {
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("yaml") | Some("yml") => parse_yaml_openapi_document(path, &raw),
+            _ => parse_json_openapi_document(path, &raw),
+        }
     })?;
 
     OpenApiImporter::new(loaded.document, loaded.source, options).build_ir()
@@ -332,7 +415,11 @@ where
     let started = Instant::now();
     let value = task();
     if enabled {
-        eprintln!("timing: {:<20} {}", label, format_duration(started.elapsed()));
+        eprintln!(
+            "timing: {:<20} {}",
+            label,
+            format_duration(started.elapsed())
+        );
     }
     value
 }
@@ -348,9 +435,74 @@ fn format_duration(duration: std::time::Duration) -> String {
     }
 }
 
-fn parse_json_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDocument> {
+fn deserialize_paths_map<'de, D>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, PathItem>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Use a proper Visitor so the `serde_path_to_error`-wrapped deserializer
+    // stays in scope when each PathItem is deserialized.  Deserializing via an
+    // intermediate `BTreeMap<String, Value>` then `serde_json::from_value` would
+    // spin up a fresh deserialization context, losing all path tracking and
+    // causing errors to be reported as just `paths` instead of the full path.
+    struct PathsMapVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for PathsMapVisitor {
+        type Value = BTreeMap<String, PathItem>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a map of path items")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let mut result = BTreeMap::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if key.starts_with("x-") {
+                    // Drain the value without deserializing it.
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                } else {
+                    // Deserialize directly as PathItem so that serde_path_to_error
+                    // can track the path key → PathItem fields.
+                    let value = map.next_value::<PathItem>()?;
+                    result.insert(key, value);
+                }
+            }
+            Ok(result)
+        }
+    }
+
+    deserializer.deserialize_map(PathsMapVisitor)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenApiVersion {
+    Swagger2,
+    OpenApi3,
+}
+
+fn detect_openapi_version(raw: &str) -> OpenApiVersion {
+    // Scan the first 4 KB — enough to encounter the version field in any real document.
+    let sample = &raw[..raw.len().min(4096)];
+    if sample.contains("\"swagger\"")
+        || sample.starts_with("swagger:")
+        || sample.contains("\nswagger:")
+    {
+        OpenApiVersion::Swagger2
+    } else {
+        OpenApiVersion::OpenApi3
+    }
+}
+
+fn deserialize_json<T>(path: &Path, raw: &str) -> Result<T>
+where
+    T: for<'de> serde::Deserialize<'de>,
+{
     let mut deserializer = serde_json::Deserializer::from_str(raw);
-    let document = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+    serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
         let schema_path = error.path().to_string();
         let inner = error.into_inner();
         let line = inner.line();
@@ -369,18 +521,15 @@ fn parse_json_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDo
             column,
             &message,
         ))
-    })?;
-
-    Ok(LoadedOpenApiDocument {
-        document,
-        source: OpenApiSource::new(SourceFormat::Json, raw.to_owned()),
     })
 }
 
-fn parse_yaml_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDocument> {
-    let sanitized = sanitize_yaml_for_parser(raw);
-    let deserializer = serde_yaml::Deserializer::from_str(sanitized.as_ref());
-    let document = serde_path_to_error::deserialize(deserializer).map_err(|error| {
+fn deserialize_yaml<T>(path: &Path, raw: &str, sanitized: &str) -> Result<T>
+where
+    T: for<'de> serde::Deserialize<'de>,
+{
+    let deserializer = serde_yaml::Deserializer::from_str(sanitized);
+    serde_path_to_error::deserialize(deserializer).map_err(|error| {
         let schema_path = error.path().to_string();
         let inner = error.into_inner();
         let (line, column) = inner
@@ -400,8 +549,36 @@ fn parse_yaml_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDo
             column,
             &inner.to_string(),
         ))
-    })?;
+    })
+}
 
+fn parse_json_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDocument> {
+    let document = if detect_openapi_version(raw) == OpenApiVersion::Swagger2 {
+        OpenApiDocument::from(deserialize_json::<Swagger2Document>(path, raw)?)
+    } else {
+        OpenApiDocument::from(deserialize_json::<OpenApi3Document>(path, raw)?)
+    };
+    Ok(LoadedOpenApiDocument {
+        document,
+        source: OpenApiSource::new(SourceFormat::Json, raw.to_owned()),
+    })
+}
+
+fn parse_yaml_openapi_document(path: &Path, raw: &str) -> Result<LoadedOpenApiDocument> {
+    let sanitized = sanitize_yaml_for_parser(raw);
+    let document = if detect_openapi_version(raw) == OpenApiVersion::Swagger2 {
+        OpenApiDocument::from(deserialize_yaml::<Swagger2Document>(
+            path,
+            raw,
+            sanitized.as_ref(),
+        )?)
+    } else {
+        OpenApiDocument::from(deserialize_yaml::<OpenApi3Document>(
+            path,
+            raw,
+            sanitized.as_ref(),
+        )?)
+    };
     Ok(LoadedOpenApiDocument {
         document,
         source: OpenApiSource::new(SourceFormat::Yaml, raw.to_owned()),
@@ -449,7 +626,20 @@ fn format_openapi_deserialize_error(
 }
 
 fn sanitize_yaml_for_parser(raw: &str) -> Cow<'_, str> {
-    if !raw.contains('\t') {
+    // U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR are treated as
+    // newlines by serde_yaml (YAML 1.1 §4.2). When they appear inside a block
+    // scalar they create implicit line breaks whose "continuation" indentation
+    // is wrong, prematurely ending the block scalar and then causing a parse
+    // error on the next real YAML line. Replace them with regular spaces so
+    // the block scalar content is preserved verbatim.
+    //
+    // C1 control codes (U+0080–U+009F) are forbidden by YAML 1.2. They
+    // sometimes appear as artifacts of double-UTF-8 encoding (e.g. U+2019 '
+    // double-encoded produces the bytes C2 80 / C2 99 which decode to U+0080
+    // and U+0099). Strip them so the parser doesn't reject the document.
+    let needs_unicode_fix = raw.contains('\u{2028}') || raw.contains('\u{2029}');
+    let needs_c1_fix = raw.chars().any(|c| ('\u{0080}'..='\u{009F}').contains(&c));
+    if !raw.contains('\t') && !needs_unicode_fix && !needs_c1_fix {
         return Cow::Borrowed(raw);
     }
 
@@ -462,7 +652,26 @@ fn sanitize_yaml_for_parser(raw: &str) -> Cow<'_, str> {
         if line.contains('\t') && line.chars().all(|ch| matches!(ch, ' ' | '\t')) {
             changed = true;
         } else {
-            normalized.push_str(line);
+            // Apply both fixes in one pass when either is needed.
+            let has_sep = line.contains('\u{2028}') || line.contains('\u{2029}');
+            let has_c1 = line.chars().any(|c| ('\u{0080}'..='\u{009F}').contains(&c));
+            if has_sep || has_c1 {
+                let fixed: String = line
+                    .chars()
+                    .map(|c| match c {
+                        // Unicode line/paragraph separators → space (preserve blank-line intent)
+                        '\u{2028}' | '\u{2029}' => ' ',
+                        // C1 control codes → strip by replacing with nothing (handled below)
+                        c if ('\u{0080}'..='\u{009F}').contains(&c) => '\0',
+                        c => c,
+                    })
+                    .filter(|&c| c != '\0')
+                    .collect();
+                normalized.push_str(&fixed);
+                changed = true;
+            } else {
+                normalized.push_str(line);
+            }
         }
 
         if has_newline {
@@ -513,9 +722,11 @@ impl OpenApiImporter {
     }
 
     fn build_ir(mut self) -> Result<OpenApiLoadResult> {
-        measure_openapi_phase(self.options.emit_timings, "openapi_component_models", || {
-            self.import_component_models()
-        })?;
+        measure_openapi_phase(
+            self.options.emit_timings,
+            "openapi_component_models",
+            || self.import_component_models(),
+        )?;
 
         let mut operations = Vec::new();
         measure_openapi_phase(self.options.emit_timings, "openapi_operations", || {
@@ -601,13 +812,12 @@ impl OpenApiImporter {
             };
 
             let operation_name = self.reserve_operation_name(
-                spec
-                .operation_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| fallback_operation_name(method, path)),
+                spec.operation_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| fallback_operation_name(method, path)),
             );
             let mut operation = Operation {
                 id: format!("operation.{operation_name}"),
@@ -625,14 +835,30 @@ impl OpenApiImporter {
             };
             let mut unnamed_parameter_counter = 0usize;
             let mut form_data_parameters = Vec::new();
+            let shared_len = shared_parameters.len();
 
-            for param in shared_parameters.iter().chain(spec.parameters.iter()) {
+            for (param_idx, param) in shared_parameters.iter().chain(spec.parameters.iter()).enumerate() {
                 let mut resolved = self.resolve_parameter(param)?;
                 if resolved.name.trim().is_empty() {
                     unnamed_parameter_counter += 1;
+                    // Use the specific parameter pointer so the source preview
+                    // and line number point at the offending parameter item
+                    // rather than the whole operation.
+                    let param_pointer = if param_idx < shared_len {
+                        format!("#/paths/{}/parameters/{}", json_pointer_key(path), param_idx)
+                    } else {
+                        format!(
+                            "#/paths/{}/{}/parameters/{}",
+                            json_pointer_key(path),
+                            method_key(method),
+                            param_idx - shared_len,
+                        )
+                    };
                     self.handle_unhandled(
-                        &format!("#/paths/{}/{}", json_pointer_key(path), method_key(method)),
-                        DiagnosticKind::EmptyParameterName { counter: unnamed_parameter_counter },
+                        &param_pointer,
+                        DiagnosticKind::EmptyParameterName {
+                            counter: unnamed_parameter_counter,
+                        },
                     )?;
                     resolved.name = format!(
                         "unnamed_{}_parameter_{}",
@@ -691,10 +917,11 @@ impl OpenApiImporter {
                     Some(self.import_request_body(request_body, &operation_name, path, method)?);
             }
 
-            for (status, response) in &spec.responses {
+            for (status, response_or_ref) in &spec.responses {
+                let response = self.resolve_response_spec(response_or_ref)?;
                 operation.responses.push(self.import_response(
                     status,
-                    response,
+                    &response,
                     &operation_name,
                     path,
                     method,
@@ -711,7 +938,9 @@ impl OpenApiImporter {
         let schema = param.effective_schema().ok_or_else(|| {
             anyhow::Error::new(self.make_diagnostic(
                 &format!("parameter `{}`", param.name),
-                DiagnosticKind::ParameterMissingSchema { name: param.name.clone() },
+                DiagnosticKind::ParameterMissingSchema {
+                    name: param.name.clone(),
+                },
             ))
         })?;
         let imported = self.import_schema_type(
@@ -726,7 +955,9 @@ impl OpenApiImporter {
             location: param.location.as_ir_location().ok_or_else(|| {
                 anyhow::Error::new(self.make_diagnostic(
                     &format!("parameter `{}`", param.name),
-                    DiagnosticKind::UnsupportedParameterLocation { name: param.name.clone() },
+                    DiagnosticKind::UnsupportedParameterLocation {
+                        name: param.name.clone(),
+                    },
                 ))
             })?,
             type_ref: imported
@@ -746,7 +977,9 @@ impl OpenApiImporter {
         let schema = param.effective_schema().ok_or_else(|| {
             anyhow::Error::new(self.make_diagnostic(
                 &format!("body parameter `{}`", param.name),
-                DiagnosticKind::BodyParameterMissingSchema { name: param.name.clone() },
+                DiagnosticKind::BodyParameterMissingSchema {
+                    name: param.name.clone(),
+                },
             ))
         })?;
 
@@ -754,7 +987,10 @@ impl OpenApiImporter {
             &schema,
             &InlineModelContext::RequestBody {
                 operation_name: operation_name.to_owned(),
-                pointer: format!("#/operations/{operation_name}/body_parameter/{}", param.name),
+                pointer: format!(
+                    "#/operations/{operation_name}/body_parameter/{}",
+                    param.name
+                ),
             },
         )?;
 
@@ -793,7 +1029,9 @@ impl OpenApiImporter {
             let mut schema = param.effective_schema().ok_or_else(|| {
                 anyhow::Error::new(self.make_diagnostic(
                     &format!("formData parameter `{}`", param.name),
-                    DiagnosticKind::FormDataParameterMissingSchema { name: param.name.clone() },
+                    DiagnosticKind::FormDataParameterMissingSchema {
+                        name: param.name.clone(),
+                    },
                 ))
             })?;
             if !param.description.trim().is_empty() {
@@ -805,7 +1043,7 @@ impl OpenApiImporter {
             if param.required {
                 required.push(param.name.clone());
             }
-            properties.insert(param.name.clone(), schema);
+            properties.insert(param.name.clone(), SchemaOrBool::Schema(schema));
         }
 
         let imported = self.import_schema_type(
@@ -857,12 +1095,15 @@ impl OpenApiImporter {
                 if !seen.insert(reference.clone()) {
                     bail!(self.make_pointer_diagnostic(
                         reference,
-                        DiagnosticKind::RecursiveParameterCycle { reference: reference.to_owned() },
+                        DiagnosticKind::RecursiveParameterCycle {
+                            reference: reference.to_owned()
+                        },
                     ));
                 }
 
                 if let Some(parameter) = self.resolve_named_parameter_reference(reference) {
-                    return self.resolve_parameter_inner(&ParameterOrRef::Inline(parameter.clone()), seen);
+                    return self
+                        .resolve_parameter_inner(&ParameterOrRef::Inline(parameter.clone()), seen);
                 }
 
                 if let Some(parameter) = self.resolve_path_parameter_reference(reference)? {
@@ -965,7 +1206,10 @@ impl OpenApiImporter {
                     schema,
                     &InlineModelContext::RequestBody {
                         operation_name: operation_name.to_owned(),
-                        pointer: format!("{content_pointer}/{}/schema", json_pointer_key(media_type)),
+                        pointer: format!(
+                            "{content_pointer}/{}/schema",
+                            json_pointer_key(media_type)
+                        ),
                     },
                 )
             })
@@ -1004,7 +1248,9 @@ impl OpenApiImporter {
                 if !seen.insert(reference.clone()) {
                     bail!(self.make_pointer_diagnostic(
                         reference,
-                        DiagnosticKind::RecursiveRequestBodyCycle { reference: reference.to_owned() },
+                        DiagnosticKind::RecursiveRequestBodyCycle {
+                            reference: reference.to_owned()
+                        },
                     ));
                 }
                 let name = ref_name(reference)?;
@@ -1015,6 +1261,42 @@ impl OpenApiImporter {
                     .get(&name)
                     .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))?;
                 self.resolve_request_body_inner(referenced, reference, seen)
+            }
+        }
+    }
+
+    fn resolve_response_spec(&self, response: &ResponseSpecOrRef) -> Result<ResponseSpec> {
+        match &response.reference {
+            None => Ok(ResponseSpec {
+                description: response.description.clone(),
+                content: response.content.clone(),
+            }),
+            Some(reference) => {
+                let Some(pointer) = reference.strip_prefix("#/") else {
+                    return Err(anyhow!("unsupported reference `{reference}`"));
+                };
+                let segments: Vec<&str> = pointer.split('/').collect();
+                match segments.as_slice() {
+                    // OpenAPI 3: #/components/responses/{name}
+                    ["components", "responses", name] => self
+                        .document
+                        .components
+                        .responses
+                        .get(*name)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("unsupported reference `{reference}`")),
+                    // Swagger 2: #/responses/{name}
+                    ["responses", name] => self
+                        .document
+                        .responses
+                        .get(*name)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("unsupported reference `{reference}`")),
+                    // Inline path reference (e.g. #/paths/.../responses/200) — return
+                    // empty response, preserving the same silent-fallback behaviour that
+                    // existed before ResponseSpecOrRef was introduced.
+                    _ => Ok(ResponseSpec::default()),
+                }
             }
         }
     }
@@ -1060,7 +1342,7 @@ impl OpenApiImporter {
                                     json_pointer_key(status),
                                     json_pointer_key(media_type)
                                 )
-                            }
+                            },
                         ),
                     },
                 )
@@ -1126,9 +1408,10 @@ impl OpenApiImporter {
                 .attributes
                 .insert("enum_values".into(), Value::Array(enum_values.clone()));
             if let Some(schema_type) = schema.primary_schema_type() {
-                model
-                    .attributes
-                    .insert("enum_base_type".into(), Value::String(schema_type.to_owned()));
+                model.attributes.insert(
+                    "enum_base_type".into(),
+                    Value::String(schema_type.to_owned()),
+                );
             }
             if let Some(title) = &schema.title {
                 model
@@ -1193,7 +1476,11 @@ impl OpenApiImporter {
         }
 
         let mut unnamed_field_counter = 0usize;
-        for (field_name, property_schema) in properties {
+        for (field_name, property_schema_or_bool) in properties {
+            // Boolean schemas (OpenAPI 3.1: `false`/`true`) have no codegen meaning — skip.
+            let Some(property_schema) = property_schema_or_bool.as_schema() else {
+                continue;
+            };
             let original_field_name = field_name.clone();
             let field_name = self.normalize_field_name(
                 field_name.clone(),
@@ -1373,7 +1660,11 @@ impl OpenApiImporter {
                         .local_ref_model_names
                         .get(reference)
                         .cloned()
-                        .unwrap_or_else(|| to_pascal_case(&ref_name(reference).unwrap_or_else(|_| "RecursiveModel".into())));
+                        .unwrap_or_else(|| {
+                            to_pascal_case(
+                                &ref_name(reference).unwrap_or_else(|_| "RecursiveModel".into()),
+                            )
+                        });
                     return Ok(ImportedType::plain(TypeRef::named(model_name)));
                 }
 
@@ -1382,7 +1673,8 @@ impl OpenApiImporter {
                 // (e.g. `{allOf: [{$ref: "..."}]}`) are fully shaped before
                 // import_schema_type_normalized sees them, without risking
                 // infinite recursion on self-referential schemas.
-                let resolved = self.resolve_schema_reference_for_all_of(reference, &context.describe())?;
+                let resolved =
+                    self.resolve_schema_reference_for_all_of(reference, &context.describe())?;
                 if schema_is_object_like(&resolved) {
                     let already_registered = self.local_ref_model_names.contains_key(reference);
                     if !already_registered {
@@ -1492,18 +1784,18 @@ impl OpenApiImporter {
                 "number" => ImportedType::plain(TypeRef::primitive("number")),
                 "boolean" => ImportedType::plain(TypeRef::primitive("boolean")),
                 "array" => {
-                    let item_schema = schema.items.as_ref().ok_or_else(|| {
-                        anyhow::Error::new(self.make_diagnostic(
-                            &context.describe(),
-                            DiagnosticKind::ArrayMissingItems,
-                        ))
-                    })?;
-                    let imported = self.import_schema_type(item_schema, context)?;
-                    ImportedType::plain(TypeRef::array(
-                        imported
-                            .type_ref
-                            .unwrap_or_else(|| TypeRef::primitive("any")),
-                    ))
+                    match schema.items.as_ref() {
+                        Some(item_schema) => {
+                            let imported = self.import_schema_type(item_schema, context)?;
+                            ImportedType::plain(TypeRef::array(
+                                imported
+                                    .type_ref
+                                    .unwrap_or_else(|| TypeRef::primitive("any")),
+                            ))
+                        }
+                        // JSON Schema: array without `items` means array of any.
+                        None => ImportedType::plain(TypeRef::array(TypeRef::primitive("any"))),
+                    }
                 }
                 "object" => self.import_object_type(schema, context, None)?,
                 "file" => ImportedType::plain(TypeRef::primitive("binary")),
@@ -1514,7 +1806,9 @@ impl OpenApiImporter {
                 other => {
                     self.handle_unhandled(
                         &context.describe(),
-                        DiagnosticKind::UnsupportedSchemaType { schema_type: other.to_owned() },
+                        DiagnosticKind::UnsupportedSchemaType {
+                            schema_type: other.to_owned(),
+                        },
                     )?;
                     ImportedType::plain(TypeRef::primitive("any"))
                 }
@@ -1546,7 +1840,9 @@ impl OpenApiImporter {
         let type_ref = match type_refs.len() {
             0 => Some(TypeRef::primitive("any")),
             1 => type_refs.into_iter().next(),
-            _ => Some(TypeRef::Union { variants: type_refs }),
+            _ => Some(TypeRef::Union {
+                variants: type_refs,
+            }),
         };
 
         Ok(Some(ImportedType { type_ref, nullable }))
@@ -1596,17 +1892,31 @@ impl OpenApiImporter {
             }
 
             if is_known_but_unimplemented_schema_keyword(keyword) {
-                self.handle_unhandled(context, DiagnosticKind::UnsupportedSchemaKeyword { keyword: keyword.clone() })?;
+                self.handle_unhandled(
+                    context,
+                    DiagnosticKind::UnsupportedSchemaKeyword {
+                        keyword: keyword.clone(),
+                    },
+                )?;
                 continue;
             }
 
-            self.handle_unhandled(context, DiagnosticKind::UnknownSchemaKeyword { keyword: keyword.clone() })?;
+            self.handle_unhandled(
+                context,
+                DiagnosticKind::UnknownSchemaKeyword {
+                    keyword: keyword.clone(),
+                },
+            )?;
         }
 
         Ok(())
     }
 
-    fn normalize_schema<'a>(&mut self, schema: &'a Schema, context: &str) -> Result<Cow<'a, Schema>> {
+    fn normalize_schema<'a>(
+        &mut self,
+        schema: &'a Schema,
+        context: &str,
+    ) -> Result<Cow<'a, Schema>> {
         if schema.all_of.is_none() {
             return Ok(Cow::Borrowed(schema));
         }
@@ -1662,7 +1972,9 @@ impl OpenApiImporter {
         if self.active_all_of_refs.iter().any(|item| item == reference) {
             self.handle_unhandled(
                 context,
-                DiagnosticKind::AllOfRecursiveCycle { reference: reference.to_owned() },
+                DiagnosticKind::AllOfRecursiveCycle {
+                    reference: reference.to_owned(),
+                },
             )?;
             return Ok(Schema::default());
         }
@@ -1697,16 +2009,20 @@ impl OpenApiImporter {
         }
 
         let (resolved, remainder): (ResolvedSchemaRef<'_>, &[String]) = match segments.as_slice() {
-            [root, collection, name, rest @ ..] if root == "components" && collection == "schemas" => (
-                ResolvedSchemaRef::Borrowed(
-                    self.document
-                        .components
-                        .schemas
-                        .get(name)
-                        .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))?,
-                ),
-                rest,
-            ),
+            [root, collection, name, rest @ ..]
+                if root == "components" && collection == "schemas" =>
+            {
+                (
+                    ResolvedSchemaRef::Borrowed(
+                        self.document
+                            .components
+                            .schemas
+                            .get(name)
+                            .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))?,
+                    ),
+                    rest,
+                )
+            }
             [root, name, rest @ ..] if root == "definitions" => (
                 ResolvedSchemaRef::Borrowed(
                     self.document
@@ -1779,18 +2095,27 @@ impl OpenApiImporter {
                         _ => None,
                     })
                     .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))?;
-                let response = operation
+                let response_or_ref = operation
                     .responses
                     .get(status)
                     .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))?;
-                return resolve_response_schema_reference(response, rest, reference);
+                let response = self.resolve_response_spec(response_or_ref)?;
+                return resolve_response_schema_reference(&response, rest, reference);
             }
             // #/paths/{path}/{method}/requestBody/content/{media_type}/schema/...
-            [root, path, method, rb_key, content_key, media_type, schema_key, rest @ ..]
-                if root == "paths"
-                    && rb_key == "requestBody"
-                    && content_key == "content"
-                    && schema_key == "schema" =>
+            [
+                root,
+                path,
+                method,
+                rb_key,
+                content_key,
+                media_type,
+                schema_key,
+                rest @ ..,
+            ] if root == "paths"
+                && rb_key == "requestBody"
+                && content_key == "content"
+                && schema_key == "schema" =>
             {
                 let operation = self
                     .document
@@ -1817,11 +2142,15 @@ impl OpenApiImporter {
                 return resolve_nested_schema_reference(schema, rest, reference);
             }
             // #/paths/{path}/{method}/parameters/{index}/schema/...
-            [root, path, method, params_key, index_str, schema_key, rest @ ..]
-                if root == "paths"
-                    && params_key == "parameters"
-                    && schema_key == "schema" =>
-            {
+            [
+                root,
+                path,
+                method,
+                params_key,
+                index_str,
+                schema_key,
+                rest @ ..,
+            ] if root == "paths" && params_key == "parameters" && schema_key == "schema" => {
                 let idx: usize = index_str
                     .parse()
                     .map_err(|_| anyhow!("unsupported reference `{reference}`"))?;
@@ -1894,9 +2223,15 @@ impl OpenApiImporter {
         }
 
         *unnamed_field_counter += 1;
+        // Point at the specific empty-string key within the properties mapping so
+        // the source preview and line number resolve to the offending `"":` entry
+        // rather than the `properties:` block as a whole.
+        let specific_pointer = format!("{}/{}", context, json_pointer_key(&field_name));
         self.handle_unhandled(
-            context,
-            DiagnosticKind::EmptyPropertyKey { counter: *unnamed_field_counter },
+            &specific_pointer,
+            DiagnosticKind::EmptyPropertyKey {
+                counter: *unnamed_field_counter,
+            },
         )?;
         Ok(format!("unnamed_field_{}", unnamed_field_counter))
     }
@@ -1915,7 +2250,7 @@ impl OpenApiImporter {
         let overlay_schema_type = overlay.schema_type.clone();
         merge_non_codegen_optional_field(&mut base.definitions, overlay.definitions);
         merge_non_codegen_optional_field(&mut base.title, overlay.title);
-        merge_optional_field(&mut base.format, overlay.format, "format", context, self)?;
+        merge_non_codegen_optional_field(&mut base.format, overlay.format);
         base.schema_type = merge_schema_types(
             inferred_base_type,
             inferred_overlay_type,
@@ -1926,14 +2261,16 @@ impl OpenApiImporter {
             context,
             self,
         )?;
-        merge_optional_field(&mut base.const_value, overlay.const_value, "const", context, self)?;
-        merge_non_codegen_optional_field(&mut base._discriminator, overlay._discriminator);
-        base.enum_values = merge_enum_values(
-            base.enum_values.take(),
-            overlay.enum_values,
+        merge_optional_field(
+            &mut base.const_value,
+            overlay.const_value,
+            "const",
             context,
             self,
         )?;
+        merge_non_codegen_optional_field(&mut base._discriminator, overlay._discriminator);
+        base.enum_values =
+            merge_enum_values(base.enum_values.take(), overlay.enum_values, context, self)?;
         // incompatible anyOf/oneOf in allOf — keep the base side rather than erroring.
         merge_non_codegen_optional_field(&mut base.any_of, overlay.any_of);
         merge_non_codegen_optional_field(&mut base.one_of, overlay.one_of);
@@ -1957,7 +2294,10 @@ impl OpenApiImporter {
             (None, None) => {}
         }
 
-        match (base.additional_properties.take(), overlay.additional_properties) {
+        match (
+            base.additional_properties.take(),
+            overlay.additional_properties,
+        ) {
             (
                 Some(AdditionalProperties::Schema(left)),
                 Some(AdditionalProperties::Schema(right)),
@@ -2033,10 +2373,16 @@ impl OpenApiImporter {
         self.validate_schema_keywords(schema, context)?;
 
         if let Some(reference) = &schema.reference {
-            if self.active_object_view_refs.iter().any(|item| item == reference) {
+            if self
+                .active_object_view_refs
+                .iter()
+                .any(|item| item == reference)
+            {
                 self.handle_unhandled(
                     context,
-                    DiagnosticKind::AllOfRecursiveCycle { reference: reference.clone() },
+                    DiagnosticKind::AllOfRecursiveCycle {
+                        reference: reference.clone(),
+                    },
                 )?;
                 return Ok(());
             }
@@ -2060,7 +2406,11 @@ impl OpenApiImporter {
         }
 
         if let Some(properties) = &schema.properties {
-            for (field_name, property_schema) in properties {
+            for (field_name, property_schema_or_bool) in properties {
+                // Skip boolean schemas — they have no fields to contribute.
+                let Some(property_schema) = property_schema_or_bool.as_schema() else {
+                    continue;
+                };
                 if let Some(existing) = view.properties.shift_remove(field_name) {
                     view.properties.insert(
                         field_name.clone(),
@@ -2099,24 +2449,26 @@ impl OpenApiImporter {
                     nullable: true,
                 },
                 "array" => {
-                    let item_schema = schema.items.as_ref().ok_or_else(|| {
-                        anyhow::Error::new(self.make_diagnostic(
-                            &context.describe(),
-                            DiagnosticKind::ArrayMissingItems,
-                        ))
-                    })?;
-                    let imported = self.import_schema_type(item_schema, context)?;
-                    ImportedType::plain(TypeRef::array(
-                        imported
-                            .type_ref
-                            .unwrap_or_else(|| TypeRef::primitive("any")),
-                    ))
+                    match schema.items.as_ref() {
+                        Some(item_schema) => {
+                            let imported = self.import_schema_type(item_schema, context)?;
+                            ImportedType::plain(TypeRef::array(
+                                imported
+                                    .type_ref
+                                    .unwrap_or_else(|| TypeRef::primitive("any")),
+                            ))
+                        }
+                        // JSON Schema: array without `items` means array of any.
+                        None => ImportedType::plain(TypeRef::array(TypeRef::primitive("any"))),
+                    }
                 }
                 "object" => self.import_object_type(schema, context, None)?,
                 other => {
                     self.handle_unhandled(
                         &context.describe(),
-                        DiagnosticKind::UnsupportedSchemaType { schema_type: other.to_owned() },
+                        DiagnosticKind::UnsupportedSchemaType {
+                            schema_type: other.to_owned(),
+                        },
                     )?;
                     ImportedType::plain(TypeRef::primitive("any"))
                 }
@@ -2282,8 +2634,8 @@ impl OpenApiImporter {
     /// `"parameter \`foo\`"`).
     fn make_diagnostic(&self, context: &str, kind: DiagnosticKind) -> OpenApiDiagnostic {
         if context.starts_with("#/") {
-            let preview = self.source.render_pointer_preview(context);
-            OpenApiDiagnostic::from_pointer(kind, context, preview)
+            let (preview, line) = self.source.pointer_info(context);
+            OpenApiDiagnostic::from_pointer(kind, context, preview, line)
         } else {
             OpenApiDiagnostic::from_named_context(kind, context)
         }
@@ -2292,8 +2644,8 @@ impl OpenApiImporter {
     /// Build a pointer diagnostic using the importer's source for preview
     /// rendering.
     fn make_pointer_diagnostic(&self, pointer: &str, kind: DiagnosticKind) -> OpenApiDiagnostic {
-        let preview = self.source.render_pointer_preview(pointer);
-        OpenApiDiagnostic::from_pointer(kind, pointer, preview)
+        let (preview, line) = self.source.pointer_info(pointer);
+        OpenApiDiagnostic::from_pointer(kind, pointer, preview, line)
     }
 }
 
@@ -2308,6 +2660,9 @@ struct OpenApiSource {
     format: SourceFormat,
     raw: String,
     value: OnceLock<Option<Value>>,
+    /// Exact pointer → 1-based line map, built lazily from the YAML event stream.
+    /// `None` means the crate is JSON (uses heuristic instead) or YAML parsing failed.
+    line_map: OnceLock<Option<HashMap<String, usize>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2322,6 +2677,7 @@ impl OpenApiSource {
             format,
             raw,
             value: OnceLock::new(),
+            line_map: OnceLock::new(),
         }
     }
 
@@ -2336,6 +2692,102 @@ impl OpenApiSource {
             SourceFormat::Yaml => serde_yaml::to_string(node).ok()?,
         };
         Some(truncate_preview(&rendered, 10))
+    }
+
+    /// Return `(preview_string, 1_based_line)` for the node at `pointer`.
+    ///
+    /// For YAML sources both values are derived together: we look up the exact
+    /// key line from the event-stream map and then slice the raw text from that
+    /// line, so the stored line and the start of the preview are always the
+    /// same point in the file.  For JSON sources we fall back to the
+    /// serde-rendered preview and a text-search heuristic line number.
+    fn pointer_info(&self, pointer: &str) -> (Option<String>, Option<usize>) {
+        match self.format {
+            SourceFormat::Yaml => {
+                let key = pointer.strip_prefix('#').unwrap_or(pointer);
+                let line = self
+                    .line_map
+                    .get_or_init(|| Some(build_yaml_line_map(&self.raw)))
+                    .as_ref()
+                    .and_then(|m| m.get(key).copied());
+                let preview = line.map(|l| self.raw_preview_from_line(l));
+                (preview, line)
+            }
+            SourceFormat::Json => {
+                let preview = self.render_pointer_preview(pointer);
+                let line = self.resolve_pointer_line_heuristic(pointer);
+                (preview, line)
+            }
+        }
+    }
+
+    /// Slice `max_lines` raw source lines starting at 1-based `start_line`,
+    /// dedented to remove the leading whitespace shared by all lines.
+    fn raw_preview_from_line(&self, start_line: usize) -> String {
+        const MAX_LINES: usize = 10;
+        let lines: Vec<&str> = self
+            .raw
+            .lines()
+            .skip(start_line.saturating_sub(1))
+            .take(MAX_LINES)
+            .collect();
+        // Compute common leading-whitespace indent so the preview isn't
+        // rendered with the full nesting depth.
+        let indent = lines
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0);
+        let dedented: Vec<&str> = lines.iter().map(|l| &l[indent.min(l.len())..]).collect();
+        dedented.join("\n")
+    }
+    /// Return the exact 1-based line number for the node identified by `pointer`.
+    ///
+    /// For YAML sources this is resolved via an exact pointer→line map produced
+    /// by walking the YAML event stream (see [`build_yaml_line_map`]).  For JSON
+    /// sources a best-effort text-search heuristic is used as a fallback.
+    fn resolve_pointer_line(&self, pointer: &str) -> Option<usize> {
+        // For YAML, pointer_info() is the unified entry point; this helper is
+        // retained for callers that only need the line (e.g. make_diagnostic
+        // routes through pointer_info directly).
+        let key = pointer.strip_prefix('#').unwrap_or(pointer);
+        match self.format {
+            SourceFormat::Yaml => self
+                .line_map
+                .get_or_init(|| Some(build_yaml_line_map(&self.raw)))
+                .as_ref()
+                .and_then(|m| m.get(key).copied()),
+            SourceFormat::Json => self.resolve_pointer_line_heuristic(pointer),
+        }
+    }
+
+    /// Text-search heuristic used for JSON sources (or as a last-resort fallback).
+    fn resolve_pointer_line_heuristic(&self, pointer: &str) -> Option<usize> {
+        let inner = pointer.strip_prefix('#').unwrap_or(pointer);
+        let segments: Vec<String> = inner
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.replace("~1", "/").replace("~0", "~"))
+            .collect();
+
+        let lines: Vec<&str> = self.raw.lines().collect();
+        let mut search_from = 0usize;
+        let mut last_found: Option<usize> = None;
+
+        for segment in &segments {
+            let yaml_pat = format!("{}:", segment);
+            let json_pat = format!("\"{}\":", segment);
+            for (idx, line) in lines.iter().enumerate().skip(search_from) {
+                let trimmed = line.trim();
+                if trimmed.starts_with(&yaml_pat) || trimmed.starts_with(&json_pat) {
+                    last_found = Some(idx + 1);
+                    search_from = idx + 1;
+                    break;
+                }
+            }
+        }
+        last_found
     }
 
     fn parse_value(&self) -> Option<Value> {
@@ -2362,6 +2814,172 @@ fn truncate_preview(rendered: &str, max_lines: usize) -> String {
         .collect::<Vec<_>>();
     output.push("...".into());
     output.join("\n")
+}
+
+/// Build an exact JSON-pointer → 1-based-line map by walking the YAML event
+/// stream.  Every key scalar's line is recorded under the pointer formed by
+/// appending that key (RFC 6901-encoded) to the parent pointer.  This gives
+/// precise, heuristic-free location data for any depth, including empty-string
+/// keys and numeric array indices.
+fn build_yaml_line_map(raw: &str) -> HashMap<String, usize> {
+    use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
+    use yaml_rust2::scanner::Marker;
+
+    enum Frame {
+        Mapping {
+            ptr: String,
+            /// `true`  = next Scalar event is a key
+            /// `false` = next event is the value for `pending_key`
+            expecting_key: bool,
+            pending_key: String,
+            /// 1-based line of `pending_key`; used as the stored line for
+            /// scalar values (key and value are on the same line).  Complex
+            /// values (MappingStart/SequenceStart) use the event's own mark
+            /// instead, which points at the first line of rendered content.
+            pending_line: usize,
+        },
+        Sequence {
+            ptr: String,
+            index: usize,
+        },
+    }
+
+    struct Collector {
+        stack: Vec<Frame>,
+        map: HashMap<String, usize>,
+    }
+
+    /// RFC 6901 segment encoding (~ → ~0, / → ~1).
+    fn enc(key: &str) -> String {
+        key.replace('~', "~0").replace('/', "~1")
+    }
+
+    impl MarkedEventReceiver for Collector {
+        fn on_event(&mut self, ev: Event, mark: Marker) {
+            // yaml-rust2 Marker::line() is already 1-based.
+            let line = mark.line();
+
+            match ev {
+                // ── Mapping / Sequence start ───────────────────────────────
+                Event::MappingStart(..) | Event::SequenceStart(..) => {
+                    let is_mapping = matches!(ev, Event::MappingStart(..));
+
+                    // Phase 1: derive the child pointer from the parent frame.
+                    // We compute owned Strings so the borrow on self.stack ends
+                    // before we mutate self.map / self.stack below.
+                    let (child_ptr, record_line) = match self.stack.last() {
+                        None => (String::new(), None), // root node
+                        Some(Frame::Mapping {
+                            ptr,
+                            expecting_key: false,
+                            pending_key,
+                            pending_line,
+                        }) => {
+                            // Record the KEY's line (`pending_line`) so that
+                            // `raw_preview_from_line` starts exactly at the key
+                            // (e.g. `"":`), which is what users and the frontend
+                            // expect to see highlighted.
+                            (format!("{}/{}", ptr, enc(pending_key)), Some(*pending_line))
+                        }
+                        Some(Frame::Sequence { ptr, index }) => {
+                            (format!("{}/{}", ptr, index), Some(line))
+                        }
+                        // expecting_key == true here would mean a nested
+                        // structure used as a mapping key — invalid YAML.
+                        _ => return,
+                    };
+
+                    // Phase 2: record, update parent, push child (no active
+                    // borrow on self.stack from this point).
+                    if let Some(l) = record_line {
+                        self.map.insert(child_ptr.clone(), l);
+                    }
+                    match self.stack.last_mut() {
+                        Some(Frame::Mapping { expecting_key, .. }) => *expecting_key = true,
+                        Some(Frame::Sequence { index, .. }) => *index += 1,
+                        None => {}
+                    }
+                    if is_mapping {
+                        self.stack.push(Frame::Mapping {
+                            ptr: child_ptr,
+                            expecting_key: true,
+                            pending_key: String::new(),
+                            pending_line: 0,
+                        });
+                    } else {
+                        self.stack.push(Frame::Sequence {
+                            ptr: child_ptr,
+                            index: 0,
+                        });
+                    }
+                }
+
+                // ── Mapping / Sequence end ────────────────────────────────
+                Event::MappingEnd | Event::SequenceEnd => {
+                    self.stack.pop();
+                }
+
+                // ── Scalar ────────────────────────────────────────────────
+                Event::Scalar(value, ..) => {
+                    // Phase 1: figure out what the scalar represents.
+                    let is_key = matches!(
+                        self.stack.last(),
+                        Some(Frame::Mapping { expecting_key: true, .. })
+                    );
+                    let value_info: Option<(String, usize)> = if !is_key {
+                        match self.stack.last() {
+                            Some(Frame::Mapping {
+                                ptr,
+                                expecting_key: false,
+                                pending_key,
+                                pending_line,
+                            }) => Some((format!("{}/{}", ptr, enc(pending_key)), *pending_line)),
+                            Some(Frame::Sequence { ptr, index }) => {
+                                Some((format!("{}/{}", ptr, index), line))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Phase 2: apply (borrows above have been released).
+                    if is_key {
+                        if let Some(Frame::Mapping {
+                            expecting_key,
+                            pending_key,
+                            pending_line,
+                            ..
+                        }) = self.stack.last_mut()
+                        {
+                            *pending_key = value;
+                            *pending_line = line;
+                            *expecting_key = false;
+                        }
+                    } else if let Some((child_ptr, record_line)) = value_info {
+                        self.map.insert(child_ptr, record_line);
+                        match self.stack.last_mut() {
+                            Some(Frame::Mapping { expecting_key, .. }) => *expecting_key = true,
+                            Some(Frame::Sequence { index, .. }) => *index += 1,
+                            _ => {}
+                        }
+                    }
+                }
+
+                _ => {}
+            }
+        }
+    }
+
+    let mut collector = Collector {
+        stack: Vec::new(),
+        map: HashMap::new(),
+    };
+    let mut parser = Parser::new(raw.chars());
+    if parser.load(&mut collector, false).is_err() {
+        return HashMap::new();
+    }
+    collector.map
 }
 
 #[derive(Debug, Clone)]
@@ -2433,14 +3051,9 @@ impl InlineModelContext {
     fn describe(&self) -> String {
         match self {
             InlineModelContext::NamedSchema { pointer, .. } => pointer.clone(),
-            InlineModelContext::Field {
-                pointer,
-                ..
-            } => pointer.clone(),
+            InlineModelContext::Field { pointer, .. } => pointer.clone(),
             InlineModelContext::RequestBody { pointer, .. } => pointer.clone(),
-            InlineModelContext::Response {
-                pointer, ..
-            } => pointer.clone(),
+            InlineModelContext::Response { pointer, .. } => pointer.clone(),
             InlineModelContext::Parameter { name } => format!("parameter `{name}`"),
         }
     }
@@ -2448,21 +3061,21 @@ impl InlineModelContext {
     fn synthetic_pointer(&self, model_name: &str) -> String {
         match self {
             Self::NamedSchema { pointer, .. } => pointer.clone(),
-            Self::Field {
-                pointer, ..
-            } => pointer.clone(),
+            Self::Field { pointer, .. } => pointer.clone(),
             Self::RequestBody { pointer, .. } => pointer.clone(),
-            Self::Response {
-                pointer, ..
-            } => pointer.clone(),
+            Self::Response { pointer, .. } => pointer.clone(),
             Self::Parameter { name } => format!("#/synthetic/parameters/{name}/{model_name}"),
         }
     }
 }
 
+/// Version-specific input struct for Swagger 2.0 documents.
+/// Top-level `definitions`, `parameters`, `responses`, and `consumes` live here;
+/// OpenAPI 3's `components` is absent.
 #[derive(Debug, Deserialize, Clone)]
-struct OpenApiDocument {
+struct Swagger2Document {
     #[serde(default)]
+    #[serde(deserialize_with = "deserialize_paths_map")]
     paths: BTreeMap<String, PathItem>,
     #[serde(default)]
     consumes: Vec<String>,
@@ -2472,7 +3085,64 @@ struct OpenApiDocument {
     #[serde(default)]
     definitions: BTreeMap<String, Schema>,
     #[serde(default)]
+    responses: BTreeMap<String, ResponseSpec>,
+}
+
+/// Version-specific input struct for OpenAPI 3.x documents.
+/// Top-level `definitions`, `consumes`, etc. are absent; everything lives under `components`.
+#[derive(Debug, Deserialize, Clone)]
+struct OpenApi3Document {
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_paths_map")]
+    paths: BTreeMap<String, PathItem>,
+    #[serde(default)]
     components: Components,
+}
+
+/// Normalised internal document form fed to `OpenApiImporter`.
+/// Retains `Deserialize` so unit-test helpers can construct it directly from inline JSON fixtures.
+#[derive(Debug, Deserialize, Clone)]
+struct OpenApiDocument {
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_paths_map")]
+    paths: BTreeMap<String, PathItem>,
+    #[serde(default)]
+    consumes: Vec<String>,
+    #[serde(default)]
+    parameters: BTreeMap<String, ParameterSpec>,
+    #[serde(rename = "definitions")]
+    #[serde(default)]
+    definitions: BTreeMap<String, Schema>,
+    #[serde(default)]
+    responses: BTreeMap<String, ResponseSpec>,
+    #[serde(default)]
+    components: Components,
+}
+
+impl From<Swagger2Document> for OpenApiDocument {
+    fn from(doc: Swagger2Document) -> Self {
+        Self {
+            paths: doc.paths,
+            consumes: doc.consumes,
+            parameters: doc.parameters,
+            definitions: doc.definitions,
+            responses: doc.responses,
+            components: Components::default(),
+        }
+    }
+}
+
+impl From<OpenApi3Document> for OpenApiDocument {
+    fn from(doc: OpenApi3Document) -> Self {
+        Self {
+            paths: doc.paths,
+            consumes: Vec::new(),
+            parameters: BTreeMap::new(),
+            definitions: BTreeMap::new(),
+            responses: BTreeMap::new(),
+            components: doc.components,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -2521,7 +3191,7 @@ struct OperationSpec {
     #[serde(default)]
     request_body: Option<RequestBodyOrRef>,
     #[serde(default)]
-    responses: BTreeMap<String, ResponseSpec>,
+    responses: BTreeMap<String, ResponseSpecOrRef>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -2552,7 +3222,8 @@ struct ParameterSpec {
 
 impl ParameterSpec {
     fn effective_schema(&self) -> Option<Schema> {
-        self.schema.clone()
+        self.schema
+            .clone()
             .or_else(|| {
                 self.parameter_type.clone().map(|schema_type| Schema {
                     schema_type: Some(schema_type),
@@ -2654,6 +3325,21 @@ enum RequestBodyOrRef {
     Inline(RequestBodySpec),
 }
 
+/// A response entry that may be either an inline spec or a `$ref` pointer.
+/// Using a flat struct (rather than an untagged enum) ensures that
+/// `serde_path_to_error` can track the full JSON/YAML path through the
+/// struct's fields, giving accurate error locations on parse failure.
+#[derive(Debug, Deserialize, Default, Clone)]
+struct ResponseSpecOrRef {
+    #[serde(rename = "$ref")]
+    #[serde(default)]
+    reference: Option<String>,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    content: BTreeMap<String, MediaTypeSpec>,
+}
+
 #[derive(Debug, Deserialize, Default, Clone)]
 struct ResponseSpec {
     #[serde(default)]
@@ -2695,7 +3381,7 @@ struct Schema {
     #[serde(default)]
     enum_values: Option<Vec<Value>>,
     #[serde(default)]
-    properties: Option<IndexMap<String, Schema>>,
+    properties: Option<IndexMap<String, SchemaOrBool>>,
     #[serde(default)]
     required: Option<Vec<String>>,
     #[serde(default)]
@@ -2709,6 +3395,39 @@ struct Schema {
     #[serde(rename = "oneOf")]
     #[serde(default)]
     one_of: Option<Vec<Schema>>,
+    // Capture numeric constraint keywords explicitly to avoid serde_yaml integer
+    // coercion failures that occur when these pass through the flattened map.
+    #[serde(default)]
+    minimum: Option<Value>,
+    #[serde(default)]
+    maximum: Option<Value>,
+    #[serde(rename = "exclusiveMinimum")]
+    #[serde(default)]
+    exclusive_minimum: Option<Value>,
+    #[serde(rename = "exclusiveMaximum")]
+    #[serde(default)]
+    exclusive_maximum: Option<Value>,
+    #[serde(default)]
+    #[serde(rename = "multipleOf")]
+    multiple_of: Option<Value>,
+    #[serde(default)]
+    #[serde(rename = "minLength")]
+    min_length: Option<Value>,
+    #[serde(default)]
+    #[serde(rename = "maxLength")]
+    max_length: Option<Value>,
+    #[serde(default)]
+    #[serde(rename = "minItems")]
+    min_items: Option<Value>,
+    #[serde(default)]
+    #[serde(rename = "maxItems")]
+    max_items: Option<Value>,
+    #[serde(default)]
+    #[serde(rename = "minProperties")]
+    min_properties: Option<Value>,
+    #[serde(default)]
+    #[serde(rename = "maxProperties")]
+    max_properties: Option<Value>,
     #[serde(flatten)]
     #[serde(default)]
     extra_keywords: BTreeMap<String, Value>,
@@ -2719,6 +3438,64 @@ struct Schema {
 enum AdditionalProperties {
     Bool(bool),
     Schema(Box<Schema>),
+}
+
+/// A property schema that may be a full schema object or a boolean schema
+/// (valid in OpenAPI 3.1 / JSON Schema: `false` = never valid, `true` = always valid).
+/// Boolean schemas are treated as absent properties for code-generation purposes.
+#[derive(Debug, Clone, PartialEq)]
+enum SchemaOrBool {
+    Schema(Schema),
+    Bool(bool),
+}
+
+impl Default for SchemaOrBool {
+    fn default() -> Self {
+        SchemaOrBool::Schema(Schema::default())
+    }
+}
+
+impl SchemaOrBool {
+    /// Returns the inner schema, or `None` for boolean schemas.
+    fn as_schema(&self) -> Option<&Schema> {
+        match self {
+            SchemaOrBool::Schema(s) => Some(s),
+            SchemaOrBool::Bool(_) => None,
+        }
+    }
+    fn into_schema(self) -> Option<Schema> {
+        match self {
+            SchemaOrBool::Schema(s) => Some(s),
+            SchemaOrBool::Bool(_) => None,
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SchemaOrBool {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct SchemaOrBoolVisitor;
+        impl<'de> serde::de::Visitor<'de> for SchemaOrBoolVisitor {
+            type Value = SchemaOrBool;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "a JSON Schema object or boolean")
+            }
+            // Boolean schemas: `false` = never valid, `true` = always valid.
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> std::result::Result<SchemaOrBool, E> {
+                Ok(SchemaOrBool::Bool(v))
+            }
+            // Map: deserialize as a full Schema.  Using MapAccessDeserializer keeps
+            // the serde_path_to_error-wrapped MapAccess in play so field-level
+            // errors within the schema are tracked correctly.
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> std::result::Result<SchemaOrBool, A::Error> {
+                let schema = Schema::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(SchemaOrBool::Schema(schema))
+            }
+        }
+        deserializer.deserialize_any(SchemaOrBoolVisitor)
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -2827,13 +3604,17 @@ fn resolve_response_schema_reference(
 ) -> Result<Schema> {
     match segments {
         // Referencing the response object itself — use its primary schema.
+        // If the response has no content (e.g. a description-only response used
+        // mistakenly as a schema $ref), return an empty schema so callers treat
+        // this as `any` rather than failing.
         [] => {
             let schema = response
                 .content
                 .values()
                 .find_map(|media| media.schema.as_ref())
-                .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))?;
-            Ok(schema.clone())
+                .cloned()
+                .unwrap_or_default();
+            Ok(schema)
         }
         // content/{media_type}/schema/...
         [content_key, media_type, schema_key, rest @ ..]
@@ -2906,14 +3687,24 @@ fn resolve_nested_schema_reference(
         }
         [segment, name, remainder @ ..] if segment == "properties" => {
             // Try top-level properties first.
-            if let Some(property) = schema.properties.as_ref().and_then(|p| p.get(name)) {
+            if let Some(property) = schema
+                .properties
+                .as_ref()
+                .and_then(|p| p.get(name))
+                .and_then(SchemaOrBool::as_schema)
+            {
                 return resolve_nested_schema_reference(property, remainder, reference);
             }
             // If the schema uses allOf with no top-level properties (e.g. a schema
             // whose properties are spread across its allOf members), search members.
             if let Some(all_of) = &schema.all_of {
                 for member in all_of {
-                    if let Some(property) = member.properties.as_ref().and_then(|p| p.get(name)) {
+                    if let Some(property) = member
+                        .properties
+                        .as_ref()
+                        .and_then(|p| p.get(name))
+                        .and_then(SchemaOrBool::as_schema)
+                    {
                         return resolve_nested_schema_reference(property, remainder, reference);
                     }
                 }
@@ -2993,7 +3784,11 @@ fn is_generic_object_placeholder(schema: &Schema) -> bool {
 
 fn schema_runtime_attributes(schema: &Schema) -> Attributes {
     let mut attributes = Attributes::default();
-    if let Some(description) = schema.extra_keywords.get("description").and_then(Value::as_str) {
+    if let Some(description) = schema
+        .extra_keywords
+        .get("description")
+        .and_then(Value::as_str)
+    {
         attributes.insert("description".into(), Value::String(description.to_owned()));
     }
     if let Some(content_encoding) = schema
@@ -3112,8 +3907,7 @@ fn is_known_ignored_schema_keyword(keyword: &str) -> bool {
 fn is_known_but_unimplemented_schema_keyword(keyword: &str) -> bool {
     matches!(
         keyword,
-        "if"
-            | "then"
+        "if" | "then"
             | "else"
             | "contains"
             | "prefixItems"
@@ -3242,7 +4036,9 @@ where
         (Some(_), Some(_)) => {
             importer.handle_unhandled(
                 context,
-                DiagnosticKind::IncompatibleAllOfField { field: field_name.to_owned() },
+                DiagnosticKind::IncompatibleAllOfField {
+                    field: field_name.to_owned(),
+                },
             )?;
         }
     }
@@ -3405,8 +4201,8 @@ fn merge_enum_values(
             let merged = left_values
                 .iter()
                 .filter(|value| {
-                    let key = serde_json::to_string(value)
-                        .expect("enum values should always serialize");
+                    let key =
+                        serde_json::to_string(value).expect("enum values should always serialize");
                     right_keys.contains(&key)
                 })
                 .cloned()
@@ -3426,26 +4222,23 @@ fn merge_enum_values(
 }
 
 fn infer_schema_type_for_merge(schema: &Schema) -> Option<SchemaTypeDecl> {
-    schema
-        .schema_type
-        .clone()
-        .or_else(|| {
-            if schema.properties.is_some() || schema.additional_properties.is_some() {
-                Some(SchemaTypeDecl::Single("object".into()))
-            } else if schema.items.is_some() {
-                Some(SchemaTypeDecl::Single("array".into()))
-            } else if let Some(enum_values) = &schema.enum_values {
-                match infer_enum_type(enum_values, schema.format.as_deref()) {
-                    TypeRef::Primitive { name } => Some(SchemaTypeDecl::Single(name)),
-                    _ => None,
-                }
-            } else {
-                infer_format_only_type(schema.format.as_deref()).and_then(|type_ref| match type_ref {
-                    TypeRef::Primitive { name } => Some(SchemaTypeDecl::Single(name)),
-                    _ => None,
-                })
+    schema.schema_type.clone().or_else(|| {
+        if schema.properties.is_some() || schema.additional_properties.is_some() {
+            Some(SchemaTypeDecl::Single("object".into()))
+        } else if schema.items.is_some() {
+            Some(SchemaTypeDecl::Single("array".into()))
+        } else if let Some(enum_values) = &schema.enum_values {
+            match infer_enum_type(enum_values, schema.format.as_deref()) {
+                TypeRef::Primitive { name } => Some(SchemaTypeDecl::Single(name)),
+                _ => None,
             }
-        })
+        } else {
+            infer_format_only_type(schema.format.as_deref()).and_then(|type_ref| match type_ref {
+                TypeRef::Primitive { name } => Some(SchemaTypeDecl::Single(name)),
+                _ => None,
+            })
+        }
+    })
 }
 
 fn infer_enum_type(enum_values: &[Value], format: Option<&str>) -> TypeRef {
@@ -3485,20 +4278,29 @@ fn infer_format_only_type(format: Option<&str>) -> Option<TypeRef> {
 
 fn merge_properties(
     importer: &mut OpenApiImporter,
-    mut left: IndexMap<String, Schema>,
-    right: IndexMap<String, Schema>,
+    mut left: IndexMap<String, SchemaOrBool>,
+    right: IndexMap<String, SchemaOrBool>,
     context: &str,
-) -> Result<IndexMap<String, Schema>> {
+) -> Result<IndexMap<String, SchemaOrBool>> {
     for (key, value) in right {
         if let Some(existing) = left.shift_remove(&key) {
-            left.insert(key, importer.merge_schemas(existing, value, context)?);
+            let merged = match (existing, value) {
+                (SchemaOrBool::Schema(l), SchemaOrBool::Schema(r)) => {
+                    SchemaOrBool::Schema(importer.merge_schemas(l, r, context)?)
+                }
+                // Boolean schema vs real schema: prefer the real schema.
+                (SchemaOrBool::Schema(s), SchemaOrBool::Bool(_))
+                | (SchemaOrBool::Bool(_), SchemaOrBool::Schema(s)) => SchemaOrBool::Schema(s),
+                // Both boolean: keep default.
+                (SchemaOrBool::Bool(_), SchemaOrBool::Bool(_)) => SchemaOrBool::default(),
+            };
+            left.insert(key, merged);
         } else {
             left.insert(key, value);
         }
     }
     Ok(left)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -3569,10 +4371,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("should import successfully");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("should import successfully");
         let ir = result.ir;
 
         assert_eq!(ir.models.len(), 2);
@@ -3645,10 +4450,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("parameter refs should be supported");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("parameter refs should be supported");
 
         assert_eq!(result.ir.operations.len(), 1);
         let operation = &result.ir.operations[0];
@@ -3698,10 +4506,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("swagger root parameter refs should be supported");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("swagger root parameter refs should be supported");
 
         let operation = result
             .ir
@@ -3750,10 +4561,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("schema refs into reusable parameters should resolve");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("schema refs into reusable parameters should resolve");
 
         let widget = result
             .ir
@@ -3787,10 +4601,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("external file refs should remain importable as named types");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("external file refs should remain importable as named types");
 
         let route = result
             .ir
@@ -3842,10 +4659,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("swagger body parameters should become request bodies");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("swagger body parameters should become request bodies");
 
         let operation = result
             .ir
@@ -3863,10 +4683,7 @@ mod tests {
             request_body.attributes.get("description"),
             Some(&Value::String("Widget update payload.".into()))
         );
-        assert!(matches!(
-            request_body.type_ref,
-            Some(TypeRef::Named { .. })
-        ));
+        assert!(matches!(request_body.type_ref, Some(TypeRef::Named { .. })));
     }
 
     #[test]
@@ -3906,10 +4723,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("request body refs should be supported");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("request body refs should be supported");
 
         let operation = result
             .ir
@@ -3947,10 +4767,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("empty request body content should be normalized");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("empty request body content should be normalized");
 
         let operation = result
             .ir
@@ -3963,8 +4786,14 @@ mod tests {
         assert_eq!(request_body.media_type, "application/octet-stream");
         assert_eq!(request_body.type_ref, None);
         assert_eq!(result.warnings.len(), 1);
-        assert!(matches!(result.warnings[0].kind, DiagnosticKind::EmptyRequestBodyContent));
-        assert_eq!(result.warnings[0].pointer.as_deref(), Some("#/paths/~1events/post/requestBody/content"));
+        assert!(matches!(
+            result.warnings[0].kind,
+            DiagnosticKind::EmptyRequestBodyContent
+        ));
+        assert_eq!(
+            result.warnings[0].pointer.as_deref(),
+            Some("#/paths/~1events/post/requestBody/content")
+        );
     }
 
     #[test]
@@ -3990,9 +4819,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result = OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect("const should be supported");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("const should be supported");
         let patch_op = result
             .ir
             .models
@@ -4030,10 +4863,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("type arrays with null should be supported");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("type arrays with null should be supported");
         let widget = result
             .ir
             .models
@@ -4068,10 +4904,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("empty operation ids should fall back");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("empty operation ids should fall back");
         let operation = &result.ir.operations[0];
         assert_eq!(operation.name, "get_widgets");
     }
@@ -4106,10 +4945,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("implicit enum/items/format schema shapes should be supported");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("implicit enum/items/format schema shapes should be supported");
         let widget = result
             .ir
             .models
@@ -4128,7 +4970,10 @@ mod tests {
             .iter()
             .find(|field| field.name == "children")
             .expect("children field");
-        assert_eq!(children.type_ref, TypeRef::array(TypeRef::primitive("string")));
+        assert_eq!(
+            children.type_ref,
+            TypeRef::array(TypeRef::primitive("string"))
+        );
 
         let with_trial = widget
             .fields
@@ -4164,10 +5009,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("object schemas with validation-only anyOf should be supported");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("object schemas with validation-only anyOf should be supported");
         let patch_gist = result
             .ir
             .models
@@ -4204,10 +5052,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("property order should be preserved");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("property order should be preserved");
         let widget = result
             .ir
             .models
@@ -4244,10 +5095,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("metadata-only schema should be treated as any");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("metadata-only schema should be treated as any");
         let error_detail = result
             .ir
             .models
@@ -4315,9 +5169,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result = OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect("discriminator unions should be supported");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("discriminator unions should be supported");
         let patch_schema = result
             .ir
             .models
@@ -4329,20 +5187,18 @@ mod tests {
             .iter()
             .find(|field| field.name == "patches")
             .expect("patches field");
-        assert!(
-            matches!(
-                &patches.type_ref,
-                TypeRef::Array { item }
-                    if matches!(
-                        item.as_ref(),
-                        TypeRef::Union { variants }
-                            if variants == &vec![
-                                TypeRef::named("AddOperation"),
-                                TypeRef::named("RemoveOperation")
-                            ]
-                    )
-            )
-        );
+        assert!(matches!(
+            &patches.type_ref,
+            TypeRef::Array { item }
+                if matches!(
+                    item.as_ref(),
+                    TypeRef::Union { variants }
+                        if variants == &vec![
+                            TypeRef::named("AddOperation"),
+                            TypeRef::named("RemoveOperation")
+                        ]
+                )
+        ));
         assert!(result.warnings.is_empty());
     }
 
@@ -4579,7 +5435,11 @@ mod tests {
         )
         .build_ir()
         .expect_err("strict mode should fail");
-        assert!(strict_error.to_string().contains("`if` is not supported yet"));
+        assert!(
+            strict_error
+                .to_string()
+                .contains("`if` is not supported yet")
+        );
 
         let warning_result = OpenApiImporter::new(
             document,
@@ -4612,7 +5472,8 @@ mod tests {
   }
 }
 "##;
-        let not_document: OpenApiDocument = serde_json::from_str(not_spec).expect("valid test spec");
+        let not_document: OpenApiDocument =
+            serde_json::from_str(not_spec).expect("valid test spec");
         let not_result = OpenApiImporter::new(
             not_document,
             json_test_source(not_spec),
@@ -4620,7 +5481,10 @@ mod tests {
         )
         .build_ir()
         .expect("`not` keyword should be silently ignored");
-        assert!(not_result.warnings.is_empty(), "`not` should produce no warnings");
+        assert!(
+            not_result.warnings.is_empty(),
+            "`not` should produce no warnings"
+        );
     }
 
     #[test]
@@ -4641,9 +5505,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let error = OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect_err("unknown keyword should fail");
+        let error = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect_err("unknown keyword should fail");
         assert!(
             error
                 .to_string()
@@ -4679,9 +5547,13 @@ mod tests {
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result = OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect("known ignored keywords should not fail");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("known ignored keywords should not fail");
         assert!(result.warnings.is_empty());
     }
 
@@ -4745,10 +5617,12 @@ components:
             .iter()
             .find(|model| model.name == "AdditionalDataAirline")
             .expect("model should exist");
-        assert!(model
-            .fields
-            .iter()
-            .any(|field| field.name == "airline.leg.date_of_travel"));
+        assert!(
+            model
+                .fields
+                .iter()
+                .any(|field| field.name == "airline.leg.date_of_travel")
+        );
     }
 
     #[test]
@@ -4815,10 +5689,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("content encoding metadata should be preserved");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("content encoding metadata should be preserved");
 
         let operation = result
             .ir
@@ -4847,9 +5724,7 @@ components:
             .find(|response| response.status == "200")
             .expect("response should exist");
         assert_eq!(
-            response
-                .type_ref
-                .as_ref(),
+            response.type_ref.as_ref(),
             Some(&TypeRef::named("EncodedValue"))
         );
         let model = result
@@ -4901,10 +5776,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid swagger spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("formData parameters should normalize into a request body");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("formData parameters should normalize into a request body");
         let operation = result
             .ir
             .operations
@@ -4917,7 +5795,10 @@ components:
             .as_ref()
             .expect("formData should create a request body");
         assert_eq!(request_body.media_type, "application/x-www-form-urlencoded");
-        assert_eq!(request_body.type_ref.as_ref(), Some(&TypeRef::named("CreateWidgetRequest")));
+        assert_eq!(
+            request_body.type_ref.as_ref(),
+            Some(&TypeRef::named("CreateWidgetRequest"))
+        );
         let body_model = result
             .ir
             .models
@@ -4990,10 +5871,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid swagger spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("path-local parameter refs should resolve");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("path-local parameter refs should resolve");
         let operation = result
             .ir
             .operations
@@ -5040,10 +5924,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("duplicate operation ids should be disambiguated");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("duplicate operation ids should be disambiguated");
         let names = result
             .ir
             .operations
@@ -5088,10 +5975,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("numeric allOf overlays should merge");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("numeric allOf overlays should merge");
         assert!(result.warnings.is_empty());
         let payload_model = result
             .ir
@@ -5138,10 +6028,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("nested schema definitions refs should resolve");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("nested schema definitions refs should resolve");
         let transfer = result
             .ir
             .models
@@ -5201,10 +6094,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("nullable allOf overlay should merge");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("nullable allOf overlay should merge");
         let bill = result
             .ir
             .models
@@ -5254,10 +6150,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("recursive local refs should not recurse forever");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("recursive local refs should not recurse forever");
 
         let push_option = result
             .ir
@@ -5270,10 +6169,7 @@ components:
             .iter()
             .find(|field| field.name == "properties")
             .expect("properties field should exist");
-        assert!(matches!(
-            properties_field.type_ref,
-            TypeRef::Map { .. }
-        ));
+        assert!(matches!(properties_field.type_ref, TypeRef::Map { .. }));
 
         let inline_models = result
             .ir
@@ -5320,10 +6216,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("collectionFormat should be accepted");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("collectionFormat should be accepted");
         let operation = result
             .ir
             .operations
@@ -5376,10 +6275,13 @@ components:
 "##;
 
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result =
-            OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-                .build_ir()
-                .expect("allOf discriminator metadata should not fail");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("allOf discriminator metadata should not fail");
         assert!(result.warnings.is_empty());
     }
 
@@ -5410,9 +6312,7 @@ components:
         )
         .build_ir()
         .expect_err("empty property names should fail by default");
-        assert!(error
-            .to_string()
-            .contains("property #1 has an empty name"));
+        assert!(error.to_string().contains("property #1 has an empty name"));
 
         let result = OpenApiImporter::new(
             document,
@@ -5474,13 +6374,25 @@ components:
 }
 "##;
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result = OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect("$ref to components/responses should succeed");
-        let op = result.ir.operations.iter().find(|o| o.name == "list_widgets").expect("op should exist");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("$ref to components/responses should succeed");
+        let op = result
+            .ir
+            .operations
+            .iter()
+            .find(|o| o.name == "list_widgets")
+            .expect("op should exist");
         let response = op.responses.first().expect("should have a response");
         // The $ref resolves to an array type; type_ref should be Some (not None).
-        assert!(response.type_ref.is_some(), "response type_ref should be resolved, got: {response:?}");
+        assert!(
+            response.type_ref.is_some(),
+            "response type_ref should be resolved, got: {response:?}"
+        );
     }
 
     #[test]
@@ -5523,13 +6435,25 @@ components:
 }
 "##;
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result = OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect("$ref to path response schema should succeed");
-        let op = result.ir.operations.iter().find(|o| o.name == "create_widget").expect("op should exist");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("$ref to path response schema should succeed");
+        let op = result
+            .ir
+            .operations
+            .iter()
+            .find(|o| o.name == "create_widget")
+            .expect("op should exist");
         let response = op.responses.first().expect("should have a response");
         // The $ref resolves to an array-of-string type; type_ref should be Some.
-        assert!(response.type_ref.is_some(), "response type_ref should be resolved, got: {response:?}");
+        assert!(
+            response.type_ref.is_some(),
+            "response type_ref should be resolved, got: {response:?}"
+        );
     }
 
     #[test]
@@ -5559,10 +6483,19 @@ components:
 }
 "##;
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result = OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect("content-based parameter should succeed");
-        let op = result.ir.operations.iter().find(|o| o.name == "list_widgets").expect("op should exist");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("content-based parameter should succeed");
+        let op = result
+            .ir
+            .operations
+            .iter()
+            .find(|o| o.name == "list_widgets")
+            .expect("op should exist");
         assert_eq!(op.params.len(), 1);
         assert_eq!(op.params[0].name, "filter");
     }
@@ -5587,13 +6520,30 @@ components:
 }
 "##;
         let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
-        let result = OpenApiImporter::new(document, json_test_source(spec), LoadOpenApiOptions::default())
-            .build_ir()
-            .expect("format:string schema shape should succeed");
-        let model = result.ir.models.iter().find(|m| m.name == "Widget").expect("model should exist");
-        let name_field = model.fields.iter().find(|f| f.name == "name").expect("name field should exist");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("format:string schema shape should succeed");
+        let model = result
+            .ir
+            .models
+            .iter()
+            .find(|m| m.name == "Widget")
+            .expect("model should exist");
+        let name_field = model
+            .fields
+            .iter()
+            .find(|f| f.name == "name")
+            .expect("name field should exist");
         assert!(matches!(&name_field.type_ref, t if format!("{t:?}").contains("string")));
-        let score_field = model.fields.iter().find(|f| f.name == "score").expect("score field should exist");
+        let score_field = model
+            .fields
+            .iter()
+            .find(|f| f.name == "score")
+            .expect("score field should exist");
         assert!(matches!(&score_field.type_ref, t if format!("{t:?}").contains("number")));
     }
 }

@@ -30,7 +30,7 @@
     }
     return (report.results ?? []).reduce(
       (sum, result) => sum + (result.warning_count ?? 0),
-      0
+      0,
     );
   }
 
@@ -53,7 +53,8 @@
         reports.length === 1
           ? padLeft + plotWidth / 2
           : padLeft + (plotWidth * index) / (reports.length - 1);
-      const y = padTop + plotHeight - (supportPercent(report) / 100) * plotHeight;
+      const y =
+        padTop + plotHeight - (supportPercent(report) / 100) * plotHeight;
       return { report, x, y };
     });
   }
@@ -78,7 +79,7 @@
           target: null,
           generatedFiles: null,
           warningCount: result.warning_count ?? 0,
-          failure: result.failure
+          failure: result.failure,
         });
       }
 
@@ -92,7 +93,7 @@
           target: targetResult.name,
           generatedFiles: targetResult.generated_files ?? 0,
           warningCount: result.warning_count ?? 0,
-          failure: targetResult.failure
+          failure: targetResult.failure,
         });
       }
     }
@@ -114,7 +115,7 @@
         item.failure.source_preview,
         item.spec,
         item.target,
-        item.failure.message
+        item.failure.message,
       ]
         .filter(Boolean)
         .join("\n")
@@ -130,7 +131,7 @@
           kind: item.failure.kind,
           feature: item.failure.feature,
           count: 0,
-          items: []
+          items: [],
         });
       }
 
@@ -143,7 +144,7 @@
       (left, right) =>
         right.count - left.count ||
         left.kind.localeCompare(right.kind) ||
-        left.feature.localeCompare(right.feature)
+        left.feature.localeCompare(right.feature),
     );
   }
 
@@ -158,13 +159,19 @@
     if (!issueInstanceId) {
       return group.items[0] ?? null;
     }
-    return group.items.find((item) => item.id === issueInstanceId) ?? group.items[0] ?? null;
+    return (
+      group.items.find((item) => item.id === issueInstanceId) ??
+      group.items[0] ??
+      null
+    );
   }
 
   async function refreshReports() {
     const response = await fetch("/api/reports");
     if (!response.ok) {
-      throw new Error(`Failed to load reports: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Failed to load reports: ${response.status} ${response.statusText}`,
+      );
     }
 
     const payload = await response.json();
@@ -175,7 +182,9 @@
 
     const nextLatest = nextSummaries.at(-1)?.file ?? null;
     const shouldFollowLatest =
-      !selectedReportFile || selectedReportFile === previousLatest || !nextSummaries.some((item) => item.file === selectedReportFile);
+      !selectedReportFile ||
+      selectedReportFile === previousLatest ||
+      !nextSummaries.some((item) => item.file === selectedReportFile);
 
     if (shouldFollowLatest) {
       selectedReportFile = nextLatest;
@@ -194,9 +203,13 @@
       return;
     }
 
-    const response = await fetch(`/api/report?file=${encodeURIComponent(selectedReportFile)}`);
+    const response = await fetch(
+      `/api/report?file=${encodeURIComponent(selectedReportFile)}`,
+    );
     if (!response.ok) {
-      throw new Error(`Failed to load report ${selectedReportFile}: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Failed to load report ${selectedReportFile}: ${response.status} ${response.statusText}`,
+      );
     }
     currentReport = await response.json();
   }
@@ -235,7 +248,10 @@
 
         const previousSelected = selectedReportFile;
         await refreshReports();
-        if (previousSelected !== selectedReportFile || payload.type === "updated") {
+        if (
+          previousSelected !== selectedReportFile ||
+          payload.type === "updated"
+        ) {
           await refreshCurrentReport();
         }
         loadError = "";
@@ -245,7 +261,8 @@
     };
 
     eventSource.onerror = () => {
-      loadError = "Lost connection to the report watcher. Reload the page or restart the dev server.";
+      loadError =
+        "Lost connection to the report watcher. Reload the page or restart the dev server.";
     };
 
     return () => {
@@ -276,14 +293,19 @@
       selectedIssueInstanceId = null;
     } else if (
       shouldAutoSelectIssueGroup &&
-      (!selectedIssueKey || !groups.some((group) => group.key === selectedIssueKey))
+      (!selectedIssueKey ||
+        !groups.some((group) => group.key === selectedIssueKey))
     ) {
       selectedIssueKey = groups[0].key;
       selectedIssueInstanceId = groups[0].items[0]?.id ?? null;
       shouldAutoSelectIssueGroup = false;
     } else {
       const group = groups.find((value) => value.key === selectedIssueKey);
-      if (group && (!selectedIssueInstanceId || !group.items.some((item) => item.id === selectedIssueInstanceId))) {
+      if (
+        group &&
+        (!selectedIssueInstanceId ||
+          !group.items.some((item) => item.id === selectedIssueInstanceId))
+      ) {
         selectedIssueInstanceId = group.items[0]?.id ?? null;
       }
     }
@@ -299,14 +321,19 @@
     <div class="hero-copy">
       <div class="eyebrow">Arvalez Corpus Dashboard</div>
       <h1>Live Report Explorer</h1>
-      <p>Watching <code>{reportDirectory || "REPORT_DIRECTORY"}</code> for new <code>apis-guru-*.json</code> reports.</p>
+      <p>
+        Watching <code>{reportDirectory || "REPORT_DIRECTORY"}</code> for new
+        <code>apis-guru-*.json</code> reports.
+      </p>
     </div>
     {#if currentReport}
       <div class="hero-stats">
         <div class="hero-stat lead">
           <span class="hero-stat-label">Support</span>
           <strong>{supportPercent(currentReport).toFixed(1)}%</strong>
-          <span class="hero-stat-meta">{currentReport.passed_specs}/{currentReport.total_specs} passed</span>
+          <span class="hero-stat-meta"
+            >{currentReport.passed_specs}/{currentReport.total_specs} passed</span
+          >
         </div>
         <div class="hero-stat">
           <span class="hero-stat-label">Failed</span>
@@ -359,7 +386,12 @@
       {#if summaries.length === 0}
         <p>No reports loaded yet.</p>
       {:else}
-        <svg class="trend-chart" viewBox="0 0 960 280" preserveAspectRatio="none" aria-label="Support trend">
+        <svg
+          class="trend-chart"
+          viewBox="0 0 960 280"
+          preserveAspectRatio="none"
+          aria-label="Support trend"
+        >
           <line class="axis" x1="40" y1="14" x2="40" y2="254"></line>
           <line class="axis" x1="40" y1="254" x2="948" y2="254"></line>
           <text x="40" y="18" class="axis-label">100%</text>
@@ -386,7 +418,11 @@
                 }
               }}
             >
-              <title>{formatDate(point.report.generated_at_unix_seconds)} · {supportPercent(point.report).toFixed(1)}%</title>
+              <title
+                >{formatDate(point.report.generated_at_unix_seconds)} · {supportPercent(
+                  point.report,
+                ).toFixed(1)}%</title
+              >
             </circle>
           {/each}
         </svg>
@@ -483,24 +519,44 @@
                         </div>
                         <div>
                           <div class="detail-label">Path</div>
-                          <code>{activeIssue.failure.pointer ?? activeIssue.failure.schema_path ?? "—"}</code>
+                          <code
+                            >{activeIssue.failure.pointer ??
+                              activeIssue.failure.schema_path ??
+                              "—"}</code
+                          >
                         </div>
-                        <div>
-                          <div class="detail-label">Location</div>
+                        {#if activeIssue.failure.line}
                           <div>
-                            {#if activeIssue.failure.line}
-                              line {activeIssue.failure.line}, column {activeIssue.failure.column ?? "?"}
-                            {:else}
-                              —
-                            {/if}
+                            <div class="detail-label">Location</div>
+                            <div>
+                              line {activeIssue.failure.line}, column {activeIssue
+                                .failure.column ?? "?"}
+                            </div>
                           </div>
-                        </div>
+                        {/if}
                       </div>
 
                       {#if activeIssue.failure.source_preview}
+                        {@const rawLines = activeIssue.failure.source_preview.split('\n')}
+                        {@const previewLines = rawLines.at(-1) === '' ? rawLines.slice(0, -1) : rawLines}
+                        {@const startLine = activeIssue.failure.line ?? 1}
                         <div class="detail-block">
                           <div class="detail-label">Source Preview</div>
-                          <pre>{activeIssue.failure.source_preview}</pre>
+                          <div class="code-preview">
+                            {#each previewLines as line, i}
+                              {@const isCaret = line.trimStart().startsWith('^')}
+                              {@const lineOffset = previewLines.slice(0, i).filter((l) => !l.trimStart().startsWith('^')).length}
+                              {@const lineNum = startLine + lineOffset}
+                              <div
+                                class="code-line"
+                                class:highlighted={!isCaret && lineNum === startLine}
+                                class:caret-line={isCaret}
+                              >
+                                <span class="ln">{isCaret ? '' : lineNum}</span>
+                                <span class="lc">{line}</span>
+                              </div>
+                            {/each}
+                          </div>
                         </div>
                       {/if}
 
@@ -537,7 +593,10 @@
                             <span class="subtle">Target: {item.target}</span>
                           {/if}
                           {#if item.failure.pointer || item.failure.schema_path}
-                            <code>{item.failure.pointer ?? item.failure.schema_path}</code>
+                            <code
+                              >{item.failure.pointer ??
+                                item.failure.schema_path}</code
+                            >
                           {/if}
                         </button>
                       {/each}
@@ -605,9 +664,16 @@
     margin: 0;
     font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
     color: var(--ink);
-    background:
-      radial-gradient(circle at top left, rgba(15, 118, 110, 0.14), transparent 30rem),
-      radial-gradient(circle at bottom right, rgba(180, 35, 24, 0.08), transparent 25rem),
+    background: radial-gradient(
+        circle at top left,
+        rgba(15, 118, 110, 0.14),
+        transparent 30rem
+      ),
+      radial-gradient(
+        circle at bottom right,
+        rgba(180, 35, 24, 0.08),
+        transparent 25rem
+      ),
       linear-gradient(180deg, #fbf6ec 0%, var(--bg) 100%);
   }
 
@@ -1009,6 +1075,51 @@
     background: #f3ece1;
     border: 1px solid var(--line);
     color: var(--ink);
+  }
+
+  .code-preview {
+    font-family: "SFMono-Regular", ui-monospace, Menlo, monospace;
+    font-size: 0.85rem;
+    border-radius: 1rem;
+    background: #f3ece1;
+    border: 1px solid var(--line);
+    color: var(--ink);
+    overflow-x: auto;
+    padding: 0.5rem 0;
+  }
+
+  .code-line {
+    display: flex;
+    align-items: baseline;
+    line-height: 1.6;
+    padding: 0 1rem 0 0;
+  }
+
+  .code-line.highlighted {
+    background: rgba(200, 100, 20, 0.13);
+    outline: 1px solid rgba(200, 100, 20, 0.25);
+    outline-offset: -1px;
+  }
+
+  .code-line.caret-line .lc {
+    color: #b94a16;
+  }
+
+  .code-line .ln {
+    min-width: 3.5ch;
+    padding: 0 0.75rem;
+    color: #b0a090;
+    text-align: right;
+    flex-shrink: 0;
+    user-select: none;
+    border-right: 1px solid var(--line);
+    margin-right: 1rem;
+  }
+
+  .code-line .lc {
+    white-space: pre-wrap;
+    word-break: break-all;
+    flex: 1;
   }
 
   @media (max-width: 1100px) {

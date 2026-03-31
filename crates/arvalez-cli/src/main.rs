@@ -18,7 +18,7 @@ use std::os::unix::process::ExitStatusExt;
 use anyhow::{Context, Result, bail};
 use arvalez_ir::{CoreIr, validate_ir};
 use arvalez_openapi::{
-    LoadOpenApiOptions, OpenApiDiagnostic, OpenApiLoadResult,
+    LoadOpenApiOptions, OpenApiDiagnostic, OpenApiLoadResult, categorize_reference,
     diagnostic_pointer_tail, load_openapi_to_ir_with_options, normalize_diagnostic_feature,
 };
 use arvalez_target_go::{GoPackageConfig, generate_go_package, write_go_package};
@@ -30,11 +30,8 @@ use clap::{Parser, Subcommand};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
-    terminal::{
-        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-    },
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use rayon::{ThreadPoolBuilder, prelude::*};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -43,6 +40,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
 };
+use rayon::{ThreadPoolBuilder, prelude::*};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
@@ -169,7 +167,10 @@ enum Command {
         timings: bool,
     },
     TestApisGuru {
-        #[arg(long, default_value = "https://github.com/APIs-guru/openapi-directory.git")]
+        #[arg(
+            long,
+            default_value = "https://github.com/APIs-guru/openapi-directory.git"
+        )]
         repository: String,
         #[arg(long, default_value = "main")]
         reference: String,
@@ -391,7 +392,11 @@ impl TimingCollector {
         for (label, duration) in &self.phases {
             eprintln!("  {:<20} {}", label, format_duration(*duration));
         }
-        eprintln!("  {:<20} {}", "total", format_duration(self.started_at.elapsed()));
+        eprintln!(
+            "  {:<20} {}",
+            "total",
+            format_duration(self.started_at.elapsed())
+        );
     }
 }
 
@@ -420,9 +425,8 @@ fn main() -> Result<()> {
                     })
                 })?;
             print_openapi_warnings(&warnings);
-            let rendered_ir = timing_collector.measure_result("ir_serialize", || {
-                Ok(serde_json::to_string_pretty(&ir)?)
-            })?;
+            let rendered_ir = timing_collector
+                .measure_result("ir_serialize", || Ok(serde_json::to_string_pretty(&ir)?))?;
             println!("{rendered_ir}");
             timing_collector.print();
         }
@@ -455,12 +459,19 @@ fn main() -> Result<()> {
             }
 
             if go_enabled {
-                let go_config =
-                    resolve_go_config(&config_file, None, None, None, false, output_version.clone());
-                let files =
-                    timing_collector.measure_result("go_generate", || generate_go_package(&ir, &go_config))?;
+                let go_config = resolve_go_config(
+                    &config_file,
+                    None,
+                    None,
+                    None,
+                    false,
+                    output_version.clone(),
+                );
+                let files = timing_collector
+                    .measure_result("go_generate", || generate_go_package(&ir, &go_config))?;
                 let output = output_root.join("go-client");
-                timing_collector.measure_result("go_write", || write_go_package(&output, &files))?;
+                timing_collector
+                    .measure_result("go_write", || write_go_package(&output, &files))?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
             }
 
@@ -471,9 +482,8 @@ fn main() -> Result<()> {
                     generate_python_package(&ir, &python_config)
                 })?;
                 let output = output_root.join("python-client");
-                timing_collector.measure_result("python_write", || {
-                    write_python_package(&output, &files)
-                })?;
+                timing_collector
+                    .measure_result("python_write", || write_python_package(&output, &files))?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
             }
 
@@ -515,7 +525,8 @@ fn main() -> Result<()> {
             print_openapi_warnings(&warnings);
             let config_file =
                 timing_collector.measure_result("config_load", || load_optional_config(&config))?;
-            let output = resolve_target_output_directory(&config_file, output_directory, "go-client");
+            let output =
+                resolve_target_output_directory(&config_file, output_directory, "go-client");
             let go_config = resolve_go_config(
                 &config_file,
                 module_path,
@@ -524,8 +535,8 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
-            let files =
-                timing_collector.measure_result("go_generate", || generate_go_package(&ir, &go_config))?;
+            let files = timing_collector
+                .measure_result("go_generate", || generate_go_package(&ir, &go_config))?;
             timing_collector.measure_result("go_write", || write_go_package(&output, &files))?;
             eprintln!("generated {} files into {}", files.len(), output.display());
             timing_collector.print();
@@ -560,9 +571,8 @@ fn main() -> Result<()> {
             let files = timing_collector.measure_result("python_generate", || {
                 generate_python_package(&ir, &python_config)
             })?;
-            timing_collector.measure_result("python_write", || {
-                write_python_package(&output, &files)
-            })?;
+            timing_collector
+                .measure_result("python_write", || write_python_package(&output, &files))?;
             eprintln!("generated {} files into {}", files.len(), output.display());
             timing_collector.print();
         }
@@ -822,8 +832,9 @@ fn load_input_ir(
     timing_collector: &mut TimingCollector,
 ) -> Result<(CoreIr, Vec<OpenApiDiagnostic>)> {
     match (ir, openapi) {
-        (Some(ir), None) => timing_collector
-            .measure_result("ir_load", || Ok((load_ir(&ir)?, Vec::new()))),
+        (Some(ir), None) => {
+            timing_collector.measure_result("ir_load", || Ok((load_ir(&ir)?, Vec::new())))
+        }
         (None, Some(openapi)) => {
             let emit_timings = timing_collector.enabled;
             let result = timing_collector.measure_result("openapi_load", move || {
@@ -975,7 +986,8 @@ fn run_apis_guru_corpus_test(config_file: &AppConfig, options: &CorpusTestOption
         .build()
         .context("failed to build corpus worker pool")?
         .install(|| {
-            specs.par_iter()
+            specs
+                .par_iter()
                 .enumerate()
                 .map(|(index, spec_path)| {
                     let relative_spec = spec_path
@@ -1043,11 +1055,7 @@ fn run_apis_guru_corpus_test(config_file: &AppConfig, options: &CorpusTestOption
     let failed_specs = results
         .iter()
         .filter(|result| {
-            result.failure.is_some()
-                || result
-                    .targets
-                    .iter()
-                    .any(|target| target.failure.is_some())
+            result.failure.is_some() || result.targets.iter().any(|target| target.failure.is_some())
         })
         .count();
     let passed_specs = total_specs - failed_specs;
@@ -1070,9 +1078,7 @@ fn run_apis_guru_corpus_test(config_file: &AppConfig, options: &CorpusTestOption
     let report_path = write_corpus_report(&report_directory, &report_data)?;
     eprintln!("wrote report to {}", report_path.display());
 
-    eprintln!(
-        "completed APIs.guru corpus run: {passed_specs}/{total_specs} specs passed"
-    );
+    eprintln!("completed APIs.guru corpus run: {passed_specs}/{total_specs} specs passed");
     print_failure_summary(&report_data.summary);
 
     if failed_specs > 0 {
@@ -1107,8 +1113,8 @@ fn run_corpus_spec_inline(
             options.output_version.clone(),
         )
     });
-    let typescript_config =
-        (!options.no_typescript && !config_file.output.typescript.disabled).then(|| {
+    let typescript_config = (!options.no_typescript && !config_file.output.typescript.disabled)
+        .then(|| {
             resolve_typescript_config(
                 config_file,
                 None,
@@ -1227,9 +1233,7 @@ fn run_corpus_spec_subprocess(
                 warning_count: 0,
                 targets: Vec::new(),
                 failure: Some(classify_failure(
-                    &format!(
-                        "failed to spawn corpus worker for `{relative_spec}`: {error:#}"
-                    ),
+                    &format!("failed to spawn corpus worker for `{relative_spec}`: {error:#}"),
                     None,
                 )),
             };
@@ -1359,8 +1363,7 @@ fn spawn_corpus_ui(
     total_specs: usize,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        if let Err(error) = run_corpus_ui(completed, progress_state, done, ui_active, total_specs)
-        {
+        if let Err(error) = run_corpus_ui(completed, progress_state, done, ui_active, total_specs) {
             eprintln!("failed to render corpus UI: {error:#}");
         }
     })
@@ -1416,7 +1419,11 @@ fn run_corpus_ui(
                     progress_ratio * 100.0
                 );
                 let gauge = Gauge::default()
-                    .block(Block::default().title("Corpus Progress").borders(Borders::ALL))
+                    .block(
+                        Block::default()
+                            .title("Corpus Progress")
+                            .borders(Borders::ALL),
+                    )
                     .gauge_style(
                         Style::default()
                             .fg(Color::Cyan)
@@ -1433,7 +1440,9 @@ fn run_corpus_ui(
                     Line::from(vec![
                         Span::styled(
                             format!("Passed: {}", snapshot.passed_specs),
-                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::raw("    "),
                         Span::styled(
@@ -1495,7 +1504,9 @@ fn run_corpus_ui(
 
                 let footer = Paragraph::new(vec![
                     Line::from("The corpus run continues even if one spec crashes."),
-                    Line::from("Close the UI with q if you want the plain line-based progress instead."),
+                    Line::from(
+                        "Close the UI with q if you want the plain line-based progress instead.",
+                    ),
                 ])
                 .block(Block::default().title("Notes").borders(Borders::ALL));
                 frame.render_widget(footer, chunks[3]);
@@ -1509,7 +1520,8 @@ fn run_corpus_ui(
         }
 
         if event::poll(CORPUS_UI_TICK_INTERVAL).context("failed while polling corpus UI")? {
-            if let Event::Key(key) = event::read().context("failed while reading corpus UI input")?
+            if let Event::Key(key) =
+                event::read().context("failed while reading corpus UI input")?
             {
                 if key.code == KeyCode::Char('q') {
                     ui_active.store(false, Ordering::Relaxed);
@@ -1552,9 +1564,13 @@ fn run_go_corpus_target(
     config: &GoPackageConfig,
 ) -> CorpusTargetResult {
     match generate_go_package(ir, config) {
-        Ok(files) => write_corpus_target_output(relative_spec, options, "go-client", &files, |output, files| {
-            write_go_package(output, files)
-        }),
+        Ok(files) => write_corpus_target_output(
+            relative_spec,
+            options,
+            "go-client",
+            &files,
+            |output, files| write_go_package(output, files),
+        ),
         Err(error) => CorpusTargetResult {
             name: "go".into(),
             generated_files: 0,
@@ -1699,7 +1715,14 @@ fn clone_repository(repository: &str, reference: &str, checkout_directory: &Path
     );
 
     let status = ProcessCommand::new("git")
-        .args(["clone", "--depth", "1", "--branch", reference, "--single-branch"])
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            reference,
+            "--single-branch",
+        ])
         .arg(repository)
         .arg(checkout_directory)
         .stdout(Stdio::inherit())
@@ -1714,7 +1737,11 @@ fn clone_repository(repository: &str, reference: &str, checkout_directory: &Path
     }
 }
 
-fn update_repository_checkout(repository: &str, reference: &str, checkout_directory: &Path) -> Result<()> {
+fn update_repository_checkout(
+    repository: &str,
+    reference: &str,
+    checkout_directory: &Path,
+) -> Result<()> {
     if !checkout_directory.join(".git").exists() {
         bail!(
             "checkout directory `{}` exists but is not a git repository",
@@ -1759,7 +1786,11 @@ fn update_repository_checkout(repository: &str, reference: &str, checkout_direct
     Ok(())
 }
 
-fn prepare_repository_checkout(repository: &str, reference: &str, checkout_directory: &Path) -> Result<()> {
+fn prepare_repository_checkout(
+    repository: &str,
+    reference: &str,
+    checkout_directory: &Path,
+) -> Result<()> {
     if checkout_directory.exists() {
         update_repository_checkout(repository, reference, checkout_directory)
     } else {
@@ -1793,13 +1824,12 @@ fn collect_openapi_json_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(
     for entry in fs::read_dir(root)
         .with_context(|| format!("failed to read directory `{}`", root.display()))?
     {
-        let entry = entry.with_context(|| {
-            format!("failed to read entry from directory `{}`", root.display())
-        })?;
+        let entry = entry
+            .with_context(|| format!("failed to read entry from directory `{}`", root.display()))?;
         let path = entry.path();
-        let file_type = entry.file_type().with_context(|| {
-            format!("failed to read file type for `{}`", path.display())
-        })?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to read file type for `{}`", path.display()))?;
 
         if file_type.is_dir() {
             if entry.file_name() == ".git" {
@@ -1920,7 +1950,7 @@ fn corpus_failure_from_diagnostic(diag: &OpenApiDiagnostic, target: Option<&str>
         feature,
         pointer: diag.pointer.clone(),
         schema_path: None,
-        line: None,
+        line: diag.line,
         column: None,
         source_preview: diag.source_preview.clone(),
         note: diag.note().map(str::to_owned),
@@ -1958,7 +1988,7 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
     }
 
     if let Some(reference) = extract_between(message, "unsupported reference `", "`") {
-        return make_failure("unsupported_reference".into(), reference.to_owned());
+        return make_failure("unsupported_reference".into(), categorize_reference(reference));
     }
 
     if message.contains("request body has no content entries") {
@@ -1968,7 +1998,8 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
         );
     }
 
-    if let Some(field) = extract_between(message, "`allOf` contains incompatible `", "` declarations")
+    if let Some(field) =
+        extract_between(message, "`allOf` contains incompatible `", "` declarations")
     {
         return make_failure("unsupported_all_of_merge".into(), field.to_owned());
     }
@@ -1994,12 +2025,37 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
     if message.contains("failed to parse JSON OpenAPI document")
         || message.contains("failed to parse YAML OpenAPI document")
     {
-        return make_failure(
-            "invalid_openapi_document".into(),
+        // Map specific serde error reasons to semantic feature names so that
+        // structurally identical problems group together regardless of which
+        // schema field or path they appeared in.
+        let feature = if message.contains("JSON number out of range") {
+            "number_out_of_range".into()
+        } else if message.contains("control characters are not allowed") {
+            "control_characters".into()
+        } else if message.contains("invalid type:") {
+            // "invalid type: X, expected Y at line Z"  
+            // Use the "expected Y" part stripped of indefinite articles.
+            let expected = extract_between(message, "expected ", " at line")
+                .unwrap_or("unknown");
+            let stripped = expected
+                .strip_prefix("a ")
+                .or_else(|| expected.strip_prefix("an "))
+                .unwrap_or(expected);
+            let normalised = stripped
+                .replace(' ', "_")
+                .replace('.', "_")
+                .replace('`', "")
+                .to_lowercase();
+            format!("invalid_type_expected_{normalised}")
+        } else {
+            // Fall back to the terminal path segment (e.g. `minimum`, `description`)
+            // so that the same field-level problem groups across different schemas.
             schema_path
+                .and_then(|p| p.rsplit('.').next())
                 .map(normalize_diagnostic_feature)
-                .unwrap_or_else(|| "deserialization".into()),
-        );
+                .unwrap_or_else(|| "deserialization".into())
+        };
+        return make_failure("invalid_openapi_document".into(), feature);
     }
 
     if message.contains("generated IR is invalid") {
@@ -2039,11 +2095,17 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
     }
 
     if message.contains("parameter #") && message.contains("has an empty name") {
-        return make_failure("invalid_openapi_document".into(), "empty_parameter_name".into());
+        return make_failure(
+            "invalid_openapi_document".into(),
+            "empty_parameter_name".into(),
+        );
     }
 
     if message.contains("property #") && message.contains("has an empty name") {
-        return make_failure("invalid_openapi_document".into(), "empty_property_key".into());
+        return make_failure(
+            "invalid_openapi_document".into(),
+            "empty_property_key".into(),
+        );
     }
 
     if message.contains("array schema is missing `items`") {
@@ -2122,9 +2184,7 @@ fn extract_note(message: &str) -> Option<String> {
 
 fn extract_indented_block(message: &str, label: &str) -> Option<String> {
     let lines = message.lines().collect::<Vec<_>>();
-    let start_index = lines
-        .iter()
-        .position(|line| line.trim_start() == label)?;
+    let start_index = lines.iter().position(|line| line.trim_start() == label)?;
 
     let mut block = Vec::new();
     for line in lines.into_iter().skip(start_index + 1) {
