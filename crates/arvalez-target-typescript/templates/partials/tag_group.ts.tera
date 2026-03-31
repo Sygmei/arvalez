@@ -1,3 +1,6 @@
   readonly {{ tag_group.property_name }} = {
-{{ tag_group.bindings_block }}
+{%- for binding in tag_group.bindings %}
+    {{ binding.method_name }}: this.{{ binding.method_name }}.bind(this),
+    {{ binding.raw_method_name }}: this.{{ binding.raw_method_name }}.bind(this),
+{%- endfor %}
   };

@@ -3,10 +3,10 @@ use std::fs;
 use serde_json::json;
 use tempfile::tempdir;
 
-use crate::{PythonPackageConfig, generate_python_package};
 use crate::sanitize::{sanitize_class_name, sanitize_identifier};
+use crate::{PythonPackageConfig, generate_python_package};
 use arvalez_ir::{
-    Attributes, CoreIr, Field, HttpMethod, Operation, ParameterLocation, Parameter, RequestBody,
+    Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody,
     Response, TypeRef,
 };
 use serde_json::Value;
@@ -127,7 +127,11 @@ fn renders_basic_python_package() {
     assert!(init.contents.contains("RequestOptions"));
     assert!(init.contents.contains("SyncApiClient"));
     assert!(models.contents.contains("from enum import Enum"));
-    assert!(models.contents.contains("from typing import Any, TypeAlias"));
+    assert!(
+        models
+            .contents
+            .contains("from typing import Any, TypeAlias")
+    );
     assert!(models.contents.contains("WidgetPath: TypeAlias = \"str\""));
     assert!(models.contents.contains("class WidgetStatus(str, Enum):"));
     assert!(
@@ -274,11 +278,55 @@ fn preserves_common_acronyms_in_python_names() {
     assert_eq!(sanitize_identifier("CreateAPIKey"), "create_api_key");
     assert_eq!(sanitize_identifier("AssociateWebACL"), "associate_web_acl");
     assert_eq!(sanitize_identifier("HTTPHeader"), "http_header");
-    assert_eq!(sanitize_identifier("XAmzContentSHA256"), "x_amz_content_sha256");
+    assert_eq!(
+        sanitize_identifier("XAmzContentSHA256"),
+        "x_amz_content_sha256"
+    );
     assert_eq!(sanitize_identifier("UTF8String"), "utf8_string");
     assert_eq!(sanitize_identifier("IPv4Address"), "ipv4_address");
     assert_eq!(sanitize_class_name("APIKeySummary"), "APIKeySummary");
     assert_eq!(sanitize_class_name("WebACL"), "WebACL");
     assert_eq!(sanitize_class_name("HTTPHeader"), "HTTPHeader");
     assert_eq!(sanitize_class_name("SHA256Checksum"), "SHA256Checksum");
+}
+
+#[test]
+fn renders_extra_package_templates() {
+    let dir = tempdir().expect("tempdir");
+    let pkg_dir = dir.path().join("package");
+    fs::create_dir_all(&pkg_dir).unwrap();
+
+    // One extra template that uses the `package` context variable.
+    fs::write(
+        pkg_dir.join("extra_info.txt.tera"),
+        "package={{ package.package_name }} version={{ package.version }}",
+    )
+    .unwrap();
+
+    // A template in a subdirectory.
+    let sub_dir = pkg_dir.join("sub");
+    fs::create_dir_all(&sub_dir).unwrap();
+    fs::write(
+        sub_dir.join("nested.md.tera"),
+        "# {{ package.package_name }}",
+    )
+    .unwrap();
+
+    let config =
+        PythonPackageConfig::new("mylib").with_template_dir(Some(dir.path().to_path_buf()));
+
+    let files = generate_python_package(&sample_ir(), &config).expect("package should render");
+
+    let extra = files
+        .iter()
+        .find(|f| f.path == std::path::PathBuf::from("extra_info.txt"))
+        .expect("extra_info.txt should be present");
+    assert!(extra.contents.contains("package=mylib"));
+    assert!(extra.contents.contains("version="));
+
+    let nested = files
+        .iter()
+        .find(|f| f.path == std::path::PathBuf::from("sub/nested.md"))
+        .expect("sub/nested.md should be present");
+    assert!(nested.contents.contains("# mylib"));
 }

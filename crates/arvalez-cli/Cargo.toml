@@ -15,6 +15,7 @@ arvalez-openapi.workspace = true
 arvalez-target-go.workspace = true
 arvalez-target-python.workspace = true
 arvalez-target-typescript.workspace = true
+arvalez-target-nushell.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 rayon.workspace = true

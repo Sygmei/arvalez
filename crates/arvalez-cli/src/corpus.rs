@@ -22,6 +22,7 @@ use arvalez_target_python::{PythonPackageConfig, generate_python_package, write_
 use arvalez_target_typescript::{
     TypeScriptPackageConfig, generate_typescript_package, write_typescript_package,
 };
+use arvalez_target_nushell::{NushellPackageConfig, generate_nushell_package, write_nushell_package};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
@@ -124,6 +125,7 @@ pub(crate) struct CorpusTestOptions {
     pub no_go: bool,
     pub no_python: bool,
     pub no_typescript: bool,
+    pub no_nushell: bool,
     pub output_version: Option<String>,
     pub limit: Option<usize>,
     pub jobs: Option<usize>,
@@ -166,8 +168,9 @@ pub(crate) fn run_apis_guru_corpus_test(
     let go_enabled = !options.no_go && !config_file.output.go.disabled;
     let python_enabled = !options.no_python && !config_file.output.python.disabled;
     let typescript_enabled = !options.no_typescript && !config_file.output.typescript.disabled;
+    let nushell_enabled = !options.no_nushell && !config_file.output.nushell.disabled;
 
-    if !go_enabled && !python_enabled && !typescript_enabled {
+    if !go_enabled && !python_enabled && !typescript_enabled && !nushell_enabled {
         bail!("no generation targets enabled");
     }
 
@@ -318,7 +321,7 @@ pub(crate) fn run_corpus_spec_inline(
     relative_spec: &str,
     options: &CorpusTestOptions,
 ) -> CorpusSpecResult {
-    use crate::config::{resolve_go_config, resolve_python_config, resolve_typescript_config};
+    use crate::config::{resolve_go_config, resolve_nushell_config, resolve_python_config, resolve_typescript_config};
 
     let go_config = (!options.no_go && !config_file.output.go.disabled).then(|| {
         resolve_go_config(config_file, None, None, None, false, options.output_version.clone())
@@ -335,6 +338,10 @@ pub(crate) fn run_corpus_spec_inline(
                 false,
                 options.output_version.clone(),
             )
+        });
+    let nushell_config =
+        (!options.no_nushell && !config_file.output.nushell.disabled).then(|| {
+            resolve_nushell_config(config_file, None, None, None, false, options.output_version.clone())
         });
 
     match load_openapi_to_ir_with_options(
@@ -361,6 +368,14 @@ pub(crate) fn run_corpus_spec_inline(
                     relative_spec,
                     options,
                     typescript_config,
+                ));
+            }
+            if let Some(nushell_config) = nushell_config.as_ref() {
+                targets.push(run_nushell_corpus_target(
+                    &ir,
+                    relative_spec,
+                    options,
+                    nushell_config,
                 ));
             }
 
@@ -433,6 +448,9 @@ fn run_corpus_spec_subprocess(
     }
     if config_file.output.typescript.disabled || options.no_typescript {
         command.arg("--no-typescript");
+    }
+    if config_file.output.nushell.disabled || options.no_nushell {
+        command.arg("--no-nushell");
     }
     if let Some(output_version) = &options.output_version {
         command.arg("--output-version").arg(output_version);
@@ -563,6 +581,31 @@ fn run_typescript_corpus_target(
             failure: Some(classify_failure(
                 &format!("failed to generate typescript client for `{relative_spec}`: {error:#}"),
                 Some("typescript"),
+            )),
+        },
+    }
+}
+
+fn run_nushell_corpus_target(
+    ir: &CoreIr,
+    relative_spec: &str,
+    options: &CorpusTestOptions,
+    config: &NushellPackageConfig,
+) -> CorpusTargetResult {
+    match generate_nushell_package(ir, config) {
+        Ok(files) => write_corpus_target_output(
+            relative_spec,
+            options,
+            "nushell-client",
+            &files,
+            |output, files| write_nushell_package(output, files),
+        ),
+        Err(error) => CorpusTargetResult {
+            name: "nushell".into(),
+            generated_files: 0,
+            failure: Some(classify_failure(
+                &format!("failed to generate nushell client for `{relative_spec}`: {error:#}"),
+                Some("nushell"),
             )),
         },
     }

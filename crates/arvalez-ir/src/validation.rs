@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::{CoreIr, TypeRef, CURRENT_IR_VERSION};
+use crate::{CURRENT_IR_VERSION, CoreIr, TypeRef};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationIssue {

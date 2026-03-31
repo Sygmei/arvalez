@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use arvalez_ir::{CoreIr, Operation, ParameterLocation, RequestBody, TypeRef};
+use arvalez_ir::{CoreIr, Operation, Parameter, ParameterLocation, TypeRef};
 use arvalez_target_core::{ClientLayout as SharedClientLayout, indent_block, sorted_models};
 use serde::Serialize;
 use serde_json::{Value, from_value};
@@ -251,16 +251,19 @@ impl ModelFieldView {
     }
 }
 
+/// A service sub-client binding, e.g. `self.widgets = AsyncWidgetsApi(self)`.
+#[derive(Debug, Serialize)]
+struct ServiceBindingView {
+    property_name: String,
+    class_name: String,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct ClientClassView {
     class_name: String,
     client_type: String,
-    service_bindings_block: String,
-    close_method_signature: String,
-    close_method_block: String,
-    enter_method_signature: String,
-    exit_method_signature: String,
-    exit_method_block: String,
+    is_async: bool,
+    service_bindings: Vec<ServiceBindingView>,
     methods_block: String,
 }
 
@@ -271,36 +274,20 @@ impl ClientClassView {
         tera: &Tera,
     ) -> Result<Self> {
         let methods = operations
-            .into_iter()
+            .iter()
             .map(|operation| OperationMethodView::from_operation(operation, ClientMode::Async))
             .collect::<Vec<_>>();
         Ok(Self {
             class_name: "AsyncApiClient".into(),
             client_type: "httpx.AsyncClient".into(),
-            service_bindings_block: indent_block(
-                &tag_groups
-                    .iter()
-                    .map(|group| {
-                        format!(
-                            "self.{} = Async{}Api(self)",
-                            group.property_name, group.class_base_name
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-                8,
-            ),
-            close_method_signature: "async def aclose(self) -> None:".into(),
-            close_method_block: indent_block(
-                &[
-                    "if self._owns_client:".into(),
-                    "    await self._client.aclose()".into(),
-                ],
-                8,
-            ),
-            enter_method_signature: "async def __aenter__(self) -> AsyncApiClient:".into(),
-            exit_method_signature:
-                "async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:".into(),
-            exit_method_block: indent_block(&["await self.aclose()".into()], 8),
+            is_async: true,
+            service_bindings: tag_groups
+                .iter()
+                .map(|group| ServiceBindingView {
+                    property_name: group.property_name.clone(),
+                    class_name: format!("Async{}Api", group.class_base_name),
+                })
+                .collect(),
             methods_block: render_methods_block(tera, methods)?,
         })
     }
@@ -311,36 +298,20 @@ impl ClientClassView {
         tera: &Tera,
     ) -> Result<Self> {
         let methods = operations
-            .into_iter()
+            .iter()
             .map(|operation| OperationMethodView::from_operation(operation, ClientMode::Sync))
             .collect::<Vec<_>>();
         Ok(Self {
             class_name: "SyncApiClient".into(),
             client_type: "httpx.Client".into(),
-            service_bindings_block: indent_block(
-                &tag_groups
-                    .iter()
-                    .map(|group| {
-                        format!(
-                            "self.{} = Sync{}Api(self)",
-                            group.property_name, group.class_base_name
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-                8,
-            ),
-            close_method_signature: "def close(self) -> None:".into(),
-            close_method_block: indent_block(
-                &[
-                    "if self._owns_client:".into(),
-                    "    self._client.close()".into(),
-                ],
-                8,
-            ),
-            enter_method_signature: "def __enter__(self) -> SyncApiClient:".into(),
-            exit_method_signature: "def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:"
-                .into(),
-            exit_method_block: indent_block(&["self.close()".into()], 8),
+            is_async: false,
+            service_bindings: tag_groups
+                .iter()
+                .map(|group| ServiceBindingView {
+                    property_name: group.property_name.clone(),
+                    class_name: format!("Sync{}Api", group.class_base_name),
+                })
+                .collect(),
             methods_block: render_methods_block(tera, methods)?,
         })
     }
@@ -389,308 +360,148 @@ pub(crate) enum ClientMode {
     Sync,
 }
 
+/// Documentation view for a single parameter.
+#[derive(Debug, Serialize)]
+struct PyDocParamView {
+    name: String,
+    description: String,
+}
+
+/// Per-parameter view for query / header / path parameters.
+#[derive(Debug, Serialize)]
+struct PyParamView {
+    name: String,
+    raw_name: String,
+    required: bool,
+    content_encoding: Option<String>,
+}
+
+/// Request-body descriptor.
+#[derive(Debug, Serialize)]
+struct PyBodyView {
+    required: bool,
+    /// `"json"` or `"data"` — the httpx keyword argument name.
+    kind: String,
+    content_encoding: Option<String>,
+}
+
+/// Return-type descriptor — drives both the method annotation and the
+/// post-request parse/validation logic in the template.
+#[derive(Debug, Serialize)]
+struct PyReturnTypeView {
+    /// Python return-type annotation, e.g. `"models.Widget"` or `"None"`.
+    annotation: String,
+    /// `true` when the operation has a typed success response.
+    has_result: bool,
+    /// Tera-safe expression passed to `_parse_response`, e.g. `"models.Widget"`.
+    parse_expression: Option<String>,
+    content_encoding: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct OperationMethodView {
-    def_keyword: String,
+    is_async: bool,
     method_name: String,
     raw_method_name: String,
     args_signature: String,
-    return_annotation: String,
-    raw_return_annotation: String,
-    raw_docstring_block: String,
-    docstring_block: String,
-    url_template: String,
-    raw_request_call_line: String,
-    raw_pre_request_block: String,
-    raw_post_request_block: String,
-    wrapper_request_call_line: String,
-    post_request_block: String,
+    /// Pre-built keyword-argument list for forwarding from the wrapper to the raw method.
+    forward_args: String,
+    /// Operation summary text (newlines collapsed), if any.
+    summary: Option<String>,
+    /// Parameters that carry a non-empty description.
+    doc_params: Vec<PyDocParamView>,
+    /// HTTP method literal, e.g. `"GET"`.
+    http_method: String,
+    /// Path with `{param}` → `{sanitised_param}` (for use inside an f-string).
+    path_fstring: String,
+    path_params: Vec<PyParamView>,
+    query_params: Vec<PyParamView>,
+    header_params: Vec<PyParamView>,
+    body: Option<PyBodyView>,
+    return_type: PyReturnTypeView,
 }
 
 impl OperationMethodView {
     pub(crate) fn from_operation(operation: &Operation, mode: ClientMode) -> Self {
-        let mut pre_request_lines = Vec::new();
-        let mut call_arguments = Vec::new();
-        let mut params_name = "None".to_owned();
-        let mut headers_name = "None".to_owned();
-
-        for param in operation
+        let path_params: Vec<PyParamView> = operation
             .params
             .iter()
-            .filter(|param| matches!(param.location, ParameterLocation::Path))
-        {
-            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                let param_name = sanitize_identifier(&param.name);
-                pre_request_lines.push(format!(
-                    "self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
-                    format!("path parameter `{}`", param.name)
-                ));
-            }
-        }
-
-        let query_params = operation
+            .filter(|p| matches!(p.location, ParameterLocation::Path))
+            .map(py_param_view)
+            .collect();
+        let query_params: Vec<PyParamView> = operation
             .params
             .iter()
-            .filter(|param| matches!(param.location, ParameterLocation::Query))
-            .collect::<Vec<_>>();
-        if !query_params.is_empty() {
-            pre_request_lines.push("params: dict[str, Any] = {}".into());
-            params_name = "params".into();
-            for param in query_params {
-                let param_name = sanitize_identifier(&param.name);
-                if param.required {
-                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                        pre_request_lines.push(format!(
-                            "self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
-                            format!("query parameter `{}`", param.name)
-                        ));
-                    }
-                    pre_request_lines.push(format!("params[{:?}] = {param_name}", param.name));
-                } else {
-                    pre_request_lines.push(format!("if {param_name} is not None:"));
-                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                        pre_request_lines.push(format!(
-                            "    self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
-                            format!("query parameter `{}`", param.name)
-                        ));
-                    }
-                    pre_request_lines.push(format!("    params[{:?}] = {param_name}", param.name));
-                }
-            }
-            call_arguments.push("params=params".into());
-        }
-
-        let header_params = operation
+            .filter(|p| matches!(p.location, ParameterLocation::Query))
+            .map(py_param_view)
+            .collect();
+        let header_params: Vec<PyParamView> = operation
             .params
             .iter()
-            .filter(|param| matches!(param.location, ParameterLocation::Header))
-            .collect::<Vec<_>>();
-        if !header_params.is_empty() {
-            pre_request_lines.push("headers: dict[str, Any] = {}".into());
-            headers_name = "headers".into();
-            for param in header_params {
-                let param_name = sanitize_identifier(&param.name);
-                if param.required {
-                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                        pre_request_lines.push(format!(
-                            "self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
-                            format!("header `{}`", param.name)
-                        ));
-                    }
-                    pre_request_lines.push(format!("headers[{:?}] = {param_name}", param.name));
-                } else {
-                    pre_request_lines.push(format!("if {param_name} is not None:"));
-                    if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                        pre_request_lines.push(format!(
-                            "    self._validate_string_encoding({param_name}, {content_encoding:?}, {:?}, request_options)",
-                            format!("header `{}`", param.name)
-                        ));
-                    }
-                    pre_request_lines.push(format!("    headers[{:?}] = {param_name}", param.name));
-                }
-            }
-            call_arguments.push("headers=headers".into());
-        }
-
-        let uses_request_kwargs = true;
-        pre_request_lines.push("request_kwargs: dict[str, Any] = {}".into());
-        if let Some(request_body) = &operation.request_body {
-            if request_body.required {
-                if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
-                    pre_request_lines.push(format!(
-                        "self._validate_string_encoding(body, {content_encoding:?}, \"request body\", request_options)"
-                    ));
-                }
-                call_arguments.push(required_request_body_argument(request_body));
+            .filter(|p| matches!(p.location, ParameterLocation::Header))
+            .map(py_param_view)
+            .collect();
+        let body = operation.request_body.as_ref().map(|rb| PyBodyView {
+            required: rb.required,
+            kind: if rb.media_type == "application/json" {
+                "json"
             } else {
-                if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
-                    pre_request_lines.push("if body is not None:".into());
-                    pre_request_lines.push(format!(
-                        "    self._validate_string_encoding(body, {content_encoding:?}, \"request body\", request_options)"
-                    ));
-                }
-                pre_request_lines.extend(optional_request_body_lines(request_body));
+                "data"
             }
-        }
-        pre_request_lines.push(format!(
-            "request_kwargs = self._apply_request_options(request_kwargs, request_options, params={params_name}, headers={headers_name})"
-        ));
-
-        let return_type = operation_return_type(operation);
-        let mut post_request_lines = vec!["self._handle_error(response, request_options)".into()];
-        let response_encoding = operation
+            .into(),
+            content_encoding: content_encoding_attribute(&rb.attributes).map(str::to_owned),
+        });
+        let ret = operation_return_type(operation);
+        let content_encoding = operation
             .responses
             .iter()
-            .find(|response| response.status.starts_with('2'))
-            .and_then(|response| content_encoding_attribute(&response.attributes));
-        if let Some(parse_expression) = return_type.parse_expression.clone() {
-            post_request_lines.push(format!(
-                "return self._parse_response(response, {parse_expression}, response_encoding={}, request_options=request_options)",
-                response_encoding
-                    .map(|encoding| format!("{encoding:?}"))
-                    .unwrap_or_else(|| "None".into())
-            ));
-        } else {
-            post_request_lines.push(format!(
-                "return self._parse_response(response, response_encoding={}, request_options=request_options)",
-                response_encoding
-                    .map(|encoding| format!("{encoding:?}"))
-                    .unwrap_or_else(|| "None".into())
-            ));
-        }
-
-        let request_suffix = render_request_arguments(&call_arguments, uses_request_kwargs);
-        let raw_request_call_line = match mode {
-            ClientMode::Async => format!(
-                "response = await self._client.request({:?}, url{request_suffix})",
-                method_literal(operation.method)
-            ),
-            ClientMode::Sync => format!(
-                "response = self._client.request({:?}, url{request_suffix})",
-                method_literal(operation.method)
-            ),
+            .find(|r| r.status.starts_with('2'))
+            .and_then(|r| content_encoding_attribute(&r.attributes))
+            .map(str::to_owned);
+        let return_type = PyReturnTypeView {
+            annotation: ret.annotation.unwrap_or_else(|| "None".into()),
+            has_result: ret.parse_expression.is_some(),
+            parse_expression: ret.parse_expression,
+            content_encoding,
         };
-        let wrapper_request_call_line = match mode {
-            ClientMode::Async => format!(
-                "response = await self.{}({})",
-                raw_method_name(operation),
-                build_wrapper_forward_arguments(operation)
-            ),
-            ClientMode::Sync => format!(
-                "response = self.{}({})",
-                raw_method_name(operation),
-                build_wrapper_forward_arguments(operation)
-            ),
-        };
-
         Self {
-            def_keyword: match mode {
-                ClientMode::Async => "async def".into(),
-                ClientMode::Sync => "def".into(),
-            },
+            is_async: matches!(mode, ClientMode::Async),
             method_name: sanitize_identifier(&operation.name),
             raw_method_name: raw_method_name(operation),
             args_signature: build_method_args(operation).join(", "),
-            return_annotation: return_type.annotation.unwrap_or_else(|| "None".into()),
-            raw_return_annotation: "httpx.Response".into(),
-            raw_docstring_block: render_python_method_docstring(operation, true),
-            docstring_block: render_python_method_docstring(operation, false),
-            url_template: render_python_path_template(&operation.path),
-            raw_request_call_line,
-            raw_pre_request_block: indent_block(&pre_request_lines, 8),
-            raw_post_request_block: indent_block(&["return response".into()], 8),
-            wrapper_request_call_line,
-            post_request_block: indent_block(&post_request_lines, 8),
-        }
-    }
-}
-
-pub(crate) fn render_python_method_docstring(operation: &Operation, raw: bool) -> String {
-    let mut lines = Vec::new();
-    if let Some(summary) = operation.attributes.get("summary").and_then(Value::as_str) {
-        let summary = summary.trim();
-        if !summary.is_empty() {
-            lines.push(summary.to_owned());
-        }
-    }
-    if raw {
-        lines.push("Returns the raw HTTP response without parsing it or raising for HTTP errors.".into());
-    }
-
-    let described_params = operation
-        .params
-        .iter()
-        .filter_map(|param| {
-            param.attributes
-                .get("description")
+            forward_args: build_wrapper_forward_arguments(operation),
+            summary: operation
+                .attributes
+                .get("summary")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .filter(|description| !description.is_empty())
-                .map(|description| (sanitize_identifier(&param.name), description.to_owned()))
-        })
-        .collect::<Vec<_>>();
-
-    if !described_params.is_empty() {
-        if !lines.is_empty() {
-            lines.push(String::new());
+                .filter(|s| !s.is_empty())
+                .map(sanitize_doc_text),
+            doc_params: operation
+                .params
+                .iter()
+                .filter_map(|param| {
+                    param
+                        .attributes
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|d| !d.is_empty())
+                        .map(|d| PyDocParamView {
+                            name: sanitize_identifier(&param.name),
+                            description: sanitize_doc_text(d),
+                        })
+                })
+                .collect(),
+            http_method: method_literal(operation.method).to_owned(),
+            path_fstring: build_python_path_fstring(&operation.path),
+            path_params,
+            query_params,
+            header_params,
+            body,
+            return_type,
         }
-        lines.push("Args:".into());
-        for (name, description) in described_params {
-            lines.push(format!("    {name}: {}", sanitize_doc_text(&description)));
-        }
     }
-
-    if lines.is_empty() {
-        String::new()
-    } else {
-        let mut block = vec!["\"\"\"".to_owned()];
-        block.extend(lines);
-        block.push("\"\"\"".into());
-        indent_block(&block, 8)
-    }
-}
-
-pub(crate) fn sanitize_doc_text(value: &str) -> String {
-    value.replace("\"\"\"", "\"\\\"\\\"")
-}
-
-pub(crate) fn content_encoding_attribute(attributes: &BTreeMap<String, Value>) -> Option<&str> {
-    attributes.get("content_encoding").and_then(Value::as_str)
-}
-
-pub(crate) fn render_request_arguments(call_arguments: &[String], uses_request_kwargs: bool) -> String {
-    let mut arguments = call_arguments.to_vec();
-    if uses_request_kwargs {
-        arguments.push("**request_kwargs".into());
-    }
-    if arguments.is_empty() {
-        String::new()
-    } else {
-        format!(", {}", arguments.join(", "))
-    }
-}
-
-pub(crate) fn required_request_body_argument(request_body: &RequestBody) -> String {
-    let (body_kwarg, json_mode_literal) = request_body_binding(request_body);
-    format!("{body_kwarg}=self._serialize_body(body, json_mode={json_mode_literal})")
-}
-
-pub(crate) fn optional_request_body_lines(request_body: &RequestBody) -> Vec<String> {
-    let (body_kwarg, json_mode_literal) = request_body_binding(request_body);
-    vec![
-        "if body is not None:".into(),
-        format!(
-            "    request_kwargs[{body_kwarg:?}] = self._serialize_body(body, json_mode={json_mode_literal})"
-        ),
-    ]
-}
-
-pub(crate) fn request_body_binding(request_body: &RequestBody) -> (&'static str, &'static str) {
-    let json_mode = request_body.media_type == "application/json";
-    let json_mode_literal = if json_mode { "True" } else { "False" };
-    let body_kwarg = if json_mode { "json" } else { "data" };
-    (body_kwarg, json_mode_literal)
-}
-
-pub(crate) fn render_model_block(tera: &Tera, model: ModelView) -> Result<String> {
-    let mut context = TeraContext::new();
-    context.insert("model", &model);
-    tera.render(TEMPLATE_MODEL_CLASS, &context)
-        .context("failed to render model class partial")
-}
-
-pub(crate) fn render_client_block(tera: &Tera, client: ClientClassView) -> Result<String> {
-    let mut context = TeraContext::new();
-    context.insert("client", &client);
-    tera.render(TEMPLATE_CLIENT_CLASS, &context)
-        .context("failed to render client class partial")
-}
-
-pub(crate) fn render_tag_client_block(tera: &Tera, client: TagClientClassView) -> Result<String> {
-    let mut context = TeraContext::new();
-    context.insert("client", &client);
-    tera.render(TEMPLATE_TAG_CLIENT_CLASS, &context)
-        .context("failed to render tag client class partial")
 }
 
 pub(crate) fn render_methods_block(tera: &Tera, methods: Vec<OperationMethodView>) -> Result<String> {
@@ -699,17 +510,6 @@ pub(crate) fn render_methods_block(tera: &Tera, methods: Vec<OperationMethodView
         .map(|method| render_method_block(tera, method))
         .collect::<Result<Vec<_>>>()
         .map(|methods| methods.join("\n"))
-}
-
-pub(crate) fn render_method_block(tera: &Tera, method: OperationMethodView) -> Result<String> {
-    let mut context = TeraContext::new();
-    context.insert("operation", &method);
-    tera.render(TEMPLATE_CLIENT_METHOD, &context)
-        .context("failed to render client method partial")
-}
-
-pub(crate) fn raw_method_name(operation: &Operation) -> String {
-    format!("_{}_raw", sanitize_identifier(&operation.name))
 }
 
 pub(crate) fn build_wrapper_forward_arguments(operation: &Operation) -> String {
@@ -791,4 +591,94 @@ pub(crate) fn build_method_args(operation: &Operation) -> Vec<String> {
     args.push("request_options: RequestOptions | None = None".into());
 
     args
+}
+
+fn build_python_path_fstring(path: &str) -> String {
+    let mut result = String::new();
+    let mut chars = path.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '{' => {
+                let mut name = String::new();
+                while let Some(next) = chars.peek() {
+                    if *next == '}' {
+                        chars.next();
+                        break;
+                    }
+                    name.push(*next);
+                    chars.next();
+                }
+                result.push('{');
+                result.push_str(&sanitize_identifier(&name));
+                result.push('}');
+            }
+            '"' => result.push_str("\\\""),
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
+fn py_param_view(param: &Parameter) -> PyParamView {
+    PyParamView {
+        name: sanitize_identifier(&param.name),
+        raw_name: param.name.clone(),
+        required: param.required,
+        content_encoding: content_encoding_attribute(&param.attributes).map(str::to_owned),
+    }
+}
+
+pub(crate) fn sanitize_doc_text(value: &str) -> String {
+    value.replace("\"\"\"", "\"\\\"\\\"")
+}
+
+pub(crate) fn content_encoding_attribute(attributes: &BTreeMap<String, Value>) -> Option<&str> {
+    attributes.get("content_encoding").and_then(Value::as_str)
+}
+
+pub(crate) fn raw_method_name(operation: &Operation) -> String {
+    format!("_{}_raw", sanitize_identifier(&operation.name))
+}
+
+pub(crate) fn render_model_block(tera: &Tera, model: ModelView) -> Result<String> {
+    let mut context = TeraContext::new();
+    context.insert("model", &model);
+    tera.render(TEMPLATE_MODEL_CLASS, &context)
+        .context("failed to render model class partial")
+}
+
+// ── IrEmitter helpers ───────────────────────────────────────────────────────────
+
+/// Render a single model to a Python dataclass declaration.
+pub(crate) fn emit_model(tera: &Tera, model: &arvalez_ir::Model) -> Result<String> {
+    render_model_block(tera, ModelView::from_model(model))
+}
+
+/// Render a single operation to a Python async client method.
+pub(crate) fn emit_operation(
+    tera: &Tera,
+    operation: &arvalez_ir::Operation,
+) -> Result<String> {
+    render_method_block(tera, OperationMethodView::from_operation(operation, ClientMode::Async))
+}
+
+pub(crate) fn render_client_block(tera: &Tera, client: ClientClassView) -> Result<String> {
+    let mut context = TeraContext::new();
+    context.insert("client", &client);
+    tera.render(TEMPLATE_CLIENT_CLASS, &context)
+        .context("failed to render client class partial")
+}
+
+pub(crate) fn render_tag_client_block(tera: &Tera, client: TagClientClassView) -> Result<String> {
+    let mut context = TeraContext::new();
+    context.insert("client", &client);
+    tera.render(TEMPLATE_TAG_CLIENT_CLASS, &context)
+        .context("failed to render tag client class partial")
+}
+
+pub(crate) fn render_method_block(tera: &Tera, method: OperationMethodView) -> Result<String> {
+    let mut context = TeraContext::new();
+    context.insert("operation", &method);
+    tera.render(TEMPLATE_CLIENT_METHOD, &context)
+        .context("failed to render client method partial")
 }

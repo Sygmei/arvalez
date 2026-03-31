@@ -4,10 +4,8 @@ export type {{ model.type_name }} = {{ model.enum_expression }};
 export type {{ model.type_name }} = {{ model.alias_expression }};
 {% else -%}
 export interface {{ model.type_name }} {
-{% if not model.has_fields -%}
+{%- for field in model.fields %}
+  {{ field.name }}{% if field.optional %}?{% endif %}: {{ field.ts_type }};
+{%- endfor %}
 }
-{% else -%}
-{{ model.fields_block }}
-}
-{% endif %}
 {% endif %}

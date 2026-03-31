@@ -1,0 +1,22 @@
+{% if operation.summary %}# {{ operation.summary }}
+{% endif %}export def "{{ operation.command_name }}" [
+{% for param in operation.positional_params %}    {{ param.name }}: {{ param.nu_type }}{% if param.description %}  # {{ param.description }}{% endif %}
+
+{% endfor %}    --base-url: string = "{{ operation.default_base_url }}"
+{% for flag in operation.flag_params %}    --{{ flag.flag_name }}: {{ flag.nu_type }}{% if flag.description %}  # {{ flag.description }}{% endif %}
+
+{% endfor %}{% if operation.has_body %}    --body: {{ operation.body_nu_type }}
+{% endif %}]: nothing -> {{ operation.return_nu_type }} {
+    let path = "{{ operation.path_template | safe }}"
+{% if operation.query_params | length == 0 %}    let full_url = $base_url ++ $path
+{% else %}    mut query_parts: list<string> = []
+{% for p in operation.query_params %}{% if p.required %}    $query_parts = ($query_parts | append ("{{ p.raw_name }}" ++ "=" ++ (${{ p.name }} | into string)))
+{% else %}    if (${{ p.name }} | is-not-empty) { $query_parts = ($query_parts | append ("{{ p.raw_name }}" ++ "=" ++ (${{ p.name }} | into string))) }
+{% endif %}{% endfor %}    let full_url = if ($query_parts | is-empty) { $base_url ++ $path } else { $base_url ++ $path ++ "?" ++ ($query_parts | str join "&") }
+{% endif %}{% if operation.header_params | length > 0 %}    mut headers = {}
+{% for p in operation.header_params %}{% if p.required %}    $headers = ($headers | insert "{{ p.raw_name }}" ${{ p.name }})
+{% else %}    if (${{ p.name }} | is-not-empty) { $headers = ($headers | insert "{{ p.raw_name }}" ${{ p.name }}) }
+{% endif %}{% endfor %}{% endif %}{% if operation.has_body %}{% if operation.body_required %}    http {{ operation.http_verb }} $full_url $body{% if operation.header_params | length > 0 %} --headers $headers{% endif %}
+{% else %}    http {{ operation.http_verb }} $full_url (if ($body | is-not-empty) { $body }){% if operation.header_params | length > 0 %} --headers $headers{% endif %}
+{% endif %}{% else %}    http {{ operation.http_verb }} $full_url{% if operation.header_params | length > 0 %} --headers $headers{% endif %}
+{% endif %}}

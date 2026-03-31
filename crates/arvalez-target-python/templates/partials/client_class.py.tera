@@ -10,18 +10,31 @@ class {{ client.class_name }}(_BaseApiClient):
         self._client = client
         self._on_error = on_error or self._default_on_error
         self._validate_content_encodings = validate_content_encodings
-{% if client.service_bindings_block %}
-{{ client.service_bindings_block }}
-{% endif %}
+{% for binding in client.service_bindings %}
+        self.{{ binding.property_name }} = {{ binding.class_name }}(self)
+{% endfor %}
 
-    {{ client.close_method_signature }}
-{{ client.close_method_block }}
+{% if client.is_async %}
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
 
-    {{ client.enter_method_signature }}
+    async def __aenter__(self) -> {{ client.class_name }}:
         return self
 
-    {{ client.exit_method_signature }}
-{{ client.exit_method_block }}
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        await self.aclose()
+{% else %}
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+    def __enter__(self) -> {{ client.class_name }}:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
+{% endif %}
 
 {% if client.methods_block %}
 {{ client.methods_block }}

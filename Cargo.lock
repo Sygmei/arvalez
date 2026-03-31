@@ -96,6 +96,7 @@ dependencies = [
  "arvalez-ir",
  "arvalez-openapi",
  "arvalez-target-go",
+ "arvalez-target-nushell",
  "arvalez-target-python",
  "arvalez-target-typescript",
  "clap",
@@ -143,6 +144,19 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-go"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "arvalez-ir",
+ "arvalez-target-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tera",
+]
+
+[[package]]
+name = "arvalez-target-nushell"
 version = "1.6.0"
 dependencies = [
  "anyhow",

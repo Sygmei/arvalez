@@ -7,6 +7,7 @@ members = [
     "crates/arvalez-target-go",
     "crates/arvalez-target-python",
     "crates/arvalez-target-typescript",
+    "crates/arvalez-target-nushell",
 ]
 resolver = "2"
 
@@ -27,6 +28,7 @@ arvalez-target-core = { version = "1.5.0", path = "crates/arvalez-target-core" }
 arvalez-target-go = { version = "1.6.0", path = "crates/arvalez-target-go" }
 arvalez-target-python = { version = "1.6.0", path = "crates/arvalez-target-python" }
 arvalez-target-typescript = { version = "1.6.0", path = "crates/arvalez-target-typescript" }
+arvalez-target-nushell = { version = "1.6.0", path = "crates/arvalez-target-nushell" }
 clap = { version = "4.5.38", features = ["derive"] }
 crossterm = "0.29.0"
 indexmap = { version = "2.10.0", features = ["serde"] }

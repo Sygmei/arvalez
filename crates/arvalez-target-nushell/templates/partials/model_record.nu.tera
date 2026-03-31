@@ -1,0 +1,22 @@
+{% if model.is_enum %}# Enum: {{ model.type_name }}
+# Valid values: {% for v in model.enum_variants %}{{ v.raw }}{% if not loop.last %}, {% endif %}{% endfor %}
+
+export def "make-{{ model.type_name }}" [
+    value: string  # Must be one of the valid enum values
+]: nothing -> string {
+    let valid = [{% for v in model.enum_variants %}{{ v.raw }}{% if not loop.last %}, {% endif %}{% endfor %}]
+    if ($value not-in $valid) {
+        error make { msg: $"Invalid {{ model.type_name }} value: ($value). Expected one of: ($valid | str join ', ')" }
+    }
+    $value
+}
+{% else %}# Record constructor for {{ model.type_name }}
+export def "make-{{ model.type_name }}" [
+{% for field in model.fields %}    {% if field.optional %}--{% endif %}{{ field.field_name }}: {{ field.nu_type }}{% if field.description %}  # {{ field.description }}{% endif %}
+
+{% endfor %}]: nothing -> {{ model.typed_record_type }} {
+    {
+{% for field in model.fields %}        {{ field.field_name }}: ${{ field.field_name }}
+{% endfor %}    }
+}
+{% endif %}

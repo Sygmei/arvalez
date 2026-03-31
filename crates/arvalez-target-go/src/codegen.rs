@@ -216,6 +216,127 @@ impl ServiceView {
     }
 }
 
+/// Documentation view for a single parameter — carries the sanitised name and
+/// description so the template can render Go `//` comment lines without any
+/// Rust-side string pre-building.
+#[derive(Debug, Serialize)]
+struct GoDocParamView {
+    name: String,
+    description: String,
+}
+
+/// Per-parameter view: carries all data the template needs to emit
+/// path / query / header / cookie handling without Rust-side Go-code pre-building.
+#[derive(Debug, Serialize)]
+struct GoParamView {
+    /// Sanitised Go identifier used as the variable name in generated code.
+    name: String,
+    /// Original parameter name (map key / header name / cookie name / URL key).
+    raw_name: String,
+    /// `true` = non-pointer arg in the Go signature; `false` = pointer arg.
+    required: bool,
+    /// Optional `content_encoding` attribute value, e.g. `"base64"`.
+    content_encoding: Option<String>,
+}
+
+fn go_param_view(param: &Parameter) -> GoParamView {
+    GoParamView {
+        name: sanitize_identifier(&param.name),
+        raw_name: param.name.clone(),
+        required: param.required,
+        content_encoding: content_encoding_attribute(&param.attributes).map(str::to_owned),
+    }
+}
+
+/// Request-body descriptor — tells the template how to encode the body.
+#[derive(Debug, Serialize)]
+struct GoBodyView {
+    required: bool,
+    /// `"json"`, `"multipart"`, or `"binary"`.
+    kind: String,
+    content_encoding: Option<String>,
+}
+
+/// Return-shape descriptor — tells the template how to handle the response.
+#[derive(Debug, Serialize)]
+struct GoReturnShapeView {
+    /// `true` when the operation has a typed success response body.
+    has_result: bool,
+    /// Full Go return type, e.g. `"(*Widget, error)"` or `"error"`.
+    signature: String,
+    /// Outer result type (may be a pointer), e.g. `"*Widget"`.
+    result_go_type: String,
+    /// Concrete decode target (without outer pointer), e.g. `"Widget"`.
+    decode_go_type: String,
+    /// `true` when the result is a pointer / slice → `return nil, err` on error.
+    returns_nil_on_error: bool,
+    /// `true` when the success return is `&result` rather than `result`.
+    returns_pointer: bool,
+    /// Optional content-encoding to validate on the decoded response body.
+    content_encoding: Option<String>,
+}
+
+impl GoReturnShapeView {
+    fn from_operation(operation: &Operation) -> Self {
+        let success = operation
+            .responses
+            .iter()
+            .find(|r| r.status.starts_with('2'));
+        let content_encoding = success
+            .and_then(|r| content_encoding_attribute(&r.attributes))
+            .map(str::to_owned);
+        match success.and_then(|r| r.type_ref.as_ref()) {
+            Some(type_ref) => {
+                let result_go_type = go_result_type(type_ref);
+                let decode_go_type = go_decode_type(type_ref);
+                GoReturnShapeView {
+                    has_result: true,
+                    signature: format!("({result_go_type}, error)"),
+                    returns_nil_on_error: returns_nil_on_error(type_ref),
+                    returns_pointer: returns_pointer_result(type_ref),
+                    decode_go_type,
+                    result_go_type,
+                    content_encoding,
+                }
+            }
+            None => GoReturnShapeView {
+                has_result: false,
+                signature: "error".into(),
+                result_go_type: String::new(),
+                decode_go_type: String::new(),
+                returns_nil_on_error: false,
+                returns_pointer: false,
+                content_encoding,
+            },
+        }
+    }
+}
+
+/// Converts a path template such as `"/items/{id}/sub/{sub}"` into a Go
+/// `fmt.Sprintf` format string by replacing `{param}` placeholders with `%s`
+/// and escaping literal `%` characters as `%%`.
+fn build_path_format(path: &str) -> String {
+    let mut result = String::new();
+    let mut chars = path.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '{' => {
+                while let Some(next) = chars.peek() {
+                    if *next == '}' {
+                        chars.next();
+                        break;
+                    }
+                    chars.next();
+                }
+                result.push_str("%s");
+            }
+            '%' => result.push_str("%%"),
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
 #[derive(Debug, Serialize)]
 struct OperationMethodView {
     receiver_name: String,
@@ -223,14 +344,26 @@ struct OperationMethodView {
     client_expression: String,
     method_name: String,
     raw_method_name: String,
+    /// Pre-built Go argument list for the function signature.
     args_signature: String,
-    return_signature: String,
-    raw_doc_block: String,
-    doc_block: String,
-    raw_block: String,
-    wrapper_request_call_line: String,
-    wrapper_error_block: String,
-    wrapper_post_request_block: String,
+    /// Pre-built argument list for forwarding from wrapper to raw method.
+    forward_args: String,
+    /// Operation summary text (newlines collapsed), if any.
+    summary: Option<String>,
+    /// Parameters that carry a non-empty description.
+    doc_params: Vec<GoDocParamView>,
+    /// Go HTTP method constant, e.g. `"http.MethodGet"`.
+    http_method: String,
+    /// Path with `{param}` → `%s` and literal `%` → `%%` for `fmt.Sprintf`.
+    path_format: String,
+    /// Original path string from the IR, used when there are no path params.
+    path_raw: String,
+    path_params: Vec<GoParamView>,
+    query_params: Vec<GoParamView>,
+    header_params: Vec<GoParamView>,
+    cookie_params: Vec<GoParamView>,
+    body: Option<GoBodyView>,
+    return_shape: GoReturnShapeView,
 }
 
 impl OperationMethodView {
@@ -248,416 +381,88 @@ impl OperationMethodView {
         receiver_type: &str,
         client_expression: &str,
     ) -> Self {
-        let return_shape = go_return_shape(operation);
-        let wrapper_forward_arguments = build_forward_arguments(operation);
-
+        let path_params: Vec<GoParamView> = operation
+            .params
+            .iter()
+            .filter(|p| matches!(p.location, ParameterLocation::Path))
+            .map(go_param_view)
+            .collect();
+        let query_params: Vec<GoParamView> = operation
+            .params
+            .iter()
+            .filter(|p| matches!(p.location, ParameterLocation::Query))
+            .map(go_param_view)
+            .collect();
+        let header_params: Vec<GoParamView> = operation
+            .params
+            .iter()
+            .filter(|p| matches!(p.location, ParameterLocation::Header))
+            .map(go_param_view)
+            .collect();
+        let cookie_params: Vec<GoParamView> = operation
+            .params
+            .iter()
+            .filter(|p| matches!(p.location, ParameterLocation::Cookie))
+            .map(go_param_view)
+            .collect();
+        let body = operation.request_body.as_ref().map(|rb| GoBodyView {
+            required: rb.required,
+            kind: match classify_request_body(rb) {
+                RequestBodyKind::Json => "json".into(),
+                RequestBodyKind::Multipart => "multipart".into(),
+                RequestBodyKind::BinaryOrOther => "binary".into(),
+            },
+            content_encoding: content_encoding_attribute(&rb.attributes).map(str::to_owned),
+        });
+        let method_name = sanitize_exported_identifier(&operation.name);
+        let raw_method_name = format!("{}Raw", &method_name);
         Self {
             receiver_name: receiver_name.into(),
             receiver_type: receiver_type.into(),
             client_expression: client_expression.into(),
-            method_name: sanitize_exported_identifier(&operation.name),
-            raw_method_name: format!("{}Raw", sanitize_exported_identifier(&operation.name)),
+            method_name,
+            raw_method_name,
             args_signature: build_method_args(operation).join(", "),
-            return_signature: return_shape.signature.clone(),
-            raw_doc_block: render_go_doc_block(operation, true),
-            doc_block: render_go_doc_block(operation, false),
-            raw_block: build_raw_block(operation),
-            wrapper_request_call_line: format!(
-                "response, err := {receiver_name}.{}({wrapper_forward_arguments})",
-                format!("{}Raw", sanitize_exported_identifier(&operation.name))
-            ),
-            wrapper_error_block: indent_block(&return_shape.raw_error_lines, 4),
-            wrapper_post_request_block: indent_block(&return_shape.post_response_lines, 4),
+            forward_args: build_forward_arguments(operation),
+            summary: operation
+                .attributes
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(sanitize_go_comment_text),
+            doc_params: operation
+                .params
+                .iter()
+                .filter_map(|param| {
+                    param
+                        .attributes
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(|d| d.trim())
+                        .filter(|d| !d.is_empty())
+                        .map(|d| GoDocParamView {
+                            name: sanitize_identifier(&param.name),
+                            description: sanitize_go_comment_text(d),
+                        })
+                })
+                .collect(),
+            http_method: go_http_method(operation.method).to_owned(),
+            path_format: build_path_format(&operation.path),
+            path_raw: operation.path.clone(),
+            path_params,
+            query_params,
+            header_params,
+            cookie_params,
+            body,
+            return_shape: GoReturnShapeView::from_operation(operation),
         }
-    }
-}
-
-fn render_go_doc_block(operation: &Operation, raw: bool) -> String {
-    let method_name = sanitize_exported_identifier(&operation.name);
-    let prefix = if raw {
-        format!("{method_name}Raw")
-    } else {
-        method_name
-    };
-
-    let mut lines = Vec::new();
-    if let Some(summary) = operation.attributes.get("summary").and_then(Value::as_str) {
-        let summary = summary.trim();
-        if !summary.is_empty() {
-            lines.push(format!("{prefix} {}", sanitize_go_comment_text(summary)));
-        }
-    }
-    if raw {
-        lines.push(format!(
-            "{prefix} returns the raw HTTP response without decoding it or converting HTTP errors."
-        ));
-    }
-    for param in &operation.params {
-        if let Some(description) = param.attributes.get("description").and_then(Value::as_str) {
-            let description = description.trim();
-            if !description.is_empty() {
-                lines.push(format!(
-                    "{} parameter {}: {}",
-                    prefix,
-                    sanitize_identifier(&param.name),
-                    sanitize_go_comment_text(description)
-                ));
-            }
-        }
-    }
-
-    if lines.is_empty() {
-        String::new()
-    } else {
-        lines.into_iter()
-            .map(|line| format!("// {line}"))
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 }
 
 fn sanitize_go_comment_text(value: &str) -> String {
     value.replace('\n', " ").replace('\r', " ")
 }
-
-#[derive(Debug, Clone)]
-struct GoReturnShape {
-    signature: String,
-    raw_error_lines: Vec<String>,
-    post_response_lines: Vec<String>,
-}
-
-fn go_return_shape(operation: &Operation) -> GoReturnShape {
-    let success = operation
-        .responses
-        .iter()
-        .find(|response| response.status.starts_with('2'));
-    let response_content_encoding = success.and_then(|response| content_encoding_attribute(&response.attributes));
-
-    match success.and_then(|response| response.type_ref.as_ref()) {
-        Some(type_ref) => {
-            let result_type = go_result_type(type_ref);
-            let zero_lines = if returns_nil_on_error(type_ref) {
-                vec![
-                    "if err != nil {".into(),
-                    "    return nil, err".into(),
-                    "}".into(),
-                ]
-            } else {
-                vec![
-                    "if err != nil {".into(),
-                    format!("    var zero {result_type}"),
-                    "    return zero, err".into(),
-                    "}".into(),
-                ]
-            };
-
-            let mut post_response_lines = vec![
-                "defer response.Body.Close()".into(),
-                "if err := client.handleError(response, requestOptions); err != nil {".into(),
-            ];
-            if returns_nil_on_error(type_ref) {
-                post_response_lines.push("    return nil, err".into());
-            } else {
-                post_response_lines.push(format!("    var zero {result_type}"));
-                post_response_lines.push("    return zero, err".into());
-            }
-            post_response_lines.push("}".into());
-
-            let decode_type = go_decode_type(type_ref);
-            post_response_lines.push(format!("var result {decode_type}"));
-            post_response_lines.push(
-                "if err := client.decodeJSONResponse(response, &result); err != nil {".into(),
-            );
-            if returns_nil_on_error(type_ref) {
-                post_response_lines.push("    return nil, err".into());
-            } else {
-                post_response_lines.push(format!("    var zero {result_type}"));
-                post_response_lines.push("    return zero, err".into());
-            }
-            post_response_lines.push("}".into());
-            if let Some(content_encoding) = response_content_encoding {
-                post_response_lines.push(format!(
-                    "if err := client.validateStringEncoding(result, {:?}, \"response body\", requestOptions); err != nil {{",
-                    content_encoding
-                ));
-                if returns_nil_on_error(type_ref) {
-                    post_response_lines.push("    return nil, err".into());
-                } else {
-                    post_response_lines.push(format!("    var zero {result_type}"));
-                    post_response_lines.push("    return zero, err".into());
-                }
-                post_response_lines.push("}".into());
-            }
-            if returns_pointer_result(type_ref) {
-                post_response_lines.push("return &result, nil".into());
-            } else {
-                post_response_lines.push("return result, nil".into());
-            }
-
-            GoReturnShape {
-                signature: format!("({result_type}, error)"),
-                raw_error_lines: zero_lines,
-                post_response_lines,
-            }
-        }
-        None => GoReturnShape {
-            signature: "error".into(),
-            raw_error_lines: vec![
-                "if err != nil {".into(),
-                "    return err".into(),
-                "}".into(),
-            ],
-            post_response_lines: vec![
-                "defer response.Body.Close()".into(),
-                "if err := client.handleError(response, requestOptions); err != nil {".into(),
-                "    return err".into(),
-                "}".into(),
-                "return nil".into(),
-            ],
-        },
-    }
-}
-
-fn build_raw_block(operation: &Operation) -> String {
-    let mut lines = vec![
-        render_go_path_line(&operation.path, &operation.params),
-        "query := url.Values{}".into(),
-    ];
-
-    for param in operation
-        .params
-        .iter()
-        .filter(|param| matches!(param.location, ParameterLocation::Path))
-    {
-        let name = sanitize_identifier(&param.name);
-        if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-            lines.push(format!(
-                "if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
-                content_encoding,
-                format!("path parameter `{}`", param.name)
-            ));
-            lines.push("    return nil, err".into());
-            lines.push("}".into());
-        }
-    }
-
-    for param in operation
-        .params
-        .iter()
-        .filter(|param| matches!(param.location, ParameterLocation::Query))
-    {
-        let name = sanitize_identifier(&param.name);
-        if param.required {
-            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                lines.push(format!(
-                    "if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
-                    content_encoding,
-                    format!("query parameter `{}`", param.name)
-                ));
-                lines.push("    return nil, err".into());
-                lines.push("}".into());
-            }
-            lines.push(format!("query.Set({:?}, fmt.Sprint({name}))", param.name));
-        } else {
-            lines.push(format!("if {name} != nil {{"));
-            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                lines.push(format!(
-                    "    if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
-                    content_encoding,
-                    format!("query parameter `{}`", param.name)
-                ));
-                lines.push("        return nil, err".into());
-                lines.push("    }".into());
-            }
-            lines.push(format!(
-                "    query.Set({:?}, fmt.Sprint(*{name}))",
-                param.name
-            ));
-            lines.push("}".into());
-        }
-    }
-    lines.push("query = client.mergeQuery(query, requestOptions)".into());
-
-    lines.push("headers := http.Header{}".into());
-    for param in operation
-        .params
-        .iter()
-        .filter(|param| matches!(param.location, ParameterLocation::Header))
-    {
-        let name = sanitize_identifier(&param.name);
-        if param.required {
-            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                lines.push(format!(
-                    "if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
-                    content_encoding,
-                    format!("header `{}`", param.name)
-                ));
-                lines.push("    return nil, err".into());
-                lines.push("}".into());
-            }
-            lines.push(format!("headers.Set({:?}, fmt.Sprint({name}))", param.name));
-        } else {
-            lines.push(format!("if {name} != nil {{"));
-            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                lines.push(format!(
-                    "    if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
-                    content_encoding,
-                    format!("header `{}`", param.name)
-                ));
-                lines.push("        return nil, err".into());
-                lines.push("    }".into());
-            }
-            lines.push(format!(
-                "    headers.Set({:?}, fmt.Sprint(*{name}))",
-                param.name
-            ));
-            lines.push("}".into());
-        }
-    }
-
-    lines.push("cookies := []*http.Cookie{}".into());
-    for param in operation
-        .params
-        .iter()
-        .filter(|param| matches!(param.location, ParameterLocation::Cookie))
-    {
-        let name = sanitize_identifier(&param.name);
-        if param.required {
-            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                lines.push(format!(
-                    "if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
-                    content_encoding,
-                    format!("cookie `{}`", param.name)
-                ));
-                lines.push("    return nil, err".into());
-                lines.push("}".into());
-            }
-            lines.push(format!(
-                "cookies = append(cookies, &http.Cookie{{Name: {:?}, Value: fmt.Sprint({name})}})",
-                param.name
-            ));
-        } else {
-            lines.push(format!("if {name} != nil {{"));
-            if let Some(content_encoding) = content_encoding_attribute(&param.attributes) {
-                lines.push(format!(
-                    "    if err := client.validateStringEncoding({name}, {:?}, {:?}, requestOptions); err != nil {{",
-                    content_encoding,
-                    format!("cookie `{}`", param.name)
-                ));
-                lines.push("        return nil, err".into());
-                lines.push("    }".into());
-            }
-            lines.push(format!(
-                "    cookies = append(cookies, &http.Cookie{{Name: {:?}, Value: fmt.Sprint(*{name})}})",
-                param.name
-            ));
-            lines.push("}".into());
-        }
-    }
-    lines.push("cookies = client.mergeCookies(cookies, requestOptions)".into());
-
-    lines.push("var bodyReader io.Reader".into());
-    lines.push("var err error".into());
-    if let Some(request_body) = &operation.request_body {
-        match classify_request_body(request_body) {
-            RequestBodyKind::Json => {
-                lines.push("headers.Set(\"Content-Type\", \"application/json\")".into());
-                if request_body.required {
-                    if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
-                        lines.push(format!(
-                            "if err := client.validateStringEncoding(body, {:?}, \"request body\", requestOptions); err != nil {{",
-                            content_encoding
-                        ));
-                        lines.push("    return nil, err".into());
-                        lines.push("}".into());
-                    }
-                    lines.push("bodyReader, err = client.encodeJSONBody(body)".into());
-                    lines.push("if err != nil {".into());
-                    lines.push("    return nil, err".into());
-                    lines.push("}".into());
-                } else {
-                    lines.push("if body != nil {".into());
-                    if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
-                        lines.push(format!(
-                            "    if err := client.validateStringEncoding(body, {:?}, \"request body\", requestOptions); err != nil {{",
-                            content_encoding
-                        ));
-                        lines.push("        return nil, err".into());
-                        lines.push("    }".into());
-                    }
-                    lines.push("    bodyReader, err = client.encodeJSONBody(body)".into());
-                    lines.push("    if err != nil {".into());
-                    lines.push("        return nil, err".into());
-                    lines.push("    }".into());
-                    lines.push("}".into());
-                }
-            }
-            RequestBodyKind::Multipart => {
-                lines.push("var contentType string".into());
-                if request_body.required {
-                    if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
-                        lines.push(format!(
-                            "if err := client.validateStringEncoding(body, {:?}, \"request body\", requestOptions); err != nil {{",
-                            content_encoding
-                        ));
-                        lines.push("    return nil, err".into());
-                        lines.push("}".into());
-                    }
-                    lines.push(
-                        "bodyReader, contentType, err = client.encodeMultipartBody(body)".into(),
-                    );
-                    lines.push("if err != nil {".into());
-                    lines.push("    return nil, err".into());
-                    lines.push("}".into());
-                    lines.push("headers.Set(\"Content-Type\", contentType)".into());
-                } else {
-                    lines.push("if body != nil {".into());
-                    if let Some(content_encoding) = content_encoding_attribute(&request_body.attributes) {
-                        lines.push(format!(
-                            "    if err := client.validateStringEncoding(body, {:?}, \"request body\", requestOptions); err != nil {{",
-                            content_encoding
-                        ));
-                        lines.push("        return nil, err".into());
-                        lines.push("    }".into());
-                    }
-                    lines.push(
-                        "    bodyReader, contentType, err = client.encodeMultipartBody(body)"
-                            .into(),
-                    );
-                    lines.push("    if err != nil {".into());
-                    lines.push("        return nil, err".into());
-                    lines.push("    }".into());
-                    lines.push("    headers.Set(\"Content-Type\", contentType)".into());
-                    lines.push("}".into());
-                }
-            }
-            RequestBodyKind::BinaryOrOther => {
-                if request_body.required {
-                    lines.push("bodyReader = body".into());
-                } else {
-                    lines.push("bodyReader = body".into());
-                }
-            }
-        }
-    }
-    lines.push("headers = client.mergeHeaders(headers, requestOptions)".into());
-    lines.push(format!(
-        "request, err := http.NewRequestWithContext(client.resolveContext(ctx, requestOptions), {}, client.buildURL(path, query), bodyReader)",
-        go_http_method(operation.method)
-    ));
-    lines.push("if err != nil {".into());
-    lines.push("    return nil, err".into());
-    lines.push("}".into());
-    lines.push("request.Header = headers".into());
-    lines.push("for _, cookie := range cookies {".into());
-    lines.push("    request.AddCookie(cookie)".into());
-    lines.push("}".into());
-    lines.push("return client.httpClient.Do(request)".into());
-
-    indent_block(&lines, 4)
-}
-
 fn content_encoding_attribute(attributes: &BTreeMap<String, Value>) -> Option<&str> {
     attributes.get("content_encoding").and_then(Value::as_str)
 }
@@ -679,52 +484,28 @@ fn classify_request_body(request_body: &RequestBody) -> RequestBodyKind {
     }
 }
 
-fn render_go_path_line(path: &str, params: &[Parameter]) -> String {
-    let path_params = params
-        .iter()
-        .filter(|param| matches!(param.location, ParameterLocation::Path))
-        .collect::<Vec<_>>();
 
-    if path_params.is_empty() {
-        format!("path := {:?}", path)
-    } else {
-        let mut format_path = String::new();
-        let mut chars = path.chars().peekable();
-        while let Some(ch) = chars.next() {
-            match ch {
-                '{' => {
-                    while let Some(next) = chars.peek() {
-                        if *next == '}' {
-                            chars.next();
-                            break;
-                        }
-                        chars.next();
-                    }
-                    format_path.push_str("%s");
-                }
-                '%' => format_path.push_str("%%"),
-                _ => format_path.push(ch),
-            }
-        }
-        let arguments = path_params
-            .into_iter()
-            .map(|param| {
-                format!(
-                    "url.PathEscape(fmt.Sprint({}))",
-                    sanitize_identifier(&param.name)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("path := fmt.Sprintf({format_path:?}, {arguments})")
-    }
-}
 
 fn render_model_block(tera: &Tera, model: ModelView) -> Result<String> {
     let mut context = TeraContext::new();
     context.insert("model", &model);
     tera.render(TEMPLATE_MODEL_STRUCT, &context)
         .context("failed to render model struct partial")
+}
+
+// ── IrEmitter helpers ───────────────────────────────────────────────────────────
+
+/// Render a single model to a Go struct declaration.
+pub(crate) fn emit_model(tera: &Tera, model: &arvalez_ir::Model) -> Result<String> {
+    render_model_block(tera, ModelView::from_model(model))
+}
+
+/// Render a single operation to a Go client method pair (raw + wrapper).
+pub(crate) fn emit_operation(
+    tera: &Tera,
+    operation: &arvalez_ir::Operation,
+) -> Result<String> {
+    render_method_blocks(tera, vec![OperationMethodView::client_method(operation)])
 }
 
 fn render_service_block(tera: &Tera, service: Result<ServiceView>) -> Result<String> {

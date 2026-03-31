@@ -59,33 +59,6 @@ pub(crate) fn method_literal(method: HttpMethod) -> &'static str {
     }
 }
 
-pub(crate) fn render_python_path_template(path: &str) -> String {
-    let mut result = String::from("f\"");
-    let mut chars = path.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '{' => {
-                let mut name = String::new();
-                while let Some(next) = chars.peek() {
-                    if *next == '}' {
-                        chars.next();
-                        break;
-                    }
-                    name.push(*next);
-                    chars.next();
-                }
-                result.push('{');
-                result.push_str(&sanitize_identifier(&name));
-                result.push('}');
-            }
-            '"' => result.push_str("\\\""),
-            _ => result.push(ch),
-        }
-    }
-    result.push('"');
-    result
-}
-
 pub(crate) fn operation_return_type(operation: &Operation) -> ReturnType {
     let success = operation
         .responses

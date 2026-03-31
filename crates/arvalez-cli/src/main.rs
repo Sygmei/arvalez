@@ -15,10 +15,11 @@ use arvalez_openapi::{OpenApiLoadResult, load_openapi_to_ir_with_options};
 use arvalez_target_go::{generate_go_package, write_go_package};
 use arvalez_target_python::{generate_python_package, write_python_package};
 use arvalez_target_typescript::{generate_typescript_package, write_typescript_package};
+use arvalez_target_nushell::{generate_nushell_package, write_nushell_package};
 use clap::{Parser, Subcommand};
 use config::{
     load_optional_config, resolve_go_config, resolve_output_root, resolve_python_config,
-    resolve_target_output_directory, resolve_typescript_config,
+    resolve_target_output_directory, resolve_typescript_config, resolve_nushell_config,
 };
 use corpus::{CorpusTestOptions, run_apis_guru_corpus_test, run_corpus_spec_inline};
 use generate::{
@@ -64,6 +65,8 @@ enum Command {
         no_python: bool,
         #[arg(long)]
         no_typescript: bool,
+        #[arg(long)]
+        no_nushell: bool,
         #[arg(long)]
         output_version: Option<String>,
         #[arg(long)]
@@ -137,6 +140,30 @@ enum Command {
         #[arg(long)]
         timings: bool,
     },
+    GenerateNushell {
+        #[arg(long)]
+        ir: Option<PathBuf>,
+        #[arg(long)]
+        openapi: Option<PathBuf>,
+        #[arg(long, default_value = "arvalez.toml")]
+        config: PathBuf,
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
+        #[arg(long)]
+        ignore_unhandled: bool,
+        #[arg(long)]
+        module_name: Option<String>,
+        #[arg(long)]
+        template_dir: Option<PathBuf>,
+        #[arg(long)]
+        default_base_url: Option<String>,
+        #[arg(long)]
+        group_by_tag: bool,
+        #[arg(long)]
+        output_version: Option<String>,
+        #[arg(long)]
+        timings: bool,
+    },
     TestApisGuru {
         #[arg(
             long,
@@ -161,6 +188,8 @@ enum Command {
         no_python: bool,
         #[arg(long)]
         no_typescript: bool,
+        #[arg(long)]
+        no_nushell: bool,
         #[arg(long)]
         output_version: Option<String>,
         #[arg(long)]
@@ -188,6 +217,8 @@ enum Command {
         no_python: bool,
         #[arg(long)]
         no_typescript: bool,
+        #[arg(long)]
+        no_nushell: bool,
         #[arg(long)]
         output_version: Option<String>,
     },
@@ -232,6 +263,7 @@ fn main() -> Result<()> {
             no_go,
             no_python,
             no_typescript,
+            no_nushell,
             output_version,
             timings,
         } => {
@@ -246,8 +278,9 @@ fn main() -> Result<()> {
             let go_enabled = !no_go && !config_file.output.go.disabled;
             let python_enabled = !no_python && !config_file.output.python.disabled;
             let typescript_enabled = !no_typescript && !config_file.output.typescript.disabled;
+            let nushell_enabled = !no_nushell && !config_file.output.nushell.disabled;
 
-            if !go_enabled && !python_enabled && !typescript_enabled {
+            if !go_enabled && !python_enabled && !typescript_enabled && !nushell_enabled {
                 bail!("no generation targets enabled");
             }
 
@@ -295,6 +328,18 @@ fn main() -> Result<()> {
                 timing_collector.measure_result("typescript_write", || {
                     write_typescript_package(&output, &files)
                 })?;
+                eprintln!("generated {} files into {}", files.len(), output.display());
+            }
+
+            if nushell_enabled {
+                let nushell_config =
+                    resolve_nushell_config(&config_file, None, None, None, false, output_version.clone());
+                let files = timing_collector.measure_result("nushell_generate", || {
+                    generate_nushell_package(&ir, &nushell_config)
+                })?;
+                let output = output_root.join("nushell-client");
+                timing_collector
+                    .measure_result("nushell_write", || write_nushell_package(&output, &files))?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
             }
             timing_collector.print();
@@ -408,6 +453,43 @@ fn main() -> Result<()> {
             eprintln!("generated {} files into {}", files.len(), output.display());
             timing_collector.print();
         }
+        Command::GenerateNushell {
+            ir,
+            openapi,
+            config,
+            output_directory,
+            ignore_unhandled,
+            module_name,
+            template_dir,
+            default_base_url,
+            group_by_tag,
+            output_version,
+            timings,
+        } => {
+            let mut timing_collector = TimingCollector::new(timings);
+            let (ir, warnings) =
+                load_input_ir(ir, openapi, ignore_unhandled, &mut timing_collector)?;
+            print_openapi_warnings(&warnings);
+            let config_file =
+                timing_collector.measure_result("config_load", || load_optional_config(&config))?;
+            let output =
+                resolve_target_output_directory(&config_file, output_directory, "nushell-client");
+            let nushell_config = resolve_nushell_config(
+                &config_file,
+                module_name,
+                template_dir,
+                default_base_url,
+                group_by_tag,
+                output_version,
+            );
+            let files = timing_collector.measure_result("nushell_generate", || {
+                generate_nushell_package(&ir, &nushell_config)
+            })?;
+            timing_collector
+                .measure_result("nushell_write", || write_nushell_package(&output, &files))?;
+            eprintln!("generated {} files into {}", files.len(), output.display());
+            timing_collector.print();
+        }
         Command::TestApisGuru {
             repository,
             reference,
@@ -419,6 +501,7 @@ fn main() -> Result<()> {
             no_go,
             no_python,
             no_typescript,
+            no_nushell,
             output_version,
             limit,
             jobs,
@@ -436,6 +519,7 @@ fn main() -> Result<()> {
                 no_go,
                 no_python,
                 no_typescript,
+                no_nushell,
                 output_version,
                 limit,
                 jobs,
@@ -452,6 +536,7 @@ fn main() -> Result<()> {
             no_go,
             no_python,
             no_typescript,
+            no_nushell,
             output_version,
         } => {
             let config_file = load_optional_config(&config)?;
@@ -466,6 +551,7 @@ fn main() -> Result<()> {
                 no_go,
                 no_python,
                 no_typescript,
+                no_nushell,
                 output_version,
                 limit: None,
                 jobs: None,

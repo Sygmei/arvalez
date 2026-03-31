@@ -16,7 +16,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use arvalez_ir::{CoreIr, Operation};
+use arvalez_ir::{CoreIr, Model, Operation};
 use serde::Serialize;
 use tera::Tera;
 
@@ -48,6 +48,49 @@ pub fn write_files(output_dir: impl AsRef<Path>, files: &[GeneratedFile]) -> Res
     }
 
     Ok(())
+}
+
+// ── Language target trait ──────────────────────────────────────────────────────
+
+/// A language backend that can emit code from individual IR elements.
+///
+/// This is the central extension point for new target languages. Implement
+/// this trait for a generator struct that holds a [`Tera`] engine and the
+/// target-specific config. Each method corresponds to one kind of IR element
+/// and renders it to a target-language code snippet using the target's
+/// built-in (or user-overridden) Tera templates.
+///
+/// The blanket `generate` method drives the full SDK generation workflow:
+/// call it instead of the lower-level methods when you want to produce all
+/// output files at once.
+///
+/// # Example
+/// ```rust,ignore
+/// let generator = NushellGenerator::new(&config)?;
+/// let files = generator.generate(&ir)?;
+/// write_files("./out", &files)?;
+/// ```
+pub trait IrEmitter {
+    /// Render a single IR model to a target-language code snippet.
+    ///
+    /// The whole `ir` is provided so implementations can build cross-model
+    /// context (e.g. a type registry) when needed.
+    fn emit_model(&self, ir: &CoreIr, model: &Model) -> Result<String>;
+
+    /// Render a single IR operation to a target-language code snippet.
+    ///
+    /// The whole `ir` is provided for the same reason as [`emit_model`].
+    ///
+    /// [`emit_model`]: IrEmitter::emit_model
+    fn emit_operation(&self, ir: &CoreIr, operation: &Operation) -> Result<String>;
+
+    /// Generate the complete set of output files from the entire IR.
+    ///
+    /// This is the primary entry point for SDK generation. Implementations
+    /// assemble the full package (all files, package metadata, etc.) from the
+    /// IR elements rendered by `emit_model`/`emit_operation` and the
+    /// top-level package templates.
+    fn generate(&self, ir: &CoreIr) -> Result<Vec<GeneratedFile>>;
 }
 
 // ── Template loading ──────────────────────────────────────────────────────────
@@ -85,6 +128,96 @@ pub fn load_templates(
     }
 
     Ok(tera)
+}
+
+// ── Extra template discovery ──────────────────────────────────────────────────
+
+/// Scans `template_dir/package/` recursively for any `.tera` files whose
+/// template name (path relative to `template_dir`, forward-slash separated)
+/// does **not** appear in `known_names`.  Each discovered file is compiled
+/// into `tera` and the function returns a `Vec<(template_name, output_path)>`
+/// for the caller to render.
+///
+/// # Output path convention
+///
+/// The `output_path` in each pair is derived by stripping the `package/`
+/// prefix and the `.tera` extension from the relative path:
+///
+/// ```text
+/// template_dir/package/my_util.py.tera  →  my_util.py
+/// template_dir/package/sub/dir/foo.go.tera  →  sub/dir/foo.go
+/// ```
+///
+/// # Template context
+///
+/// Extra templates receive exactly the same context variable (`package`) as
+/// all builtin templates.  The available fields depend on the target:
+///
+/// | field | Python | Go | TypeScript | Nushell |
+/// |---|---|---|---|---|
+/// | `package.package_name` | ✓ | ✓ | ✓ | ✓ |
+/// | `package.version` | ✓ | ✓ | ✓ | ✓ |
+/// | `package.model_blocks` | ✓ | ✓ | ✓ | ✓ |
+/// | `package.client_blocks` / service / tag blocks | ✓ | ✓ | ✓ | ✓ |
+///
+/// Returns an empty `Vec` if `template_dir/package/` does not exist.
+pub fn load_extra_package_templates(
+    template_dir: &Path,
+    known_names: &[&str],
+    tera: &mut Tera,
+) -> Result<Vec<(String, PathBuf)>> {
+    let scan_dir = template_dir.join("package");
+    if !scan_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut extras = Vec::new();
+    collect_extra_templates_recursive(&scan_dir, template_dir, known_names, tera, &mut extras)?;
+    extras.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(extras)
+}
+
+fn collect_extra_templates_recursive(
+    dir: &Path,
+    template_root: &Path,
+    known_names: &[&str],
+    tera: &mut Tera,
+    out: &mut Vec<(String, PathBuf)>,
+) -> Result<()> {
+    for entry in fs::read_dir(dir)
+        .with_context(|| format!("failed to read directory `{}`", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_extra_templates_recursive(&path, template_root, known_names, tera, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("tera") {
+            let rel = path
+                .strip_prefix(template_root)
+                .expect("scanned path must be under template_root");
+            let template_name = rel
+                .to_str()
+                .with_context(|| format!("non-UTF-8 template path `{}`", rel.display()))?
+                .replace('\\', "/");
+            if known_names.contains(&template_name.as_str()) {
+                continue; // already handled by a builtin/override
+            }
+            let contents = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read extra template `{}`", path.display()))?;
+            tera.add_raw_template(&template_name, &contents).with_context(|| {
+                format!("failed to compile extra template `{template_name}`")
+            })?;
+            // Derive output path: strip "package/" prefix and ".tera" suffix.
+            let output_rel = rel
+                .strip_prefix("package")
+                .expect("extra templates are always discovered under package/");
+            let output_str = output_rel
+                .to_str()
+                .expect("already validated as UTF-8")
+                .trim_end_matches(".tera");
+            out.push((template_name, PathBuf::from(output_str)));
+        }
+    }
+    Ok(())
 }
 
 // ── IR helpers ────────────────────────────────────────────────────────────────

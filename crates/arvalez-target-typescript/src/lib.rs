@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use arvalez_ir::CoreIr;
+use arvalez_ir::{CoreIr, Model, Operation};
 pub use arvalez_target_core::GeneratedFile;
 pub use arvalez_target_core::write_files as write_typescript_package;
-use arvalez_target_core::load_templates;
-use tera::Context as TeraContext;
+use arvalez_target_core::{load_extra_package_templates, load_templates};
+pub use arvalez_target_core::IrEmitter;
+use tera::{Context as TeraContext, Tera};
 
 mod config;
 mod sanitize;
@@ -16,6 +17,34 @@ mod tests;
 
 pub use config::TypeScriptPackageConfig;
 use codegen::PackageTemplateContext;
+
+/// A TypeScript SDK generator.
+///
+/// Implements [`IrEmitter`]: construct it with [`TypeScriptGenerator::new`] then
+/// call [`IrEmitter::generate`] or the individual `emit_*` methods.
+pub struct TypeScriptGenerator {
+    pub config: TypeScriptPackageConfig,
+    pub(crate) tera: Tera,
+    /// Extra user-supplied templates discovered at construction time.
+    pub(crate) extra_package_templates: Vec<(String, PathBuf)>,
+}
+
+impl TypeScriptGenerator {
+    /// Build a generator from `config`, compiling the Tera template engine.
+    pub fn new(config: &TypeScriptPackageConfig) -> Result<Self> {
+        let mut tera = load_templates(
+            config.template_dir.as_deref(),
+            BUILTIN_TEMPLATES,
+            OVERRIDABLE_TEMPLATES,
+        )?;
+        let extra_package_templates = if let Some(dir) = config.template_dir.as_deref() {
+            load_extra_package_templates(dir, OVERRIDABLE_TEMPLATES, &mut tera)?
+        } else {
+            Vec::new()
+        };
+        Ok(Self { config: config.clone(), tera, extra_package_templates })
+    }
+}
 
 const TEMPLATE_PACKAGE_JSON: &str = "package/package.json.tera";
 const TEMPLATE_TSCONFIG: &str = "package/tsconfig.json.tera";
@@ -78,16 +107,41 @@ const OVERRIDABLE_TEMPLATES: &[&str] = &[
     TEMPLATE_TAG_GROUP,
 ];
 
+/// Generate a TypeScript client package from an IR snapshot.
+///
+/// Convenience wrapper around [`TypeScriptGenerator::new`] + [`IrEmitter::generate`].
 pub fn generate_typescript_package(
     ir: &CoreIr,
     config: &TypeScriptPackageConfig,
 ) -> Result<Vec<GeneratedFile>> {
-    let tera = load_templates(config.template_dir.as_deref(), BUILTIN_TEMPLATES, OVERRIDABLE_TEMPLATES)?;
-    let package_context = PackageTemplateContext::from_ir(ir, config, &tera)?;
+    TypeScriptGenerator::new(config)?.generate(ir)
+}
+
+impl IrEmitter for TypeScriptGenerator {
+    fn emit_model(&self, _ir: &CoreIr, model: &Model) -> Result<String> {
+        codegen::emit_model(&self.tera, model)
+    }
+
+    fn emit_operation(&self, _ir: &CoreIr, operation: &Operation) -> Result<String> {
+        codegen::emit_operation(&self.tera, operation)
+    }
+
+    fn generate(&self, ir: &CoreIr) -> Result<Vec<GeneratedFile>> {
+        assemble_typescript_files(&self.tera, &self.config, ir, &self.extra_package_templates)
+    }
+}
+
+pub(crate) fn assemble_typescript_files(
+    tera: &Tera,
+    config: &TypeScriptPackageConfig,
+    ir: &CoreIr,
+    extra_package_templates: &[(String, PathBuf)],
+) -> Result<Vec<GeneratedFile>> {
+    let package_context = PackageTemplateContext::from_ir(ir, config, tera)?;
     let mut template_context = TeraContext::new();
     template_context.insert("package", &package_context);
 
-    Ok(vec![
+    let mut files = vec![
         GeneratedFile {
             path: PathBuf::from("package.json"),
             contents: tera
@@ -124,5 +178,14 @@ pub fn generate_typescript_package(
                 .render(TEMPLATE_INDEX, &template_context)
                 .context("failed to render index template")?,
         },
-    ])
+    ];
+
+    for (template_name, output_path) in extra_package_templates {
+        let contents = tera
+            .render(template_name, &template_context)
+            .with_context(|| format!("failed to render extra template `{template_name}`"))?;
+        files.push(GeneratedFile { path: output_path.clone(), contents });
+    }
+
+    Ok(files)
 }

@@ -1,17 +1,199 @@
-{% if operation.raw_doc_block %}
-{{ operation.raw_doc_block }}
-{% endif %}
+{% if operation.summary -%}
+// {{ operation.raw_method_name }} {{ operation.summary }}
+{% endif -%}
+// {{ operation.raw_method_name }} returns the raw HTTP response without decoding it or converting HTTP errors.
+{% for p in operation.doc_params -%}
+// {{ operation.raw_method_name }} parameter {{ p.name }}: {{ p.description }}
+{% endfor -%}
 func ({{ operation.receiver_name }} *{{ operation.receiver_type }}) {{ operation.raw_method_name }}({{ operation.args_signature }}) (*http.Response, error) {
     client := {{ operation.client_expression }}
-{{ operation.raw_block }}
+{% if operation.path_params | length > 0 %}
+    path := fmt.Sprintf("{{ operation.path_format }}", {% for p in operation.path_params %}url.PathEscape(fmt.Sprint({{ p.name }})){% if not loop.last %}, {% endif %}{% endfor %})
+{% else %}
+    path := "{{ operation.path_raw }}"
+{% endif %}
+    query := url.Values{}
+{% for p in operation.path_params %}{% if p.content_encoding %}
+    if err := client.validateStringEncoding({{ p.name }}, "{{ p.content_encoding }}", "path parameter `{{ p.raw_name }}`", requestOptions); err != nil {
+        return nil, err
+    }
+{% endif %}{% endfor %}
+{% for p in operation.query_params %}{% if p.required %}{% if p.content_encoding %}
+    if err := client.validateStringEncoding({{ p.name }}, "{{ p.content_encoding }}", "query parameter `{{ p.raw_name }}`", requestOptions); err != nil {
+        return nil, err
+    }
+{% endif %}
+    query.Set("{{ p.raw_name }}", fmt.Sprint({{ p.name }}))
+{% else %}
+    if {{ p.name }} != nil {
+{% if p.content_encoding %}
+        if err := client.validateStringEncoding(*{{ p.name }}, "{{ p.content_encoding }}", "query parameter `{{ p.raw_name }}`", requestOptions); err != nil {
+            return nil, err
+        }
+{% endif %}
+        query.Set("{{ p.raw_name }}", fmt.Sprint(*{{ p.name }}))
+    }
+{% endif %}{% endfor %}
+    query = client.mergeQuery(query, requestOptions)
+    headers := http.Header{}
+{% for p in operation.header_params %}{% if p.required %}{% if p.content_encoding %}
+    if err := client.validateStringEncoding({{ p.name }}, "{{ p.content_encoding }}", "header `{{ p.raw_name }}`", requestOptions); err != nil {
+        return nil, err
+    }
+{% endif %}
+    headers.Set("{{ p.raw_name }}", fmt.Sprint({{ p.name }}))
+{% else %}
+    if {{ p.name }} != nil {
+{% if p.content_encoding %}
+        if err := client.validateStringEncoding(*{{ p.name }}, "{{ p.content_encoding }}", "header `{{ p.raw_name }}`", requestOptions); err != nil {
+            return nil, err
+        }
+{% endif %}
+        headers.Set("{{ p.raw_name }}", fmt.Sprint(*{{ p.name }}))
+    }
+{% endif %}{% endfor %}
+    cookies := []*http.Cookie{}
+{% for p in operation.cookie_params %}{% if p.required %}{% if p.content_encoding %}
+    if err := client.validateStringEncoding({{ p.name }}, "{{ p.content_encoding }}", "cookie `{{ p.raw_name }}`", requestOptions); err != nil {
+        return nil, err
+    }
+{% endif %}
+    cookies = append(cookies, &http.Cookie{Name: "{{ p.raw_name }}", Value: fmt.Sprint({{ p.name }})})
+{% else %}
+    if {{ p.name }} != nil {
+{% if p.content_encoding %}
+        if err := client.validateStringEncoding(*{{ p.name }}, "{{ p.content_encoding }}", "cookie `{{ p.raw_name }}`", requestOptions); err != nil {
+            return nil, err
+        }
+{% endif %}
+        cookies = append(cookies, &http.Cookie{Name: "{{ p.raw_name }}", Value: fmt.Sprint(*{{ p.name }})})
+    }
+{% endif %}{% endfor %}
+    cookies = client.mergeCookies(cookies, requestOptions)
+    var bodyReader io.Reader
+    var err error
+{% if operation.body %}{% if operation.body.kind == "json" %}
+    headers.Set("Content-Type", "application/json")
+{% if operation.body.required %}{% if operation.body.content_encoding %}
+    if err := client.validateStringEncoding(body, "{{ operation.body.content_encoding }}", "request body", requestOptions); err != nil {
+        return nil, err
+    }
+{% endif %}
+    bodyReader, err = client.encodeJSONBody(body)
+    if err != nil {
+        return nil, err
+    }
+{% else %}
+    if body != nil {
+{% if operation.body.content_encoding %}
+        if err := client.validateStringEncoding(body, "{{ operation.body.content_encoding }}", "request body", requestOptions); err != nil {
+            return nil, err
+        }
+{% endif %}
+        bodyReader, err = client.encodeJSONBody(body)
+        if err != nil {
+            return nil, err
+        }
+    }
+{% endif %}{% elif operation.body.kind == "multipart" %}
+    var contentType string
+{% if operation.body.required %}{% if operation.body.content_encoding %}
+    if err := client.validateStringEncoding(body, "{{ operation.body.content_encoding }}", "request body", requestOptions); err != nil {
+        return nil, err
+    }
+{% endif %}
+    bodyReader, contentType, err = client.encodeMultipartBody(body)
+    if err != nil {
+        return nil, err
+    }
+    headers.Set("Content-Type", contentType)
+{% else %}
+    if body != nil {
+{% if operation.body.content_encoding %}
+        if err := client.validateStringEncoding(body, "{{ operation.body.content_encoding }}", "request body", requestOptions); err != nil {
+            return nil, err
+        }
+{% endif %}
+        bodyReader, contentType, err = client.encodeMultipartBody(body)
+        if err != nil {
+            return nil, err
+        }
+        headers.Set("Content-Type", contentType)
+    }
+{% endif %}{% else %}
+    bodyReader = body
+{% endif %}{% endif %}
+    headers = client.mergeHeaders(headers, requestOptions)
+    request, err := http.NewRequestWithContext(client.resolveContext(ctx, requestOptions), {{ operation.http_method }}, client.buildURL(path, query), bodyReader)
+    if err != nil {
+        return nil, err
+    }
+    request.Header = headers
+    for _, cookie := range cookies {
+        request.AddCookie(cookie)
+    }
+    return client.httpClient.Do(request)
 }
 
-{% if operation.doc_block %}
-{{ operation.doc_block }}
-{% endif %}
-func ({{ operation.receiver_name }} *{{ operation.receiver_type }}) {{ operation.method_name }}({{ operation.args_signature }}) {{ operation.return_signature }} {
+{% if operation.summary -%}
+// {{ operation.method_name }} {{ operation.summary }}
+{% endif -%}
+{% for p in operation.doc_params -%}
+// {{ operation.method_name }} parameter {{ p.name }}: {{ p.description }}
+{% endfor -%}
+func ({{ operation.receiver_name }} *{{ operation.receiver_type }}) {{ operation.method_name }}({{ operation.args_signature }}) {{ operation.return_shape.signature }} {
     client := {{ operation.client_expression }}
-    {{ operation.wrapper_request_call_line }}
-{{ operation.wrapper_error_block }}
-{{ operation.wrapper_post_request_block }}
+    response, err := {{ operation.receiver_name }}.{{ operation.raw_method_name }}({{ operation.forward_args }})
+{% if operation.return_shape.has_result %}
+    if err != nil {
+{% if operation.return_shape.returns_nil_on_error %}
+        return nil, err
+{% else %}
+        var zero {{ operation.return_shape.result_go_type }}
+        return zero, err
+{% endif %}
+    }
+    defer response.Body.Close()
+    if err := client.handleError(response, requestOptions); err != nil {
+{% if operation.return_shape.returns_nil_on_error %}
+        return nil, err
+{% else %}
+        var zero {{ operation.return_shape.result_go_type }}
+        return zero, err
+{% endif %}
+    }
+    var result {{ operation.return_shape.decode_go_type }}
+    if err := client.decodeJSONResponse(response, &result); err != nil {
+{% if operation.return_shape.returns_nil_on_error %}
+        return nil, err
+{% else %}
+        var zero {{ operation.return_shape.result_go_type }}
+        return zero, err
+{% endif %}
+    }
+{% if operation.return_shape.content_encoding %}
+    if err := client.validateStringEncoding(result, "{{ operation.return_shape.content_encoding }}", "response body", requestOptions); err != nil {
+{% if operation.return_shape.returns_nil_on_error %}
+        return nil, err
+{% else %}
+        var zero {{ operation.return_shape.result_go_type }}
+        return zero, err
+{% endif %}
+    }
+{% endif %}
+{% if operation.return_shape.returns_pointer %}
+    return &result, nil
+{% else %}
+    return result, nil
+{% endif %}
+{% else %}
+    if err != nil {
+        return err
+    }
+    defer response.Body.Close()
+    if err := client.handleError(response, requestOptions); err != nil {
+        return err
+    }
+    return nil
+{% endif %}
 }
