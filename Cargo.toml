@@ -3,6 +3,7 @@ members = [
     "crates/arvalez-cli",
     "crates/arvalez-ir",
     "crates/arvalez-openapi",
+    "crates/arvalez-target-core",
     "crates/arvalez-target-go",
     "crates/arvalez-target-python",
     "crates/arvalez-target-typescript",
@@ -22,6 +23,7 @@ anyhow = "1.0.98"
 arvalez-cli = { version = "1.5.0", path = "crates/arvalez-cli" }
 arvalez-ir = { version = "1.5.0", path = "crates/arvalez-ir" }
 arvalez-openapi = { version = "1.5.0", path = "crates/arvalez-openapi" }
+arvalez-target-core = { version = "1.5.0", path = "crates/arvalez-target-core" }
 arvalez-target-go = { version = "1.5.0", path = "crates/arvalez-target-go" }
 arvalez-target-python = { version = "1.5.0", path = "crates/arvalez-target-python" }
 arvalez-target-typescript = { version = "1.5.0", path = "crates/arvalez-target-typescript" }

@@ -22,10 +22,279 @@ pub struct LoadOpenApiOptions {
     pub emit_timings: bool,
 }
 
+/// Structured diagnostic emitted by the OpenAPI importer. Implements
+/// [`std::error::Error`] so it can be stored inside [`anyhow::Error`],
+/// enabling callers to downcast and inspect the structured data instead of
+/// parsing the human-readable error string.
+#[derive(Debug, Clone)]
+pub struct OpenApiDiagnostic {
+    /// Machine-readable classification of the issue.
+    pub kind: DiagnosticKind,
+    /// JSON pointer into the document where the issue was detected.
+    pub pointer: Option<String>,
+    /// A snippet of the document at the `pointer` location.
+    pub source_preview: Option<String>,
+    /// Human-readable context when there is no pointer (e.g. `"parameter \`foo\`"`).
+    pub context: Option<String>,
+}
+
+impl OpenApiDiagnostic {
+    pub fn from_pointer(kind: DiagnosticKind, pointer: impl Into<String>, source_preview: Option<String>) -> Self {
+        OpenApiDiagnostic { kind, pointer: Some(pointer.into()), source_preview, context: None }
+    }
+
+    pub fn from_named_context(kind: DiagnosticKind, context: impl Into<String>) -> Self {
+        OpenApiDiagnostic { kind, pointer: None, source_preview: None, context: Some(context.into()) }
+    }
+
+    pub fn simple(kind: DiagnosticKind) -> Self {
+        OpenApiDiagnostic { kind, pointer: None, source_preview: None, context: None }
+    }
+
+    /// Returns the human-readable note text for this diagnostic, if any.
+    pub fn note(&self) -> Option<&str> {
+        let note = self.kind.note_text();
+        if note.is_empty() { None } else { Some(note) }
+    }
+
+    /// Returns the corpus `(kind, feature)` classification for this diagnostic.
+    ///
+    /// This is the canonical mapping from [`DiagnosticKind`] to the string
+    /// identifiers used in corpus reports.  Keeping it here means adding a new
+    /// variant produces a compile error at the definition site.
+    pub fn classify(&self) -> (&'static str, String) {
+        match &self.kind {
+            DiagnosticKind::UnknownSchemaKeyword { keyword } =>
+                ("unsupported_schema_keyword", keyword.clone()),
+            DiagnosticKind::UnsupportedSchemaKeyword { keyword } =>
+                (Self::unsupported_kind_for_pointer(self.pointer.as_deref(), keyword), keyword.clone()),
+            DiagnosticKind::UnsupportedSchemaType { schema_type } =>
+                ("unsupported_schema_type", schema_type.clone()),
+            DiagnosticKind::UnsupportedSchemaShape => (
+                "unsupported_schema_shape",
+                self.pointer.as_deref().map(diagnostic_pointer_tail).unwrap_or_else(|| "schema_shape".into()),
+            ),
+            DiagnosticKind::UnsupportedReference { reference } =>
+                ("unsupported_reference", reference.clone()),
+            DiagnosticKind::AllOfRecursiveCycle { .. } =>
+                ("unsupported_all_of_merge", "recursive_cycle".into()),
+            DiagnosticKind::RecursiveParameterCycle { .. } =>
+                ("invalid_openapi_document", "recursive_parameter_cycle".into()),
+            DiagnosticKind::RecursiveRequestBodyCycle { .. } =>
+                ("invalid_openapi_document", "recursive_request_body_cycle".into()),
+            DiagnosticKind::IncompatibleAllOfField { field } =>
+                ("unsupported_all_of_merge", field.clone()),
+            DiagnosticKind::EmptyRequestBodyContent =>
+                ("unsupported_request_body_shape", "empty_content".into()),
+            DiagnosticKind::EmptyParameterName { .. } =>
+                ("invalid_openapi_document", "empty_parameter_name".into()),
+            DiagnosticKind::EmptyPropertyKey { .. } =>
+                ("invalid_openapi_document", "empty_property_key".into()),
+            DiagnosticKind::ArrayMissingItems => (
+                "invalid_openapi_document",
+                self.pointer.as_deref().map(diagnostic_pointer_tail).unwrap_or_else(|| "missing_array_items".into()),
+            ),
+            DiagnosticKind::ParameterMissingSchema { name } =>
+                ("invalid_openapi_document", normalize_diagnostic_feature(name)),
+            DiagnosticKind::UnsupportedParameterLocation { name } =>
+                ("invalid_openapi_document", normalize_diagnostic_feature(name)),
+            DiagnosticKind::MultipleRequestBodyDeclarations { .. } =>
+                ("invalid_openapi_document", "multiple_request_body_declarations".into()),
+            DiagnosticKind::BodyParameterMissingSchema { name } =>
+                ("invalid_openapi_document", normalize_diagnostic_feature(name)),
+            DiagnosticKind::FormDataParameterMissingSchema { name } =>
+                ("invalid_openapi_document", normalize_diagnostic_feature(name)),
+        }
+    }
+
+    pub fn unsupported_kind_for_pointer(pointer: Option<&str>, feature: &str) -> &'static str {
+        if matches!(feature, "allOf" | "anyOf" | "oneOf" | "not" | "discriminator" | "const") {
+            return "unsupported_schema_keyword";
+        }
+        match pointer {
+            Some(p)
+                if p.contains("/components/schemas/")
+                    || p.contains("/properties/")
+                    || p.ends_with("/schema")
+                    || p.contains("/items/") =>
+            {
+                "unsupported_schema_keyword"
+            }
+            Some(p) if p.contains("/parameters/") => "unsupported_parameter_feature",
+            Some(p) if p.contains("/responses/") => "unsupported_response_feature",
+            Some(p) if p.contains("/requestBody/") => "unsupported_request_body_feature",
+            _ => "unsupported_feature",
+        }
+    }
+}
+
+pub fn diagnostic_pointer_tail(pointer: &str) -> String {
+    pointer
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .map(normalize_diagnostic_feature)
+        .unwrap_or_else(|| "schema_shape".into())
+}
+
+pub fn normalize_diagnostic_feature(value: &str) -> String {
+    value
+        .replace("~1", "/")
+        .replace("~0", "~")
+        .replace('.', "_")
+        .replace('/', "_")
+        .replace('`', "")
+}
+
+impl std::fmt::Display for OpenApiDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = self.kind.message_text();
+        let note = self.kind.note_text();
+
+        if let Some(pointer) = &self.pointer {
+            write!(f, "OpenAPI document issue\nCaused by:\n  {message}")?;
+            write!(f, "\n  location: {pointer}")?;
+            if let Some(preview) = &self.source_preview {
+                write!(f, "\n  preview:")?;
+                for line in preview.lines() {
+                    write!(f, "\n    {line}")?;
+                }
+            }
+            if !note.is_empty() {
+                write!(f, "\n  note: {note}")?;
+            }
+        } else if let Some(context) = &self.context {
+            write!(f, "{context}: {message}")?;
+            if !note.is_empty() {
+                write!(f, "\nnote: {note}")?;
+            }
+        } else {
+            write!(f, "{message}")?;
+            if !note.is_empty() {
+                write!(f, "\nnote: {note}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for OpenApiDiagnostic {}
+
+/// Machine-readable classification of an [`OpenApiDiagnostic`].
+#[derive(Debug, Clone)]
+pub enum DiagnosticKind {
+    // ── Schema keyword issues ────────────────────────────────────────────────
+    /// An unrecognised keyword was found in a schema object.
+    UnknownSchemaKeyword { keyword: String },
+    /// A recognised but unsupported schema keyword was found.
+    UnsupportedSchemaKeyword { keyword: String },
+    /// A schema declared a type string that Arvalez cannot map.
+    UnsupportedSchemaType { schema_type: String },
+    /// A schema's overall shape could not be mapped to a type.
+    UnsupportedSchemaShape,
+    // ── Reference issues ─────────────────────────────────────────────────────
+    /// A `$ref` value points to a location Arvalez cannot resolve.
+    UnsupportedReference { reference: String },
+    /// A `$ref` chain inside `allOf` (or object view collection) is cyclic.
+    AllOfRecursiveCycle { reference: String },
+    /// A parameter `$ref` is cyclic.
+    RecursiveParameterCycle { reference: String },
+    /// A `requestBody` `$ref` is cyclic.
+    RecursiveRequestBodyCycle { reference: String },
+    // ── allOf merge issues ───────────────────────────────────────────────────
+    /// Two `allOf` members declare incompatible values for the same keyword.
+    IncompatibleAllOfField { field: String },
+    // ── Structural document issues ───────────────────────────────────────────
+    /// A `requestBody` object has an empty `content` map.
+    EmptyRequestBodyContent,
+    /// A parameter's `name` field is the empty string.
+    EmptyParameterName { counter: usize },
+    /// An object schema property key is the empty string.
+    EmptyPropertyKey { counter: usize },
+    /// An `array`-typed schema is missing an `items` declaration.
+    ArrayMissingItems,
+    /// A non-body parameter has neither a `schema` nor a `type`.
+    ParameterMissingSchema { name: String },
+    /// A parameter uses a location (`in`) value Arvalez cannot handle.
+    UnsupportedParameterLocation { name: String },
+    /// An operation has multiple conflicting request-body sources.
+    MultipleRequestBodyDeclarations { note: String },
+    /// A Swagger 2 `in: body` parameter has no `schema`.
+    BodyParameterMissingSchema { name: String },
+    /// A Swagger 2 `in: formData` parameter has no schema/type.
+    FormDataParameterMissingSchema { name: String },
+}
+
+impl DiagnosticKind {
+    fn message_text(&self) -> String {
+        match self {
+            Self::UnknownSchemaKeyword { keyword } => format!("unknown schema keyword `{keyword}`"),
+            Self::UnsupportedSchemaKeyword { keyword } => format!("`{keyword}` is not supported yet"),
+            Self::UnsupportedSchemaType { schema_type } => format!("unsupported schema type `{schema_type}`"),
+            Self::UnsupportedSchemaShape => "schema shape is not supported yet".into(),
+            Self::UnsupportedReference { reference } => format!("unsupported reference `{reference}`"),
+            Self::AllOfRecursiveCycle { reference } => format!("`allOf` contains a recursive reference cycle involving `{reference}`"),
+            Self::RecursiveParameterCycle { reference } => format!("parameter reference contains a recursive cycle involving `{reference}`"),
+            Self::RecursiveRequestBodyCycle { reference } => format!("request body reference contains a recursive cycle involving `{reference}`"),
+            Self::IncompatibleAllOfField { field } => format!("`allOf` contains incompatible `{field}` declarations"),
+            Self::EmptyRequestBodyContent => "request body has no content entries".into(),
+            Self::EmptyParameterName { counter } => format!("parameter #{counter} has an empty name"),
+            Self::EmptyPropertyKey { counter } => format!("property #{counter} has an empty name"),
+            Self::ArrayMissingItems => "array schema is missing `items`".into(),
+            Self::ParameterMissingSchema { .. } => "parameter has no schema or type".into(),
+            Self::UnsupportedParameterLocation { .. } => "unsupported parameter location".into(),
+            Self::MultipleRequestBodyDeclarations { .. } => "multiple request body declarations are not supported".into(),
+            Self::BodyParameterMissingSchema { .. } => "body parameter has no schema".into(),
+            Self::FormDataParameterMissingSchema { .. } => "formData parameter has no schema or type".into(),
+        }
+    }
+
+    fn note_text(&self) -> &str {
+        match self {
+            Self::UnknownSchemaKeyword { .. }
+            | Self::UnsupportedSchemaKeyword { .. }
+            | Self::UnsupportedSchemaType { .. }
+            | Self::UnsupportedSchemaShape
+            | Self::AllOfRecursiveCycle { .. }
+            | Self::IncompatibleAllOfField { .. }
+            | Self::EmptyParameterName { .. }
+            | Self::EmptyPropertyKey { .. } => {
+                "Use `--ignore-unhandled` to turn this into a warning while keeping generation going."
+            }
+            Self::ArrayMissingItems => {
+                "Add an `items` schema to describe the array element type."
+            }
+            Self::EmptyRequestBodyContent => {
+                "Arvalez defaulted this request body to `application/octet-stream` with an untyped payload."
+            }
+            Self::ParameterMissingSchema { .. } => {
+                "Arvalez currently expects non-body parameters to declare either `schema` (OpenAPI 3) or `type` (Swagger 2)."
+            }
+            Self::UnsupportedParameterLocation { .. } => {
+                "Arvalez currently supports path, query, header, and cookie parameters here."
+            }
+            Self::MultipleRequestBodyDeclarations { note } => note.as_str(),
+            Self::BodyParameterMissingSchema { .. } => {
+                "Swagger 2 `in: body` parameters must declare a `schema`."
+            }
+            Self::FormDataParameterMissingSchema { .. } => {
+                "Swagger 2 `in: formData` parameters must declare either a `type` or a `schema`."
+            }
+            Self::RecursiveParameterCycle { .. } => {
+                "Arvalez only supports acyclic parameter references."
+            }
+            Self::RecursiveRequestBodyCycle { .. } => {
+                "Arvalez only supports acyclic local `requestBody` references."
+            }
+            Self::UnsupportedReference { .. } => "",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenApiLoadResult {
     pub ir: CoreIr,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<OpenApiDiagnostic>,
 }
 
 pub fn load_openapi_to_ir(path: impl AsRef<Path>) -> Result<CoreIr> {
@@ -220,7 +489,7 @@ struct OpenApiImporter {
     normalized_all_of_refs: BTreeMap<String, Schema>,
     active_all_of_refs: Vec<String>,
     active_object_view_refs: Vec<String>,
-    warnings: Vec<String>,
+    warnings: Vec<OpenApiDiagnostic>,
     options: LoadOpenApiOptions,
 }
 
@@ -362,11 +631,8 @@ impl OpenApiImporter {
                 if resolved.name.trim().is_empty() {
                     unnamed_parameter_counter += 1;
                     self.handle_unhandled(
-                        &format!("operation `{operation_name}`"),
-                        format!(
-                            "parameter #{} has an empty name",
-                            unnamed_parameter_counter
-                        ),
+                        &format!("#/paths/{}/{}", json_pointer_key(path), method_key(method)),
+                        DiagnosticKind::EmptyParameterName { counter: unnamed_parameter_counter },
                     )?;
                     resolved.name = format!(
                         "unnamed_{}_parameter_{}",
@@ -378,14 +644,12 @@ impl OpenApiImporter {
                     let request_body =
                         self.import_swagger_body_parameter(&resolved, spec, &operation_name)?;
                     if operation.request_body.is_some() {
-                        bail!(
-                            "{}",
-                            self.format_context_error(
-                                &format!("operation `{operation_name}`"),
-                                "multiple request body declarations are not supported",
-                                "Arvalez can normalize either an OpenAPI `requestBody` or a single Swagger 2 `in: body` parameter for an operation.",
-                            )
-                        );
+                        bail!(self.make_diagnostic(
+                            &format!("operation `{operation_name}`"),
+                            DiagnosticKind::MultipleRequestBodyDeclarations {
+                                note: "Arvalez can normalize either an OpenAPI `requestBody` or a single Swagger 2 `in: body` parameter for an operation.".into(),
+                            },
+                        ));
                     }
                     operation.request_body = Some(request_body);
                     continue;
@@ -400,14 +664,12 @@ impl OpenApiImporter {
 
             if !form_data_parameters.is_empty() {
                 if operation.request_body.is_some() {
-                    bail!(
-                        "{}",
-                        self.format_context_error(
-                            &format!("operation `{operation_name}`"),
-                            "multiple request body declarations are not supported",
-                            "Arvalez can normalize either an OpenAPI `requestBody`, a single Swagger 2 `in: body` parameter, or Swagger 2 `formData` parameters for an operation.",
-                        )
-                    );
+                    bail!(self.make_diagnostic(
+                        &format!("operation `{operation_name}`"),
+                        DiagnosticKind::MultipleRequestBodyDeclarations {
+                            note: "Arvalez can normalize either an OpenAPI `requestBody`, a single Swagger 2 `in: body` parameter, or Swagger 2 `formData` parameters for an operation.".into(),
+                        },
+                    ));
                 }
                 operation.request_body = Some(self.import_swagger_form_data_request_body(
                     &form_data_parameters,
@@ -418,14 +680,12 @@ impl OpenApiImporter {
 
             if let Some(request_body) = &spec.request_body {
                 if operation.request_body.is_some() {
-                    bail!(
-                        "{}",
-                        self.format_context_error(
-                            &format!("operation `{operation_name}`"),
-                            "multiple request body declarations are not supported",
-                            "Arvalez can normalize either an OpenAPI `requestBody` or a single Swagger 2 `in: body` parameter for an operation.",
-                        )
-                    );
+                    bail!(self.make_diagnostic(
+                        &format!("operation `{operation_name}`"),
+                        DiagnosticKind::MultipleRequestBodyDeclarations {
+                            note: "Arvalez can normalize either an OpenAPI `requestBody` or a single Swagger 2 `in: body` parameter for an operation.".into(),
+                        },
+                    ));
                 }
                 operation.request_body =
                     Some(self.import_request_body(request_body, &operation_name, path, method)?);
@@ -449,10 +709,9 @@ impl OpenApiImporter {
 
     fn import_parameter(&mut self, param: &ParameterSpec) -> Result<Parameter> {
         let schema = param.effective_schema().ok_or_else(|| {
-            anyhow!(self.format_context_error(
+            anyhow::Error::new(self.make_diagnostic(
                 &format!("parameter `{}`", param.name),
-                "parameter has no schema or type",
-                "Arvalez currently expects non-body parameters to declare either `schema` (OpenAPI 3) or `type` (Swagger 2).",
+                DiagnosticKind::ParameterMissingSchema { name: param.name.clone() },
             ))
         })?;
         let imported = self.import_schema_type(
@@ -465,10 +724,9 @@ impl OpenApiImporter {
         Ok(Parameter {
             name: param.name.clone(),
             location: param.location.as_ir_location().ok_or_else(|| {
-                anyhow!(self.format_context_error(
+                anyhow::Error::new(self.make_diagnostic(
                     &format!("parameter `{}`", param.name),
-                    "unsupported parameter location",
-                    "Arvalez currently supports path, query, header, and cookie parameters here.",
+                    DiagnosticKind::UnsupportedParameterLocation { name: param.name.clone() },
                 ))
             })?,
             type_ref: imported
@@ -486,10 +744,9 @@ impl OpenApiImporter {
         operation_name: &str,
     ) -> Result<RequestBody> {
         let schema = param.effective_schema().ok_or_else(|| {
-            anyhow!(self.format_context_error(
+            anyhow::Error::new(self.make_diagnostic(
                 &format!("body parameter `{}`", param.name),
-                "body parameter has no schema",
-                "Swagger 2 `in: body` parameters must declare a `schema`.",
+                DiagnosticKind::BodyParameterMissingSchema { name: param.name.clone() },
             ))
         })?;
 
@@ -534,10 +791,9 @@ impl OpenApiImporter {
         let mut required = Vec::new();
         for param in params {
             let mut schema = param.effective_schema().ok_or_else(|| {
-                anyhow!(self.format_context_error(
+                anyhow::Error::new(self.make_diagnostic(
                     &format!("formData parameter `{}`", param.name),
-                    "formData parameter has no schema or type",
-                    "Swagger 2 `in: formData` parameters must declare either a `type` or a `schema`.",
+                    DiagnosticKind::FormDataParameterMissingSchema { name: param.name.clone() },
                 ))
             })?;
             if !param.description.trim().is_empty() {
@@ -599,10 +855,9 @@ impl OpenApiImporter {
             ParameterOrRef::Inline(param) => Ok(param.clone()),
             ParameterOrRef::Ref { reference } => {
                 if !seen.insert(reference.clone()) {
-                    bail!(self.format_pointer_error(
+                    bail!(self.make_pointer_diagnostic(
                         reference,
-                        "parameter reference contains a recursive cycle",
-                        "Arvalez only supports acyclic parameter references.",
+                        DiagnosticKind::RecursiveParameterCycle { reference: reference.to_owned() },
                     ));
                 }
 
@@ -690,10 +945,9 @@ impl OpenApiImporter {
         let (request_body, pointer) = self.resolve_request_body(request_body, &fallback_pointer)?;
         let content_pointer = format!("{pointer}/content");
         let Some((media_type, media_spec)) = request_body.content.iter().next() else {
-            self.warnings.push(self.format_pointer_error(
+            self.warnings.push(self.make_pointer_diagnostic(
                 &content_pointer,
-                "request body has no content entries",
-                "Arvalez defaulted this request body to `application/octet-stream` with an untyped payload.",
+                DiagnosticKind::EmptyRequestBodyContent,
             ));
             return Ok(RequestBody {
                 required: request_body.required,
@@ -748,10 +1002,9 @@ impl OpenApiImporter {
             RequestBodyOrRef::Inline(spec) => Ok((spec.clone(), pointer.to_owned())),
             RequestBodyOrRef::Ref { reference } => {
                 if !seen.insert(reference.clone()) {
-                    bail!(self.format_pointer_error(
+                    bail!(self.make_pointer_diagnostic(
                         reference,
-                        "request body reference contains a recursive cycle",
-                        "Arvalez only supports acyclic local `requestBody` references.",
+                        DiagnosticKind::RecursiveRequestBodyCycle { reference: reference.to_owned() },
                     ));
                 }
                 let name = ref_name(reference)?;
@@ -1207,7 +1460,7 @@ impl OpenApiImporter {
             return self.import_object_type(&schema, context, local_reference);
         }
 
-        self.handle_unhandled(&context.describe(), "schema shape is not supported yet")?;
+        self.handle_unhandled(&context.describe(), DiagnosticKind::UnsupportedSchemaShape)?;
         Ok(ImportedType::plain(TypeRef::primitive("any")))
     }
 
@@ -1240,10 +1493,9 @@ impl OpenApiImporter {
                 "boolean" => ImportedType::plain(TypeRef::primitive("boolean")),
                 "array" => {
                     let item_schema = schema.items.as_ref().ok_or_else(|| {
-                        anyhow!(self.format_context_error(
+                        anyhow::Error::new(self.make_diagnostic(
                             &context.describe(),
-                            "array schema is missing `items`",
-                            "Add an `items` schema to describe the array element type.",
+                            DiagnosticKind::ArrayMissingItems,
                         ))
                     })?;
                     let imported = self.import_schema_type(item_schema, context)?;
@@ -1262,7 +1514,7 @@ impl OpenApiImporter {
                 other => {
                     self.handle_unhandled(
                         &context.describe(),
-                        format!("unsupported schema type `{other}`"),
+                        DiagnosticKind::UnsupportedSchemaType { schema_type: other.to_owned() },
                     )?;
                     ImportedType::plain(TypeRef::primitive("any"))
                 }
@@ -1344,11 +1596,11 @@ impl OpenApiImporter {
             }
 
             if is_known_but_unimplemented_schema_keyword(keyword) {
-                self.handle_unhandled(context, format!("`{keyword}` is not supported yet"))?;
+                self.handle_unhandled(context, DiagnosticKind::UnsupportedSchemaKeyword { keyword: keyword.clone() })?;
                 continue;
             }
 
-            self.handle_unhandled(context, format!("unknown schema keyword `{keyword}`"))?;
+            self.handle_unhandled(context, DiagnosticKind::UnknownSchemaKeyword { keyword: keyword.clone() })?;
         }
 
         Ok(())
@@ -1410,7 +1662,7 @@ impl OpenApiImporter {
         if self.active_all_of_refs.iter().any(|item| item == reference) {
             self.handle_unhandled(
                 context,
-                format!("`allOf` contains a recursive reference cycle involving `{reference}`"),
+                DiagnosticKind::AllOfRecursiveCycle { reference: reference.to_owned() },
             )?;
             return Ok(Schema::default());
         }
@@ -1644,7 +1896,7 @@ impl OpenApiImporter {
         *unnamed_field_counter += 1;
         self.handle_unhandled(
             context,
-            format!("property #{} has an empty name", unnamed_field_counter),
+            DiagnosticKind::EmptyPropertyKey { counter: *unnamed_field_counter },
         )?;
         Ok(format!("unnamed_field_{}", unnamed_field_counter))
     }
@@ -1749,7 +2001,7 @@ impl OpenApiImporter {
                     }
                     self.handle_unhandled(
                         context,
-                        format!("`allOf` contains incompatible `{key}` declarations"),
+                        DiagnosticKind::IncompatibleAllOfField { field: key.clone() },
                     )?;
                 }
                 Some(_) => {}
@@ -1784,7 +2036,7 @@ impl OpenApiImporter {
             if self.active_object_view_refs.iter().any(|item| item == reference) {
                 self.handle_unhandled(
                     context,
-                    format!("`allOf` contains a recursive reference cycle involving `{reference}`"),
+                    DiagnosticKind::AllOfRecursiveCycle { reference: reference.clone() },
                 )?;
                 return Ok(());
             }
@@ -1848,10 +2100,9 @@ impl OpenApiImporter {
                 },
                 "array" => {
                     let item_schema = schema.items.as_ref().ok_or_else(|| {
-                        anyhow!(self.format_context_error(
+                        anyhow::Error::new(self.make_diagnostic(
                             &context.describe(),
-                            "array schema is missing `items`",
-                            "Add an `items` schema to describe the array element type.",
+                            DiagnosticKind::ArrayMissingItems,
                         ))
                     })?;
                     let imported = self.import_schema_type(item_schema, context)?;
@@ -1865,7 +2116,7 @@ impl OpenApiImporter {
                 other => {
                     self.handle_unhandled(
                         &context.describe(),
-                        format!("unsupported schema type `{other}`"),
+                        DiagnosticKind::UnsupportedSchemaType { schema_type: other.to_owned() },
                     )?;
                     ImportedType::plain(TypeRef::primitive("any"))
                 }
@@ -2016,40 +2267,33 @@ impl OpenApiImporter {
         }
     }
 
-    fn handle_unhandled(&mut self, context: &str, message: impl Into<String>) -> Result<()> {
-        let message = message.into();
-        let rendered = self.format_context_error(
-            context,
-            &message,
-            "Use `--ignore-unhandled` to turn this into a warning while keeping generation going.",
-        );
+    fn handle_unhandled(&mut self, context: &str, kind: DiagnosticKind) -> Result<()> {
+        let diagnostic = self.make_diagnostic(context, kind);
         if self.options.ignore_unhandled {
-            self.warnings.push(rendered);
+            self.warnings.push(diagnostic);
             Ok(())
         } else {
-            bail!(rendered)
+            Err(anyhow::Error::new(diagnostic))
         }
     }
 
-    fn format_context_error(&self, context: &str, message: &str, note: &str) -> String {
+    /// Build an [`OpenApiDiagnostic`] from a context string (either a JSON
+    /// pointer starting with `#/` or a human-readable label like
+    /// `"parameter \`foo\`"`).
+    fn make_diagnostic(&self, context: &str, kind: DiagnosticKind) -> OpenApiDiagnostic {
         if context.starts_with("#/") {
-            self.format_pointer_error(context, message, note)
+            let preview = self.source.render_pointer_preview(context);
+            OpenApiDiagnostic::from_pointer(kind, context, preview)
         } else {
-            format!("{context}: {message}\nnote: {note}")
+            OpenApiDiagnostic::from_named_context(kind, context)
         }
     }
 
-    fn format_pointer_error(&self, pointer: &str, message: &str, note: &str) -> String {
-        let mut rendered = format!("OpenAPI document issue\nCaused by:\n  {message}");
-        rendered.push_str(&format!("\n  location: {pointer}"));
-        if let Some(preview) = self.source.render_pointer_preview(pointer) {
-            rendered.push_str("\n  preview:");
-            for line in preview.lines() {
-                rendered.push_str(&format!("\n    {line}"));
-            }
-        }
-        rendered.push_str(&format!("\n  note: {note}"));
-        rendered
+    /// Build a pointer diagnostic using the importer's source for preview
+    /// rendering.
+    fn make_pointer_diagnostic(&self, pointer: &str, kind: DiagnosticKind) -> OpenApiDiagnostic {
+        let preview = self.source.render_pointer_preview(pointer);
+        OpenApiDiagnostic::from_pointer(kind, pointer, preview)
     }
 }
 
@@ -2998,7 +3242,7 @@ where
         (Some(_), Some(_)) => {
             importer.handle_unhandled(
                 context,
-                format!("`allOf` contains incompatible `{field_name}` declarations"),
+                DiagnosticKind::IncompatibleAllOfField { field: field_name.to_owned() },
             )?;
         }
     }
@@ -3719,8 +3963,8 @@ mod tests {
         assert_eq!(request_body.media_type, "application/octet-stream");
         assert_eq!(request_body.type_ref, None);
         assert_eq!(result.warnings.len(), 1);
-        assert!(result.warnings[0].contains("request body has no content entries"));
-        assert!(result.warnings[0].contains("#/paths/~1events/post/requestBody/content"));
+        assert!(matches!(result.warnings[0].kind, DiagnosticKind::EmptyRequestBodyContent));
+        assert_eq!(result.warnings[0].pointer.as_deref(), Some("#/paths/~1events/post/requestBody/content"));
     }
 
     #[test]
@@ -4351,7 +4595,7 @@ mod tests {
             warning_result
                 .warnings
                 .iter()
-                .any(|warning| warning.contains("`if` is not supported yet"))
+                .any(|warning| matches!(&warning.kind, DiagnosticKind::UnsupportedSchemaKeyword { keyword } if keyword == "if"))
         );
 
         // Verify `not` is silently ignored (no error, no warning).

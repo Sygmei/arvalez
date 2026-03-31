@@ -1,11 +1,13 @@
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use arvalez_ir::{CoreIr, HttpMethod, Operation, ParameterLocation, TypeRef};
+pub use arvalez_target_core::GeneratedFile;
+pub use arvalez_target_core::write_files as write_typescript_package;
+use arvalez_target_core::{
+    ClientLayout, indent_block, load_templates, sorted_models, sorted_operations,
+};
 use serde::Serialize;
 use serde_json::{Value, from_value};
 use tera::{Context as TeraContext, Tera};
@@ -105,17 +107,11 @@ impl TypeScriptPackageConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct GeneratedFile {
-    pub path: PathBuf,
-    pub contents: String,
-}
-
-pub fn generate_package(
+pub fn generate_typescript_package(
     ir: &CoreIr,
     config: &TypeScriptPackageConfig,
 ) -> Result<Vec<GeneratedFile>> {
-    let tera = load_templates(config.template_dir.as_deref())?;
+    let tera = load_templates(config.template_dir.as_deref(), BUILTIN_TEMPLATES, OVERRIDABLE_TEMPLATES)?;
     let package_context = PackageTemplateContext::from_ir(ir, config, &tera)?;
     let mut template_context = TeraContext::new();
     template_context.insert("package", &package_context);
@@ -160,56 +156,6 @@ pub fn generate_package(
     ])
 }
 
-pub fn write_package(output_dir: impl AsRef<Path>, files: &[GeneratedFile]) -> Result<()> {
-    let output_dir = output_dir.as_ref();
-    fs::create_dir_all(output_dir).with_context(|| {
-        format!(
-            "failed to create output directory `{}`",
-            output_dir.display()
-        )
-    })?;
-
-    for file in files {
-        let path = output_dir.join(&file.path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create directory `{}`", parent.display()))?;
-        }
-        fs::write(&path, &file.contents)
-            .with_context(|| format!("failed to write `{}`", path.display()))?;
-    }
-
-    Ok(())
-}
-
-fn load_templates(template_dir: Option<&Path>) -> Result<Tera> {
-    let mut tera = Tera::default();
-    for (name, contents) in BUILTIN_TEMPLATES {
-        tera.add_raw_template(name, contents)
-            .with_context(|| format!("failed to register builtin template `{name}`"))?;
-    }
-
-    if let Some(template_dir) = template_dir {
-        for name in OVERRIDABLE_TEMPLATES {
-            let candidate = template_dir.join(name);
-            if !candidate.exists() {
-                continue;
-            }
-            let contents = fs::read_to_string(&candidate).with_context(|| {
-                format!("failed to read template override `{}`", candidate.display())
-            })?;
-            tera.add_raw_template(name, &contents).with_context(|| {
-                format!(
-                    "failed to register template override `{}`",
-                    candidate.display()
-                )
-            })?;
-        }
-    }
-
-    Ok(tera)
-}
-
 #[derive(Debug, Serialize)]
 struct PackageTemplateContext {
     package_name: String,
@@ -238,7 +184,8 @@ impl PackageTemplateContext {
             .collect::<Result<Vec<_>>>()?;
 
         let tag_group_blocks = if config.group_by_tag {
-            grouped_operations_by_tag(ir)
+            ClientLayout::from_ir(ir)
+                .tagged_groups
                 .into_iter()
                 .map(|(tag_name, operations)| {
                     render_tag_group_block(tera, TagGroupView::new(tag_name, operations))
@@ -693,48 +640,11 @@ fn render_client_method_block(tera: &Tera, operation: OperationMethodView) -> Re
         .context("failed to render client method partial")
 }
 
-fn sorted_models(ir: &CoreIr) -> Vec<&arvalez_ir::Model> {
-    let mut models = ir.models.iter().collect::<Vec<_>>();
-    models.sort_by(|left, right| left.name.cmp(&right.name));
-    models
-}
-
 fn sorted_model_names(ir: &CoreIr) -> Vec<String> {
-    let mut names = ir
-        .models
-        .iter()
+    sorted_models(ir)
+        .into_iter()
         .map(|model| model.name.clone())
-        .collect::<Vec<_>>();
-    names.sort();
-    names
-}
-
-fn sorted_operations(ir: &CoreIr) -> Vec<&Operation> {
-    let mut operations = ir.operations.iter().collect::<Vec<_>>();
-    operations.sort_by(|left, right| left.name.cmp(&right.name));
-    operations
-}
-
-fn grouped_operations_by_tag(ir: &CoreIr) -> Vec<(String, Vec<&Operation>)> {
-    let mut groups: BTreeMap<String, Vec<&Operation>> = BTreeMap::new();
-    for operation in sorted_operations(ir) {
-        if let Some(tag) = operation_primary_tag(operation) {
-            groups.entry(tag).or_default().push(operation);
-        }
-    }
-    groups.into_iter().collect()
-}
-
-fn operation_primary_tag(operation: &Operation) -> Option<String> {
-    operation
-        .attributes
-        .get("tags")
-        .and_then(|value| value.as_array())
-        .and_then(|tags| tags.first())
-        .and_then(|tag| tag.as_str())
-        .map(str::trim)
-        .filter(|tag| !tag.is_empty())
-        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn build_method_args(operation: &Operation) -> Vec<String> {
@@ -963,15 +873,6 @@ fn render_property_name(name: &str) -> String {
     }
 }
 
-fn indent_block(lines: &[String], spaces: usize) -> String {
-    let indent = " ".repeat(spaces);
-    lines
-        .iter()
-        .map(|line| format!("{indent}{line}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn is_valid_typescript_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     match chars.next() {
@@ -1117,7 +1018,7 @@ mod tests {
 
     #[test]
     fn renders_basic_typescript_package() {
-        let files = generate_package(&sample_ir(), &TypeScriptPackageConfig::new("@demo/client"))
+        let files = generate_typescript_package(&sample_ir(), &TypeScriptPackageConfig::new("@demo/client"))
             .expect("package should render");
 
         let package_json = files
@@ -1212,7 +1113,7 @@ mod tests {
             ..Default::default()
         };
 
-        let files = generate_package(&ir, &TypeScriptPackageConfig::new("@demo/client"))
+        let files = generate_typescript_package(&ir, &TypeScriptPackageConfig::new("@demo/client"))
             .expect("package should render");
         let models = files
             .iter()
@@ -1225,7 +1126,7 @@ mod tests {
 
     #[test]
     fn groups_operations_by_tag_when_enabled() {
-        let files = generate_package(
+        let files = generate_typescript_package(
             &sample_ir(),
             &TypeScriptPackageConfig::new("@demo/client").with_group_by_tag(true),
         )
@@ -1259,7 +1160,7 @@ mod tests {
         )
         .expect("override template");
 
-        let files = generate_package(
+        let files = generate_typescript_package(
             &sample_ir(),
             &TypeScriptPackageConfig::new("@demo/client")
                 .with_group_by_tag(true)

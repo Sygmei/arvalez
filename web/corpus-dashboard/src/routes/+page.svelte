@@ -469,72 +469,80 @@
               </div>
 
               {#if selectedIssueKey === group.key && activeIssue}
-                <div class="preview-card">
-                  <div class="detail-grid">
-                    <div>
-                      <div class="detail-label">Spec</div>
-                      <code>{activeIssue.spec}</code>
-                    </div>
-                    <div>
-                      <div class="detail-label">Target</div>
-                      <div>{activeIssue.target ?? "document-level"}</div>
-                    </div>
-                    <div>
-                      <div class="detail-label">Path</div>
-                      <code>{activeIssue.failure.pointer ?? activeIssue.failure.schema_path ?? "—"}</code>
-                    </div>
-                    <div>
-                      <div class="detail-label">Location</div>
-                      <div>
-                        {#if activeIssue.failure.line}
-                          line {activeIssue.failure.line}, column {activeIssue.failure.column ?? "?"}
-                        {:else}
-                          —
-                        {/if}
+                <div class="issue-expanded-layout">
+                  <div class="issue-main">
+                    <div class="preview-card">
+                      <div class="detail-grid">
+                        <div>
+                          <div class="detail-label">Spec</div>
+                          <code>{activeIssue.spec}</code>
+                        </div>
+                        <div>
+                          <div class="detail-label">Target</div>
+                          <div>{activeIssue.target ?? "document-level"}</div>
+                        </div>
+                        <div>
+                          <div class="detail-label">Path</div>
+                          <code>{activeIssue.failure.pointer ?? activeIssue.failure.schema_path ?? "—"}</code>
+                        </div>
+                        <div>
+                          <div class="detail-label">Location</div>
+                          <div>
+                            {#if activeIssue.failure.line}
+                              line {activeIssue.failure.line}, column {activeIssue.failure.column ?? "?"}
+                            {:else}
+                              —
+                            {/if}
+                          </div>
+                        </div>
                       </div>
+
+                      {#if activeIssue.failure.source_preview}
+                        <div class="detail-block">
+                          <div class="detail-label">Source Preview</div>
+                          <pre>{activeIssue.failure.source_preview}</pre>
+                        </div>
+                      {/if}
+
+                      {#if activeIssue.failure.note}
+                        <div class="detail-block">
+                          <div class="detail-label">Note</div>
+                          <p>{activeIssue.failure.note}</p>
+                        </div>
+                      {/if}
                     </div>
-                  </div>
 
-                  <div class="detail-block">
-                    <div class="detail-label">Source Preview</div>
-                    <pre>{activeIssue.failure.source_preview ?? activeIssue.failure.message}</pre>
-                  </div>
-
-                  {#if activeIssue.failure.note}
                     <div class="detail-block">
-                      <div class="detail-label">Note</div>
-                      <p>{activeIssue.failure.note}</p>
+                      <div class="detail-label">Message</div>
+                      <pre>{activeIssue.failure.message}</pre>
                     </div>
-                  {/if}
-                </div>
+                  </div>
 
-                <div class="detail-label instance-label">Occurrences</div>
-                <div class="instance-list">
-                  {#each group.items as item}
-                    <button
-                      type="button"
-                      class:selected={selectedIssueInstanceId === item.id}
-                      class="instance"
-                      on:click={() => {
-                        shouldAutoSelectIssueGroup = false;
-                        selectedIssueKey = group.key;
-                        selectedIssueInstanceId = item.id;
-                      }}
-                    >
-                      <strong>{item.spec}</strong>
-                      {#if item.target}
-                        <span class="subtle">Target: {item.target}</span>
-                      {/if}
-                      {#if item.failure.pointer || item.failure.schema_path}
-                        <code>{item.failure.pointer ?? item.failure.schema_path}</code>
-                      {/if}
-                    </button>
-                  {/each}
-                </div>
-
-                <div class="detail-block">
-                  <div class="detail-label">Message</div>
-                  <pre>{activeIssue.failure.message}</pre>
+                  <div class="issue-sidebar">
+                    <div class="detail-label instance-label">Occurrences</div>
+                    <div class="instance-list">
+                      {#each group.items as item}
+                        <button
+                          type="button"
+                          class:selected={selectedIssueInstanceId === item.id}
+                          class="instance"
+                          on:click={() => {
+                            shouldAutoSelectIssueGroup = false;
+                            selectedIssueKey = group.key;
+                            selectedIssueInstanceId = item.id;
+                          }}
+                        >
+                          <strong>{item.spec}</strong>
+                          {#if item.target}
+                            <span class="subtle">Target: {item.target}</span>
+                          {/if}
+                          {#if item.failure.pointer || item.failure.schema_path}
+                            <code>{item.failure.pointer ?? item.failure.schema_path}</code>
+                          {/if}
+                        </button>
+                      {/each}
+                    </div>
+                  </div>
                 </div>
               {/if}
             </div>
@@ -928,6 +936,24 @@
     margin-bottom: 1rem;
   }
 
+  .issue-expanded-layout {
+    display: grid;
+    grid-template-columns: 3fr 1fr;
+    gap: 1.25rem;
+    align-items: start;
+  }
+
+  .issue-sidebar {
+    min-width: 0;
+    position: sticky;
+    top: 1rem;
+  }
+
+  .issue-sidebar .instance-list {
+    max-height: 28rem;
+    overflow-y: auto;
+  }
+
   .instance-label {
     display: block;
     margin-bottom: 0.55rem;
@@ -1009,8 +1035,17 @@
       flex-direction: column;
     }
 
-    .detail-grid {
+    .detail-grid,
+    .issue-expanded-layout {
       grid-template-columns: 1fr;
+    }
+
+    .issue-sidebar {
+      position: static;
+    }
+
+    .issue-sidebar .instance-list {
+      max-height: none;
     }
 
     .search {

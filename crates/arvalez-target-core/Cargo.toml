@@ -1,9 +1,9 @@
 [package]
-name = "arvalez-target-go"
+name = "arvalez-target-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Go SDK generator backend for Arvalez"
+description = "Shared utilities for Arvalez SDK generator backends"
 homepage.workspace = true
 repository.workspace = true
 readme.workspace = true
@@ -11,10 +11,5 @@ readme.workspace = true
 [dependencies]
 anyhow.workspace = true
 arvalez-ir.workspace = true
-arvalez-target-core.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 tera.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

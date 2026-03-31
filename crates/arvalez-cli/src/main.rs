@@ -17,17 +17,14 @@ use std::os::unix::process::ExitStatusExt;
 
 use anyhow::{Context, Result, bail};
 use arvalez_ir::{CoreIr, validate_ir};
-use arvalez_openapi::{LoadOpenApiOptions, OpenApiLoadResult, load_openapi_to_ir_with_options};
-use arvalez_target_go::{
-    GoPackageConfig, generate_package as generate_go_package, write_package as write_go_package,
+use arvalez_openapi::{
+    LoadOpenApiOptions, OpenApiDiagnostic, OpenApiLoadResult,
+    diagnostic_pointer_tail, load_openapi_to_ir_with_options, normalize_diagnostic_feature,
 };
-use arvalez_target_python::{
-    PythonPackageConfig, generate_package as generate_python_package,
-    write_package as write_python_package,
-};
+use arvalez_target_go::{GoPackageConfig, generate_go_package, write_go_package};
+use arvalez_target_python::{PythonPackageConfig, generate_python_package, write_python_package};
 use arvalez_target_typescript::{
-    TypeScriptPackageConfig, generate_package as generate_typescript_package,
-    write_package as write_typescript_package,
+    TypeScriptPackageConfig, generate_typescript_package, write_typescript_package,
 };
 use clap::{Parser, Subcommand};
 use crossterm::{
@@ -706,7 +703,7 @@ fn load_ir(path: &PathBuf) -> Result<CoreIr> {
 
     if let Err(errors) = validate_ir(&ir) {
         for issue in errors.0 {
-            eprintln!("validation error: {}: {}", issue.path, issue.message);
+            eprintln!("validation error: {issue}");
         }
         bail!("IR fixture is invalid");
     }
@@ -823,7 +820,7 @@ fn load_input_ir(
     openapi: Option<PathBuf>,
     ignore_unhandled: bool,
     timing_collector: &mut TimingCollector,
-) -> Result<(CoreIr, Vec<String>)> {
+) -> Result<(CoreIr, Vec<OpenApiDiagnostic>)> {
     match (ir, openapi) {
         (Some(ir), None) => timing_collector
             .measure_result("ir_load", || Ok((load_ir(&ir)?, Vec::new()))),
@@ -856,7 +853,7 @@ fn openapi_options(ignore_unhandled: bool, emit_timings: bool) -> LoadOpenApiOpt
     }
 }
 
-fn print_openapi_warnings(warnings: &[String]) {
+fn print_openapi_warnings(warnings: &[OpenApiDiagnostic]) {
     for warning in warnings {
         eprintln!("warning: {warning}");
     }
@@ -1159,7 +1156,12 @@ fn run_corpus_spec_inline(
             spec: relative_spec.to_owned(),
             warning_count: 0,
             targets: Vec::new(),
-            failure: Some(classify_failure(&format!("{error:#}"), None)),
+            failure: Some(
+                error
+                    .downcast_ref::<OpenApiDiagnostic>()
+                    .map(|diag| corpus_failure_from_diagnostic(diag, None))
+                    .unwrap_or_else(|| classify_failure(&format!("{error:#}"), None)),
+            ),
         },
     }
 }
@@ -1908,6 +1910,25 @@ fn print_failure_summary(summary: &CorpusFailureSummary) {
     }
 }
 
+/// Convert a typed [`OpenApiDiagnostic`] directly to a [`CorpusFailure`] without
+/// string parsing.  This is the preferred path when the error originates from
+/// `arvalez-openapi` in-process (inline corpus mode).
+fn corpus_failure_from_diagnostic(diag: &OpenApiDiagnostic, target: Option<&str>) -> CorpusFailure {
+    let (kind, feature) = diag.classify();
+    CorpusFailure {
+        kind: kind.into(),
+        feature,
+        pointer: diag.pointer.clone(),
+        schema_path: None,
+        line: None,
+        column: None,
+        source_preview: diag.source_preview.clone(),
+        note: diag.note().map(str::to_owned),
+        target: target.map(str::to_owned),
+        message: diag.to_string(),
+    }
+}
+
 fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
     let pointer = extract_pointer(message);
     let schema_path = extract_between(message, "schema mismatch at `", "`:");
@@ -1954,7 +1975,7 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
 
     if let Some(feature) = extract_between(message, "`", "` is not supported yet") {
         return make_failure(
-            classify_not_supported_kind(pointer.as_deref(), feature),
+            OpenApiDiagnostic::unsupported_kind_for_pointer(pointer.as_deref(), feature).to_owned(),
             feature.to_owned(),
         );
     }
@@ -1964,8 +1985,8 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
             "unsupported_schema_shape".into(),
             pointer
                 .as_deref()
-                .map(pointer_tail_feature)
-                .or_else(|| schema_path.map(normalize_feature))
+                .map(diagnostic_pointer_tail)
+                .or_else(|| schema_path.map(normalize_diagnostic_feature))
                 .unwrap_or_else(|| "schema_shape".into()),
         );
     }
@@ -1976,7 +1997,7 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
         return make_failure(
             "invalid_openapi_document".into(),
             schema_path
-                .map(normalize_feature)
+                .map(normalize_diagnostic_feature)
                 .unwrap_or_else(|| "deserialization".into()),
         );
     }
@@ -2012,19 +2033,17 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
         || message.contains("formData parameter has no schema or type")
     {
         let param_name = extract_between(message, "parameter `", "`:")
-            .map(normalize_feature)
+            .map(normalize_diagnostic_feature)
             .unwrap_or_else(|| "parameter_missing_schema".into());
         return make_failure("invalid_openapi_document".into(), param_name);
     }
 
-    if message.contains("has an empty name") {
-        return make_failure(
-            "invalid_openapi_document".into(),
-            pointer
-                .as_deref()
-                .map(pointer_tail_feature)
-                .unwrap_or_else(|| "empty_name".into()),
-        );
+    if message.contains("parameter #") && message.contains("has an empty name") {
+        return make_failure("invalid_openapi_document".into(), "empty_parameter_name".into());
+    }
+
+    if message.contains("property #") && message.contains("has an empty name") {
+        return make_failure("invalid_openapi_document".into(), "empty_property_key".into());
     }
 
     if message.contains("array schema is missing `items`") {
@@ -2032,33 +2051,12 @@ fn classify_failure(message: &str, target: Option<&str>) -> CorpusFailure {
             "invalid_openapi_document".into(),
             pointer
                 .as_deref()
-                .map(pointer_tail_feature)
+                .map(diagnostic_pointer_tail)
                 .unwrap_or_else(|| "missing_array_items".into()),
         );
     }
 
     make_failure("unknown_error".into(), "unknown".into())
-}
-
-fn classify_not_supported_kind(pointer: Option<&str>, feature: &str) -> String {
-    if matches!(feature, "allOf" | "anyOf" | "oneOf" | "not" | "discriminator" | "const") {
-        return "unsupported_schema_keyword".into();
-    }
-
-    match pointer {
-        Some(value)
-            if value.contains("/components/schemas/")
-                || value.contains("/properties/")
-                || value.ends_with("/schema")
-                || value.contains("/items/") =>
-        {
-            "unsupported_schema_keyword".into()
-        }
-        Some(value) if value.contains("/parameters/") => "unsupported_parameter_feature".into(),
-        Some(value) if value.contains("/responses/") => "unsupported_response_feature".into(),
-        Some(value) if value.contains("/requestBody/") => "unsupported_request_body_feature".into(),
-        _ => "unsupported_feature".into(),
-    }
 }
 
 fn extract_pointer(message: &str) -> Option<String> {
@@ -2155,24 +2153,6 @@ fn extract_between<'a>(message: &'a str, prefix: &str, suffix: &str) -> Option<&
     Some(&rest[..end])
 }
 
-fn pointer_tail_feature(pointer: &str) -> String {
-    pointer
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .map(normalize_feature)
-        .unwrap_or_else(|| "schema_shape".into())
-}
-
-fn normalize_feature(value: &str) -> String {
-    value
-        .replace("~1", "/")
-        .replace("~0", "~")
-        .replace('.', "_")
-        .replace('/', "_")
-        .replace('`', "")
-}
-
 #[cfg(test)]
 mod tests {
     use super::classify_failure;
@@ -2213,23 +2193,24 @@ mod tests {
     }
 
     #[test]
-    fn classifies_parameter_with_empty_name() {
+    fn classifies_parameter_with_empty_name_value() {
         let failure = classify_failure(
-            "operation `customers`: parameter #1 has an empty name\nnote: Use `--ignore-unhandled` to turn this into a warning while keeping generation going.",
+            "OpenAPI document issue\nCaused by:\n  parameter #1 has an empty name\n  location: #/paths/~1customers/get\n  note: Use `--ignore-unhandled` to turn this into a warning while keeping generation going.",
             None,
         );
         assert_eq!(failure.kind, "invalid_openapi_document");
-        assert_eq!(failure.feature, "empty_name");
+        assert_eq!(failure.feature, "empty_parameter_name");
+        assert_eq!(failure.pointer.as_deref(), Some("#/paths/~1customers/get"));
     }
 
     #[test]
-    fn classifies_property_with_empty_name() {
+    fn classifies_property_with_empty_key() {
         let failure = classify_failure(
             "OpenAPI document issue\nCaused by:\n  property #1 has an empty name\n  location: #/components/schemas/shared-user/properties\n  preview:\n    '':\n      type: string\n    username:\n      type: string\n  note: Use `--ignore-unhandled` to turn this into a warning while keeping generation going.",
             None,
         );
         assert_eq!(failure.kind, "invalid_openapi_document");
-        assert_eq!(failure.feature, "properties");
+        assert_eq!(failure.feature, "empty_property_key");
         assert_eq!(
             failure.pointer.as_deref(),
             Some("#/components/schemas/shared-user/properties")

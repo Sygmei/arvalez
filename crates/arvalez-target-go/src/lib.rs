@@ -1,11 +1,14 @@
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use arvalez_ir::{CoreIr, HttpMethod, Operation, ParameterLocation, RequestBody, TypeRef};
+pub use arvalez_target_core::GeneratedFile;
+pub use arvalez_target_core::write_files as write_go_package;
+use arvalez_target_core::{
+    ClientLayout as SharedClientLayout, indent_block, load_templates,
+    sorted_models,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tera::{Context as TeraContext, Tera};
@@ -102,14 +105,8 @@ impl GoPackageConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct GeneratedFile {
-    pub path: PathBuf,
-    pub contents: String,
-}
-
-pub fn generate_package(ir: &CoreIr, config: &GoPackageConfig) -> Result<Vec<GeneratedFile>> {
-    let tera = load_templates(config.template_dir.as_deref())?;
+pub fn generate_go_package(ir: &CoreIr, config: &GoPackageConfig) -> Result<Vec<GeneratedFile>> {
+    let tera = load_templates(config.template_dir.as_deref(), BUILTIN_TEMPLATES, OVERRIDABLE_TEMPLATES)?;
     let package_context = PackageTemplateContext::from_ir(ir, config, &tera)?;
     let mut context = TeraContext::new();
     context.insert("package", &package_context);
@@ -140,56 +137,6 @@ pub fn generate_package(ir: &CoreIr, config: &GoPackageConfig) -> Result<Vec<Gen
                 .context("failed to render client template")?,
         },
     ])
-}
-
-pub fn write_package(output_dir: impl AsRef<Path>, files: &[GeneratedFile]) -> Result<()> {
-    let output_dir = output_dir.as_ref();
-    fs::create_dir_all(output_dir).with_context(|| {
-        format!(
-            "failed to create output directory `{}`",
-            output_dir.display()
-        )
-    })?;
-
-    for file in files {
-        let path = output_dir.join(&file.path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create directory `{}`", parent.display()))?;
-        }
-        fs::write(&path, &file.contents)
-            .with_context(|| format!("failed to write `{}`", path.display()))?;
-    }
-
-    Ok(())
-}
-
-fn load_templates(template_dir: Option<&Path>) -> Result<Tera> {
-    let mut tera = Tera::default();
-    for (name, contents) in BUILTIN_TEMPLATES {
-        tera.add_raw_template(name, contents)
-            .with_context(|| format!("failed to register builtin template `{name}`"))?;
-    }
-
-    if let Some(template_dir) = template_dir {
-        for name in OVERRIDABLE_TEMPLATES {
-            let candidate = template_dir.join(name);
-            if !candidate.exists() {
-                continue;
-            }
-            let contents = fs::read_to_string(&candidate).with_context(|| {
-                format!("failed to read template override `{}`", candidate.display())
-            })?;
-            tera.add_raw_template(name, &contents).with_context(|| {
-                format!(
-                    "failed to register template override `{}`",
-                    candidate.display()
-                )
-            })?;
-        }
-    }
-
-    Ok(tera)
 }
 
 #[derive(Debug, Serialize)]
@@ -293,25 +240,15 @@ struct ClientLayout<'a> {
 
 impl<'a> ClientLayout<'a> {
     fn from_ir(ir: &'a CoreIr) -> Self {
-        let all_operations = sorted_operations(ir);
-        let mut tag_map: BTreeMap<String, Vec<&Operation>> = BTreeMap::new();
-        let mut untagged_operations = Vec::new();
-
-        for operation in &all_operations {
-            match operation_primary_tag(operation) {
-                Some(tag) => tag_map.entry(tag).or_default().push(*operation),
-                None => untagged_operations.push(*operation),
-            }
-        }
-
-        let tag_groups = tag_map
+        let shared = SharedClientLayout::from_ir(ir);
+        let tag_groups = shared
+            .tagged_groups
             .into_iter()
-            .map(|(tag, operations)| TagGroup::new(tag, operations))
-            .collect::<Vec<_>>();
-
+            .map(|(tag, ops)| TagGroup::new(tag, ops))
+            .collect();
         Self {
-            all_operations,
-            untagged_operations,
+            all_operations: shared.all_operations,
+            untagged_operations: shared.untagged_operations,
             tag_groups,
         }
     }
@@ -996,29 +933,7 @@ fn build_forward_arguments(operation: &Operation) -> String {
     args.join(", ")
 }
 
-fn sorted_models(ir: &CoreIr) -> Vec<&arvalez_ir::Model> {
-    let mut models = ir.models.iter().collect::<Vec<_>>();
-    models.sort_by(|left, right| left.name.cmp(&right.name));
-    models
-}
 
-fn sorted_operations(ir: &CoreIr) -> Vec<&Operation> {
-    let mut operations = ir.operations.iter().collect::<Vec<_>>();
-    operations.sort_by(|left, right| left.name.cmp(&right.name));
-    operations
-}
-
-fn operation_primary_tag(operation: &Operation) -> Option<String> {
-    operation
-        .attributes
-        .get("tags")
-        .and_then(|value| value.as_array())
-        .and_then(|tags| tags.first())
-        .and_then(|tag| tag.as_str())
-        .map(str::trim)
-        .filter(|tag| !tag.is_empty())
-        .map(ToOwned::to_owned)
-}
 
 fn go_field_type(type_ref: &TypeRef, optional: bool, nullable: bool) -> String {
     let base = go_type_ref(type_ref);
@@ -1126,15 +1041,6 @@ fn go_http_method(method: HttpMethod) -> &'static str {
         HttpMethod::Patch => "http.MethodPatch",
         HttpMethod::Delete => "http.MethodDelete",
     }
-}
-
-fn indent_block(lines: &[String], spaces: usize) -> String {
-    let indent = " ".repeat(spaces);
-    lines
-        .iter()
-        .map(|line| format!("{indent}{line}"))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn default_package_name(module_path: &str) -> String {
@@ -1333,7 +1239,7 @@ mod tests {
 
     #[test]
     fn renders_basic_go_package() {
-        let files = generate_package(
+        let files = generate_go_package(
             &sample_ir(),
             &GoPackageConfig::new("github.com/demo/client"),
         )
@@ -1383,7 +1289,7 @@ mod tests {
 
     #[test]
     fn groups_operations_by_tag_when_enabled() {
-        let files = generate_package(
+        let files = generate_go_package(
             &sample_ir(),
             &GoPackageConfig::new("github.com/demo/client").with_group_by_tag(true),
         )
@@ -1418,7 +1324,7 @@ mod tests {
         )
         .expect("override template");
 
-        let files = generate_package(
+        let files = generate_go_package(
             &sample_ir(),
             &GoPackageConfig::new("github.com/demo/client")
                 .with_group_by_tag(true)

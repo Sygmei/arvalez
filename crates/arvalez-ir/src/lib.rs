@@ -94,6 +94,22 @@ pub struct Operation {
     pub source: Option<SourceRef>,
 }
 
+impl Default for Operation {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            method: HttpMethod::Get,
+            path: String::new(),
+            params: Vec::new(),
+            request_body: None,
+            responses: Vec::new(),
+            attributes: Attributes::default(),
+            source: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RequestBody {
     #[serde(default)]
@@ -193,6 +209,12 @@ fn default_ir_version() -> u32 {
 pub struct ValidationIssue {
     pub path: String,
     pub message: String,
+}
+
+impl std::fmt::Display for ValidationIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path, self.message)
+    }
 }
 
 #[derive(Debug, Error)]
