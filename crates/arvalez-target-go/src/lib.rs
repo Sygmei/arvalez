@@ -12,7 +12,7 @@ use arvalez_ir::{CoreIr, Model, Operation};
 pub use arvalez_target_core::GeneratedFile;
 pub use arvalez_target_core::IrEmitter;
 pub use arvalez_target_core::write_files as write_go_package;
-use arvalez_target_core::{load_extra_package_templates, load_templates};
+use arvalez_target_core::{collect_erased_templates, load_extra_package_templates, load_templates};
 use tera::{Context as TeraContext, Tera};
 
 use codegen::PackageTemplateContext;
@@ -29,6 +29,8 @@ pub struct GoGenerator {
     pub(crate) tera: Tera,
     /// Extra user-supplied templates discovered at construction time.
     pub(crate) extra_package_templates: Vec<(String, PathBuf)>,
+    /// Default templates suppressed by a tilde-prefixed eraser file.
+    pub(crate) erased_templates: Vec<String>,
 }
 
 impl GoGenerator {
@@ -44,10 +46,16 @@ impl GoGenerator {
         } else {
             Vec::new()
         };
+        let erased_templates = if let Some(dir) = config.template_dir.as_deref() {
+            collect_erased_templates(dir, OVERRIDABLE_TEMPLATES)
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             config: config.clone(),
             tera,
             extra_package_templates,
+            erased_templates,
         })
     }
 }
@@ -118,7 +126,13 @@ impl IrEmitter for GoGenerator {
     }
 
     fn generate(&self, ir: &CoreIr) -> Result<Vec<GeneratedFile>> {
-        assemble_go_files(&self.tera, &self.config, ir, &self.extra_package_templates)
+        assemble_go_files(
+            &self.tera,
+            &self.config,
+            ir,
+            &self.extra_package_templates,
+            &self.erased_templates,
+        )
     }
 }
 
@@ -127,36 +141,48 @@ pub(crate) fn assemble_go_files(
     config: &GoPackageConfig,
     ir: &CoreIr,
     extra_package_templates: &[(String, PathBuf)],
+    erased_templates: &[String],
 ) -> Result<Vec<GeneratedFile>> {
     let package_context = PackageTemplateContext::from_ir(ir, config, tera)?;
     let mut context = TeraContext::new();
     context.insert("package", &package_context);
-    let mut files = vec![
-        GeneratedFile {
+
+    let is_erased = |name: &str| erased_templates.iter().any(|e| e == name);
+
+    let mut files = Vec::new();
+
+    if !is_erased(TEMPLATE_GO_MOD) {
+        files.push(GeneratedFile {
             path: PathBuf::from("go.mod"),
             contents: tera
                 .render(TEMPLATE_GO_MOD, &context)
                 .context("failed to render go.mod template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_README) {
+        files.push(GeneratedFile {
             path: PathBuf::from("README.md"),
             contents: tera
                 .render(TEMPLATE_README, &context)
                 .context("failed to render README template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_MODELS) {
+        files.push(GeneratedFile {
             path: PathBuf::from("models.go"),
             contents: tera
                 .render(TEMPLATE_MODELS, &context)
                 .context("failed to render models template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_CLIENT) {
+        files.push(GeneratedFile {
             path: PathBuf::from("client.go"),
             contents: tera
                 .render(TEMPLATE_CLIENT, &context)
                 .context("failed to render client template")?,
-        },
-    ];
+        });
+    }
 
     for (template_name, output_path) in extra_package_templates {
         let contents = tera

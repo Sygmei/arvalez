@@ -330,3 +330,29 @@ fn renders_extra_package_templates() {
         .expect("sub/nested.md should be present");
     assert!(nested.contents.contains("# mylib"));
 }
+
+#[test]
+fn erases_default_template_with_tilde_prefix() {
+    let dir = tempdir().expect("tempdir");
+    let pkg_dir = dir.path().join("package");
+    fs::create_dir_all(&pkg_dir).expect("package dir");
+
+    // Place a tilde-prefixed eraser file to suppress pyproject.toml generation.
+    fs::write(pkg_dir.join("~pyproject.toml.tera"), "").expect("eraser file");
+
+    let config =
+        PythonPackageConfig::new("mylib").with_template_dir(Some(dir.path().to_path_buf()));
+
+    let files = generate_python_package(&sample_ir(), &config).expect("package should render");
+
+    // pyproject.toml must NOT be present in the output.
+    assert!(
+        !files.iter().any(|f| f.path == std::path::PathBuf::from("pyproject.toml")),
+        "pyproject.toml should be erased"
+    );
+
+    // All other default files should still be present.
+    assert!(files.iter().any(|f| f.path.ends_with("README.md")));
+    assert!(files.iter().any(|f| f.path.ends_with("client.py")));
+    assert!(files.iter().any(|f| f.path.ends_with("models.py")));
+}

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use arvalez_ir::{CoreIr, Model, Operation};
 pub use arvalez_target_core::GeneratedFile;
 pub use arvalez_target_core::IrEmitter;
-use arvalez_target_core::{load_extra_package_templates, load_templates};
+use arvalez_target_core::{collect_erased_templates, load_extra_package_templates, load_templates};
 pub use arvalez_target_core::write_files as write_python_package;
 use tera::{Context as TeraContext, Tera};
 
@@ -27,6 +27,8 @@ pub struct PythonGenerator {
     pub(crate) tera: Tera,
     /// Extra user-supplied templates discovered at construction time.
     pub(crate) extra_package_templates: Vec<(String, PathBuf)>,
+    /// Default templates suppressed by a tilde-prefixed eraser file.
+    pub(crate) erased_templates: Vec<String>,
 }
 
 impl PythonGenerator {
@@ -42,10 +44,16 @@ impl PythonGenerator {
         } else {
             Vec::new()
         };
+        let erased_templates = if let Some(dir) = config.template_dir.as_deref() {
+            collect_erased_templates(dir, OVERRIDABLE_TEMPLATES)
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             config: config.clone(),
             tera,
             extra_package_templates,
+            erased_templates,
         })
     }
 }
@@ -131,7 +139,13 @@ impl IrEmitter for PythonGenerator {
     }
 
     fn generate(&self, ir: &CoreIr) -> Result<Vec<GeneratedFile>> {
-        assemble_python_files(&self.tera, &self.config, ir, &self.extra_package_templates)
+        assemble_python_files(
+            &self.tera,
+            &self.config,
+            ir,
+            &self.extra_package_templates,
+            &self.erased_templates,
+        )
     }
 }
 
@@ -140,48 +154,63 @@ pub(crate) fn assemble_python_files(
     config: &PythonPackageConfig,
     ir: &CoreIr,
     extra_package_templates: &[(String, PathBuf)],
+    erased_templates: &[String],
 ) -> Result<Vec<GeneratedFile>> {
     let package_dir = PathBuf::from("src").join(&config.package_name);
     let package_context = PackageTemplateContext::from_ir(ir, config, tera)?;
     let mut template_context = TeraContext::new();
     template_context.insert("package", &package_context);
 
-    let mut files = vec![
-        GeneratedFile {
+    let is_erased = |name: &str| erased_templates.iter().any(|e| e == name);
+
+    let mut files = Vec::new();
+
+    if !is_erased(TEMPLATE_PYPROJECT) {
+        files.push(GeneratedFile {
             path: PathBuf::from("pyproject.toml"),
             contents: tera
                 .render(TEMPLATE_PYPROJECT, &template_context)
                 .context("failed to render pyproject template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_README) {
+        files.push(GeneratedFile {
             path: PathBuf::from("README.md"),
             contents: tera
                 .render(TEMPLATE_README, &template_context)
                 .context("failed to render README template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_INIT) {
+        files.push(GeneratedFile {
             path: package_dir.join("__init__.py"),
             contents: tera
                 .render(TEMPLATE_INIT, &template_context)
                 .context("failed to render package __init__ template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_MODELS) {
+        files.push(GeneratedFile {
             path: package_dir.join("models.py"),
             contents: tera
                 .render(TEMPLATE_MODELS, &template_context)
                 .context("failed to render models template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_CLIENT) {
+        files.push(GeneratedFile {
             path: package_dir.join("client.py"),
             contents: tera
                 .render(TEMPLATE_CLIENT, &template_context)
                 .context("failed to render client template")?,
-        },
-        GeneratedFile {
-            path: package_dir.join("py.typed"),
-            contents: String::new(),
-        },
-    ];
+        });
+    }
+    // py.typed is a PEP 561 marker (always empty, not template-driven) and is
+    // always emitted unconditionally.
+    files.push(GeneratedFile {
+        path: package_dir.join("py.typed"),
+        contents: String::new(),
+    });
 
     for (template_name, output_path) in extra_package_templates {
         let contents = tera

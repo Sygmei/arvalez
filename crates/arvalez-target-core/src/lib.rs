@@ -130,6 +130,38 @@ pub fn load_templates(
     Ok(tera)
 }
 
+// ── Erased template detection ────────────────────────────────────────────────
+
+/// Scans `template_dir` for tilde-prefixed eraser files that suppress the
+/// generation of a default template.
+///
+/// For each name in `overridable_templates` (e.g. `package/pyproject.toml.tera`),
+/// if a file with a `~` prepended to the filename component exists under
+/// `template_dir` (e.g. `template_dir/package/~pyproject.toml.tera`), that
+/// template name is added to the returned list.
+///
+/// Callers should skip rendering any template whose name appears in the
+/// returned list, so that the corresponding output file is not produced.
+pub fn collect_erased_templates(
+    template_dir: &Path,
+    overridable_templates: &[&str],
+) -> Vec<String> {
+    overridable_templates
+        .iter()
+        .filter(|&&name| {
+            let p = Path::new(name);
+            match (p.parent(), p.file_name()) {
+                (Some(parent), Some(filename)) => {
+                    let eraser_name = format!("~{}", filename.to_string_lossy());
+                    template_dir.join(parent).join(&eraser_name).exists()
+                }
+                _ => false,
+            }
+        })
+        .map(|&name| name.to_owned())
+        .collect()
+}
+
 // ── Extra template discovery ──────────────────────────────────────────────────
 
 /// Scans `template_dir/package/` recursively for any `.tera` files whose

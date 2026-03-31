@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use arvalez_ir::{CoreIr, Model, Operation};
 pub use arvalez_target_core::GeneratedFile;
 pub use arvalez_target_core::write_files as write_typescript_package;
-use arvalez_target_core::{load_extra_package_templates, load_templates};
+use arvalez_target_core::{collect_erased_templates, load_extra_package_templates, load_templates};
 pub use arvalez_target_core::IrEmitter;
 use tera::{Context as TeraContext, Tera};
 
@@ -27,6 +27,8 @@ pub struct TypeScriptGenerator {
     pub(crate) tera: Tera,
     /// Extra user-supplied templates discovered at construction time.
     pub(crate) extra_package_templates: Vec<(String, PathBuf)>,
+    /// Default templates suppressed by a tilde-prefixed eraser file.
+    pub(crate) erased_templates: Vec<String>,
 }
 
 impl TypeScriptGenerator {
@@ -42,7 +44,12 @@ impl TypeScriptGenerator {
         } else {
             Vec::new()
         };
-        Ok(Self { config: config.clone(), tera, extra_package_templates })
+        let erased_templates = if let Some(dir) = config.template_dir.as_deref() {
+            collect_erased_templates(dir, OVERRIDABLE_TEMPLATES)
+        } else {
+            Vec::new()
+        };
+        Ok(Self { config: config.clone(), tera, extra_package_templates, erased_templates })
     }
 }
 
@@ -127,7 +134,13 @@ impl IrEmitter for TypeScriptGenerator {
     }
 
     fn generate(&self, ir: &CoreIr) -> Result<Vec<GeneratedFile>> {
-        assemble_typescript_files(&self.tera, &self.config, ir, &self.extra_package_templates)
+        assemble_typescript_files(
+            &self.tera,
+            &self.config,
+            ir,
+            &self.extra_package_templates,
+            &self.erased_templates,
+        )
     }
 }
 
@@ -136,49 +149,64 @@ pub(crate) fn assemble_typescript_files(
     config: &TypeScriptPackageConfig,
     ir: &CoreIr,
     extra_package_templates: &[(String, PathBuf)],
+    erased_templates: &[String],
 ) -> Result<Vec<GeneratedFile>> {
     let package_context = PackageTemplateContext::from_ir(ir, config, tera)?;
     let mut template_context = TeraContext::new();
     template_context.insert("package", &package_context);
 
-    let mut files = vec![
-        GeneratedFile {
+    let is_erased = |name: &str| erased_templates.iter().any(|e| e == name);
+
+    let mut files = Vec::new();
+
+    if !is_erased(TEMPLATE_PACKAGE_JSON) {
+        files.push(GeneratedFile {
             path: PathBuf::from("package.json"),
             contents: tera
                 .render(TEMPLATE_PACKAGE_JSON, &template_context)
                 .context("failed to render package.json template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_TSCONFIG) {
+        files.push(GeneratedFile {
             path: PathBuf::from("tsconfig.json"),
             contents: tera
                 .render(TEMPLATE_TSCONFIG, &template_context)
                 .context("failed to render tsconfig template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_README) {
+        files.push(GeneratedFile {
             path: PathBuf::from("README.md"),
             contents: tera
                 .render(TEMPLATE_README, &template_context)
                 .context("failed to render README template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_MODELS) {
+        files.push(GeneratedFile {
             path: PathBuf::from("src").join("models.ts"),
             contents: tera
                 .render(TEMPLATE_MODELS, &template_context)
                 .context("failed to render models template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_CLIENT) {
+        files.push(GeneratedFile {
             path: PathBuf::from("src").join("client.ts"),
             contents: tera
                 .render(TEMPLATE_CLIENT, &template_context)
                 .context("failed to render client template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_INDEX) {
+        files.push(GeneratedFile {
             path: PathBuf::from("src").join("index.ts"),
             contents: tera
                 .render(TEMPLATE_INDEX, &template_context)
                 .context("failed to render index template")?,
-        },
-    ];
+        });
+    }
 
     for (template_name, output_path) in extra_package_templates {
         let contents = tera
