@@ -4,4 +4,6 @@ class {{ client.class_name }}(_BaseApiClient):
         self._client = owner._client
         self._on_error = owner._on_error
 
-{{ client.methods_block }}
+{% for operation in client.methods %}
+{% include "partials/client_method.py.tera" %}
+{% endfor %}

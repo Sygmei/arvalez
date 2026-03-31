@@ -7,9 +7,7 @@ use serde::Serialize;
 use serde_json::{Value, from_value};
 use tera::{Context as TeraContext, Tera};
 
-use super::{
-    TEMPLATE_CLIENT_CLASS, TEMPLATE_CLIENT_METHOD, TEMPLATE_MODEL_CLASS, TEMPLATE_TAG_CLIENT_CLASS,
-};
+use super::{TEMPLATE_CLIENT_METHOD, TEMPLATE_MODEL_CLASS};
 use crate::config::PythonPackageConfig;
 use crate::sanitize::*;
 use crate::types::*;
@@ -19,106 +17,52 @@ pub(crate) struct PackageTemplateContext {
     package_name: String,
     project_name: String,
     version: String,
-    model_names: Vec<String>,
-    model_imports_block: String,
-    model_exports_block: String,
-    model_blocks: Vec<String>,
-    client_names: Vec<String>,
-    client_blocks: Vec<String>,
+    models: Vec<ModelView>,
+    clients: Vec<ClientClassView>,
+    tag_clients: Vec<TagClientClassView>,
 }
 
 impl PackageTemplateContext {
-    pub(crate) fn from_ir(ir: &CoreIr, config: &PythonPackageConfig, tera: &Tera) -> Result<Self> {
-        let model_names = sorted_models(ir)
+    pub(crate) fn from_ir(ir: &CoreIr, config: &PythonPackageConfig) -> Self {
+        let models = sorted_models(ir)
             .into_iter()
-            .map(|model| sanitize_class_name(&model.name))
+            .map(ModelView::from_model)
             .collect::<Vec<_>>();
-        let model_imports_block = indent_block(
-            &model_names
-                .iter()
-                .map(|name| format!("{name},"))
-                .collect::<Vec<_>>(),
-            4,
-        );
-        let model_exports_block = indent_block(
-            &model_names
-                .iter()
-                .map(|name| format!("{name:?},"))
-                .collect::<Vec<_>>(),
-            4,
-        );
-
-        let model_blocks = sorted_models(ir)
-            .into_iter()
-            .map(|model| render_model_block(tera, ModelView::from_model(model)))
-            .collect::<Result<Vec<_>>>()?;
 
         let client_layout = ClientLayout::from_ir(ir);
-        let mut client_blocks = Vec::new();
+        let mut tag_clients = Vec::new();
 
         if config.group_by_tag {
             for tag_group in &client_layout.tag_groups {
-                client_blocks.push(render_tag_client_block(
-                    tera,
-                    TagClientClassView::async_client(tag_group, tera)?,
-                )?);
-                client_blocks.push(render_tag_client_block(
-                    tera,
-                    TagClientClassView::sync_client(tag_group, tera)?,
-                )?);
+                tag_clients.push(TagClientClassView::async_client(tag_group));
+                tag_clients.push(TagClientClassView::sync_client(tag_group));
             }
         }
 
-        let async_client = render_client_block(
-            tera,
-            ClientClassView::async_client(
-                if config.group_by_tag {
-                    &client_layout.untagged_operations
-                } else {
-                    &client_layout.all_operations
-                },
-                if config.group_by_tag {
-                    &client_layout.tag_groups
-                } else {
-                    &[]
-                },
-                tera,
-            )?,
-        )?;
-        let sync_client = render_client_block(
-            tera,
-            ClientClassView::sync_client(
-                if config.group_by_tag {
-                    &client_layout.untagged_operations
-                } else {
-                    &client_layout.all_operations
-                },
-                if config.group_by_tag {
-                    &client_layout.tag_groups
-                } else {
-                    &[]
-                },
-                tera,
-            )?,
-        )?;
-        client_blocks.push(async_client);
-        client_blocks.push(sync_client);
+        let operations = if config.group_by_tag {
+            &client_layout.untagged_operations
+        } else {
+            &client_layout.all_operations
+        };
+        let tag_groups: &[TagGroup<'_>] = if config.group_by_tag {
+            &client_layout.tag_groups
+        } else {
+            &[]
+        };
 
-        Ok(Self {
+        let clients = vec![
+            ClientClassView::async_client(operations, tag_groups),
+            ClientClassView::sync_client(operations, tag_groups),
+        ];
+
+        Self {
             package_name: config.package_name.clone(),
             project_name: config.project_name.clone(),
             version: config.version.clone(),
-            model_names,
-            model_imports_block,
-            model_exports_block,
-            model_blocks,
-            client_names: vec![
-                "ApiClient".into(),
-                "AsyncApiClient".into(),
-                "SyncApiClient".into(),
-            ],
-            client_blocks,
-        })
+            models,
+            clients,
+            tag_clients,
+        }
     }
 }
 
@@ -264,20 +208,15 @@ pub(crate) struct ClientClassView {
     client_type: String,
     is_async: bool,
     service_bindings: Vec<ServiceBindingView>,
-    methods_block: String,
+    methods: Vec<OperationMethodView>,
 }
 
 impl ClientClassView {
     pub(crate) fn async_client(
         operations: &[&Operation],
         tag_groups: &[TagGroup<'_>],
-        tera: &Tera,
-    ) -> Result<Self> {
-        let methods = operations
-            .iter()
-            .map(|operation| OperationMethodView::from_operation(operation, ClientMode::Async))
-            .collect::<Vec<_>>();
-        Ok(Self {
+    ) -> Self {
+        Self {
             class_name: "AsyncApiClient".into(),
             client_type: "httpx.AsyncClient".into(),
             is_async: true,
@@ -288,20 +227,18 @@ impl ClientClassView {
                     class_name: format!("Async{}Api", group.class_base_name),
                 })
                 .collect(),
-            methods_block: render_methods_block(tera, methods)?,
-        })
+            methods: operations
+                .iter()
+                .map(|op| OperationMethodView::from_operation(op, ClientMode::Async))
+                .collect(),
+        }
     }
 
     pub(crate) fn sync_client(
         operations: &[&Operation],
         tag_groups: &[TagGroup<'_>],
-        tera: &Tera,
-    ) -> Result<Self> {
-        let methods = operations
-            .iter()
-            .map(|operation| OperationMethodView::from_operation(operation, ClientMode::Sync))
-            .collect::<Vec<_>>();
-        Ok(Self {
+    ) -> Self {
+        Self {
             class_name: "SyncApiClient".into(),
             client_type: "httpx.Client".into(),
             is_async: false,
@@ -312,8 +249,11 @@ impl ClientClassView {
                     class_name: format!("Sync{}Api", group.class_base_name),
                 })
                 .collect(),
-            methods_block: render_methods_block(tera, methods)?,
-        })
+            methods: operations
+                .iter()
+                .map(|op| OperationMethodView::from_operation(op, ClientMode::Sync))
+                .collect(),
+        }
     }
 }
 
@@ -321,36 +261,32 @@ impl ClientClassView {
 pub(crate) struct TagClientClassView {
     class_name: String,
     owner_class_name: String,
-    methods_block: String,
+    methods: Vec<OperationMethodView>,
 }
 
 impl TagClientClassView {
-    pub(crate) fn async_client(tag_group: &TagGroup<'_>, tera: &Tera) -> Result<Self> {
-        let methods = tag_group
-            .operations
-            .iter()
-            .map(|operation| OperationMethodView::from_operation(operation, ClientMode::Async))
-            .collect::<Vec<_>>();
-
-        Ok(Self {
+    pub(crate) fn async_client(tag_group: &TagGroup<'_>) -> Self {
+        Self {
             class_name: format!("Async{}Api", tag_group.class_base_name),
             owner_class_name: "AsyncApiClient".into(),
-            methods_block: render_methods_block(tera, methods)?,
-        })
+            methods: tag_group
+                .operations
+                .iter()
+                .map(|op| OperationMethodView::from_operation(op, ClientMode::Async))
+                .collect(),
+        }
     }
 
-    pub(crate) fn sync_client(tag_group: &TagGroup<'_>, tera: &Tera) -> Result<Self> {
-        let methods = tag_group
-            .operations
-            .iter()
-            .map(|operation| OperationMethodView::from_operation(operation, ClientMode::Sync))
-            .collect::<Vec<_>>();
-
-        Ok(Self {
+    pub(crate) fn sync_client(tag_group: &TagGroup<'_>) -> Self {
+        Self {
             class_name: format!("Sync{}Api", tag_group.class_base_name),
             owner_class_name: "SyncApiClient".into(),
-            methods_block: render_methods_block(tera, methods)?,
-        })
+            methods: tag_group
+                .operations
+                .iter()
+                .map(|op| OperationMethodView::from_operation(op, ClientMode::Sync))
+                .collect(),
+        }
     }
 }
 
@@ -504,14 +440,6 @@ impl OperationMethodView {
     }
 }
 
-pub(crate) fn render_methods_block(tera: &Tera, methods: Vec<OperationMethodView>) -> Result<String> {
-    methods
-        .into_iter()
-        .map(|method| render_method_block(tera, method))
-        .collect::<Result<Vec<_>>>()
-        .map(|methods| methods.join("\n"))
-}
-
 pub(crate) fn build_wrapper_forward_arguments(operation: &Operation) -> String {
     let mut arguments = Vec::new();
 
@@ -660,20 +588,6 @@ pub(crate) fn emit_operation(
     operation: &arvalez_ir::Operation,
 ) -> Result<String> {
     render_method_block(tera, OperationMethodView::from_operation(operation, ClientMode::Async))
-}
-
-pub(crate) fn render_client_block(tera: &Tera, client: ClientClassView) -> Result<String> {
-    let mut context = TeraContext::new();
-    context.insert("client", &client);
-    tera.render(TEMPLATE_CLIENT_CLASS, &context)
-        .context("failed to render client class partial")
-}
-
-pub(crate) fn render_tag_client_block(tera: &Tera, client: TagClientClassView) -> Result<String> {
-    let mut context = TeraContext::new();
-    context.insert("client", &client);
-    tera.render(TEMPLATE_TAG_CLIENT_CLASS, &context)
-        .context("failed to render tag client class partial")
 }
 
 pub(crate) fn render_method_block(tera: &Tera, method: OperationMethodView) -> Result<String> {

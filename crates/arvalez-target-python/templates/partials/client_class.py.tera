@@ -36,6 +36,6 @@ class {{ client.class_name }}(_BaseApiClient):
         self.close()
 {% endif %}
 
-{% if client.methods_block %}
-{{ client.methods_block }}
-{% endif %}
+{% for operation in client.methods %}
+{% include "partials/client_method.py.tera" %}
+{% endfor %}

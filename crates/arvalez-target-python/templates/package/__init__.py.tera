@@ -1,8 +1,8 @@
 from {{ package.package_name }}.client import ApiClient, AsyncApiClient, ErrorHandler, RequestOptions, SyncApiClient
-{% if package.model_names | length > 0 %}
+{% if package.models | length > 0 %}
 from {{ package.package_name }}.models import (
-{{ package.model_imports_block }}
-)
+{% for model in package.models %}    {{ model.class_name }},
+{% endfor %})
 {% endif %}
 
 __all__ = [
@@ -11,7 +11,5 @@ __all__ = [
     "ErrorHandler",
     "RequestOptions",
     "SyncApiClient",
-{% if package.model_names | length > 0 %}
-{{ package.model_exports_block }}
-{% endif %}
-]
+{% for model in package.models %}    "{{ model.class_name }}",
+{% endfor %}]

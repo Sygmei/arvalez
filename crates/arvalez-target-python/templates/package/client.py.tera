@@ -141,6 +141,10 @@ class _BaseApiClient:
             on_error = request_options["on_error"]
         on_error(response)
 
-{{ package.client_blocks | join(sep="\n\n") | safe }}
-
+{% for client in package.tag_clients %}
+{% include "partials/tag_client_class.py.tera" %}
+{% endfor %}
+{% for client in package.clients %}
+{% include "partials/client_class.py.tera" %}
+{% endfor %}
 ApiClient = AsyncApiClient
