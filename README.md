@@ -161,6 +161,8 @@ The Python backend ships with bundled default Tera templates inside the binary. 
 - `partials/client_class.py.tera`
 - `partials/client_method.py.tera`
 
+To **suppress** a default output file entirely, place an empty file whose name starts with `~` in the same directory as the template it targets. For example, placing `package/~pyproject.toml.tera` in your template directory will prevent `pyproject.toml` from being generated at all.
+
 Override only selected TypeScript templates:
 
 ```bash

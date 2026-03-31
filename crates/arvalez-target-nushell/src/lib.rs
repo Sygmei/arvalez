@@ -5,7 +5,7 @@ use arvalez_ir::{CoreIr, Model, Operation};
 pub use arvalez_target_core::GeneratedFile;
 pub use arvalez_target_core::IrEmitter;
 pub use arvalez_target_core::write_files as write_nushell_package;
-use arvalez_target_core::{load_extra_package_templates, load_templates};
+use arvalez_target_core::{collect_erased_templates, load_extra_package_templates, load_templates};
 use tera::{Context as TeraContext, Tera};
 
 mod codegen;
@@ -29,6 +29,8 @@ pub struct NushellGenerator {
     pub(crate) tera: Tera,
     /// Extra user-supplied templates discovered at construction time.
     pub(crate) extra_package_templates: Vec<(String, PathBuf)>,
+    /// Default templates suppressed by a tilde-prefixed eraser file.
+    pub(crate) erased_templates: Vec<String>,
 }
 
 impl NushellGenerator {
@@ -44,7 +46,12 @@ impl NushellGenerator {
         } else {
             Vec::new()
         };
-        Ok(Self { config: config.clone(), tera, extra_package_templates })
+        let erased_templates = if let Some(dir) = config.template_dir.as_deref() {
+            collect_erased_templates(dir, OVERRIDABLE_TEMPLATES)
+        } else {
+            Vec::new()
+        };
+        Ok(Self { config: config.clone(), tera, extra_package_templates, erased_templates })
     }
 }
 
@@ -93,7 +100,13 @@ impl IrEmitter for NushellGenerator {
     }
 
     fn generate(&self, ir: &CoreIr) -> Result<Vec<GeneratedFile>> {
-        assemble_nushell_files(&self.tera, &self.config, ir, &self.extra_package_templates)
+        assemble_nushell_files(
+            &self.tera,
+            &self.config,
+            ir,
+            &self.extra_package_templates,
+            &self.erased_templates,
+        )
     }
 }
 
@@ -104,37 +117,48 @@ pub(crate) fn assemble_nushell_files(
     config: &NushellPackageConfig,
     ir: &CoreIr,
     extra_package_templates: &[(String, PathBuf)],
+    erased_templates: &[String],
 ) -> Result<Vec<GeneratedFile>> {
     let package_context = PackageTemplateContext::from_ir(ir, config, tera)?;
     let mut ctx = TeraContext::new();
     ctx.insert("package", &package_context);
 
-    let mut files = vec![
-        GeneratedFile {
+    let is_erased = |name: &str| erased_templates.iter().any(|e| e == name);
+
+    let mut files = Vec::new();
+
+    if !is_erased(TEMPLATE_README) {
+        files.push(GeneratedFile {
             path: PathBuf::from("README.md"),
             contents: tera
                 .render(TEMPLATE_README, &ctx)
                 .context("failed to render README template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_MOD) {
+        files.push(GeneratedFile {
             path: PathBuf::from("mod.nu"),
             contents: tera
                 .render(TEMPLATE_MOD, &ctx)
                 .context("failed to render mod.nu template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_CLIENT) {
+        files.push(GeneratedFile {
             path: PathBuf::from("client.nu"),
             contents: tera
                 .render(TEMPLATE_CLIENT, &ctx)
                 .context("failed to render client.nu template")?,
-        },
-        GeneratedFile {
+        });
+    }
+    if !is_erased(TEMPLATE_MODELS) {
+        files.push(GeneratedFile {
             path: PathBuf::from("models.nu"),
             contents: tera
                 .render(TEMPLATE_MODELS, &ctx)
                 .context("failed to render models.nu template")?,
-        },
-    ];
+        });
+    }
 
     for (template_name, output_path) in extra_package_templates {
         let contents = tera
