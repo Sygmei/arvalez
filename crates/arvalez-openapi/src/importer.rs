@@ -757,12 +757,11 @@ impl OpenApiImporter {
             model
                 .attributes
                 .insert("enum_values".into(), Value::Array(enum_values.clone()));
-            if let Some(schema_type) = schema.primary_schema_type() {
-                model.attributes.insert(
-                    "enum_base_type".into(),
-                    Value::String(schema_type.to_owned()),
-                );
-            }
+            let schema_type = schema.primary_schema_type().unwrap_or("string");
+            model.attributes.insert(
+                "enum_base_type".into(),
+                Value::String(schema_type.to_owned()),
+            );
             if let Some(title) = &schema.title {
                 model
                     .attributes
