@@ -62,6 +62,7 @@ pub(crate) struct TargetOutputConfig {
 pub(crate) struct TargetPackageConfig {
     pub(crate) name: Option<String>,
     pub(crate) version: Option<String>,
+    pub(crate) description: Option<String>,
 }
 
 /// Fields present at the root of every `[target.<name>]` table.
@@ -108,6 +109,15 @@ impl TargetConfig {
             .or_else(|| self.package.version.clone())
             .or_else(|| common.version.clone())
             .unwrap_or_else(|| "0.1.0".into())
+    }
+
+    /// Resolve the effective package description.
+    /// Precedence: target.package.description > common.package.description.
+    pub(crate) fn resolve_description(&self, common: &CommonPackageConfig) -> Option<String> {
+        self.package
+            .description
+            .clone()
+            .or_else(|| common.description.clone())
     }
 
     /// Resolve the effective package name.
@@ -271,13 +281,14 @@ pub(crate) fn resolve_python_config(
     let template_dir =
         target.resolve_template_dir(template_dir, config_file.common.template_dir.clone());
     let version = target.resolve_version(output_version, &common.package);
+    let description = target.resolve_description(&common.package);
     let effective_group_by_tag = target.resolve_group_by_tag(group_by_tag, &common.output);
 
     let common_cfg = PythonCommonConfig {
         package: PackageMetadata {
             name: package_name,
             version,
-            description: common.package.description.clone(),
+            description,
         },
     };
     let target_cfg = PythonTargetConfig {
@@ -301,13 +312,14 @@ pub(crate) fn resolve_typescript_config(
     let template_dir =
         target.resolve_template_dir(template_dir, config_file.common.template_dir.clone());
     let version = target.resolve_version(output_version, &common.package);
+    let description = target.resolve_description(&common.package);
     let effective_group_by_tag = target.resolve_group_by_tag(group_by_tag, &common.output);
 
     let common_cfg = CommonConfig {
         package: arvalez_target_core::PackageConfig {
             name: package_name,
             version,
-            description: common.package.description.clone(),
+            description,
         },
     };
     let target_cfg = TypeScriptTargetConfig {
