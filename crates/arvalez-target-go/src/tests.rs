@@ -5,10 +5,11 @@ use arvalez_ir::{
     Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody,
     Response, TypeRef,
 };
+use arvalez_target_core::CommonConfig;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-use crate::{GoPackageConfig, generate_go_package};
+use crate::{TargetConfig, generate_go_package};
 
 fn sample_ir() -> CoreIr {
     CoreIr {
@@ -71,11 +72,17 @@ fn sample_ir() -> CoreIr {
     }
 }
 
+fn default_common() -> CommonConfig {
+    CommonConfig { package_name: "client".into(), version: "0.1.0".into() }
+}
+
 #[test]
 fn renders_basic_go_package() {
     let files = generate_go_package(
         &sample_ir(),
-        &GoPackageConfig::new("github.com/demo/client"),
+        None,
+        &default_common(),
+        &TargetConfig { module_path: "github.com/demo/client".into(), ..Default::default() },
     )
     .expect("package should render");
 
@@ -109,7 +116,9 @@ fn renders_basic_go_package() {
 fn groups_operations_by_tag_when_enabled() {
     let files = generate_go_package(
         &sample_ir(),
-        &GoPackageConfig::new("github.com/demo/client").with_group_by_tag(true),
+        None,
+        &default_common(),
+        &TargetConfig { module_path: "github.com/demo/client".into(), group_by_tag: true },
     )
     .expect("package should render");
     let client = files
@@ -136,9 +145,9 @@ fn supports_selective_template_overrides() {
 
     let files = generate_go_package(
         &sample_ir(),
-        &GoPackageConfig::new("github.com/demo/client")
-            .with_group_by_tag(true)
-            .with_template_dir(Some(tempdir.path().to_path_buf())),
+        Some(tempdir.path()),
+        &default_common(),
+        &TargetConfig { module_path: "github.com/demo/client".into(), group_by_tag: true },
     )
     .expect("package should render");
     let client = files

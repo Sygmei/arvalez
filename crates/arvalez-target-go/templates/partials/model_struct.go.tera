@@ -1,5 +1,5 @@
-type {{ model.struct_name }} struct {
-{% if model.has_fields -%}
-{{ model.fields_block }}
-{% endif -%}
+type {{ model.name | go_exported }} struct {
+{%- for field in model.fields %}
+	{{ field.name | go_exported }} {{ field | go_field_type }} {{ field | go_json_tag }}
+{%- endfor %}
 }

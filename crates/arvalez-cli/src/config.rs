@@ -4,7 +4,8 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use arvalez_target_go::GoPackageConfig;
+use arvalez_target_core::CommonConfig;
+use arvalez_target_go::TargetConfig as GoTargetConfig;
 use arvalez_target_python::PythonPackageConfig;
 use arvalez_target_typescript::TypeScriptPackageConfig;
 use arvalez_target_nushell::NushellPackageConfig;
@@ -115,11 +116,21 @@ pub(crate) fn resolve_go_config(
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
     output_version: Option<String>,
-) -> GoPackageConfig {
+) -> (CommonConfig, GoTargetConfig, Option<PathBuf>) {
     let module_path = module_path
         .or(config_file.output.go.module_path.clone())
         .unwrap_or_else(|| "github.com/arvalez/client".into());
-    let package_name = package_name.or(config_file.output.go.package_name.clone());
+    let derived_package_name = module_path
+        .rsplit('/')
+        .next()
+        .map(|s| {
+            let clean: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+            if clean.is_empty() { "client".into() } else { clean.to_ascii_lowercase() }
+        })
+        .unwrap_or_else(|| "client".into());
+    let package_name = package_name
+        .or(config_file.output.go.package_name.clone())
+        .unwrap_or(derived_package_name);
     let template_dir = template_dir.or(config_file.output.go.template_dir.clone());
     let version = output_version
         .or(config_file.output.go.version.clone())
@@ -132,14 +143,9 @@ pub(crate) fn resolve_go_config(
             .group_by_tag
             .unwrap_or(config_file.output.group_by_tag);
 
-    let mut config = GoPackageConfig::new(module_path)
-        .with_version(version)
-        .with_template_dir(template_dir)
-        .with_group_by_tag(effective_group_by_tag);
-    if let Some(package_name) = package_name {
-        config = config.with_package_name(package_name);
-    }
-    config
+    let common = CommonConfig { package_name, version };
+    let config = GoTargetConfig { module_path, group_by_tag: effective_group_by_tag };
+    (common, config, template_dir)
 }
 
 pub(crate) fn resolve_python_config(

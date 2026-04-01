@@ -17,7 +17,7 @@ use arvalez_openapi::{
     OpenApiDiagnostic, OpenApiLoadResult, categorize_reference,
     diagnostic_pointer_tail, load_openapi_to_ir_with_options, normalize_diagnostic_feature,
 };
-use arvalez_target_go::{GoPackageConfig, generate_go_package, write_go_package};
+use arvalez_target_go::{generate_go_package, write_go_package};
 use arvalez_target_python::{PythonPackageConfig, generate_python_package, write_python_package};
 use arvalez_target_typescript::{
     TypeScriptPackageConfig, generate_typescript_package, write_typescript_package,
@@ -515,9 +515,9 @@ fn run_go_corpus_target(
     ir: &CoreIr,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    config: &GoPackageConfig,
+    config: &(arvalez_target_core::CommonConfig, arvalez_target_go::TargetConfig, Option<std::path::PathBuf>),
 ) -> CorpusTargetResult {
-    match generate_go_package(ir, config) {
+    match generate_go_package(ir, config.2.as_deref(), &config.0, &config.1) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,
