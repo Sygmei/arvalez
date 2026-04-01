@@ -90,7 +90,7 @@ checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
 name = "arvalez-cli"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-ir"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-openapi"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-core"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-go"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-nushell"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-python"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-pythonmini"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-typescript"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -840,9 +840,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libc"
-version = "0.2.183"
+version = "0.2.184"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
+checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
 
 [[package]]
 name = "libm"
