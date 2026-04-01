@@ -7,7 +7,7 @@ from typing import Any, Callable, TypedDict
 import httpx
 from pydantic import TypeAdapter
 
-import {{ package.package_name }}.models as models
+import {{ package_name }}.models as models
 
 ErrorHandler = Callable[[httpx.Response], None]
 
@@ -141,10 +141,36 @@ class _BaseApiClient:
             on_error = request_options["on_error"]
         on_error(response)
 
-{% for client in package.tag_clients %}
+{% set groups = [] -%}
+{%- set flat_ops = operations -%}
+{%- if config.group_by_tag -%}
+{%- set groups = operations | tag_groups -%}
+{%- set flat_ops = operations | untagged_operations -%}
+{%- endif -%}
+
+{% for group in groups %}
+{%- set is_async = true -%}
+{%- set class_name = group.async_class_name -%}
+{%- set owner_class_name = "AsyncApiClient" -%}
+{%- set methods = group.operations -%}
+{% include "partials/tag_client_class.py.tera" %}
+
+{%- set is_async = false -%}
+{%- set class_name = group.sync_class_name -%}
+{%- set owner_class_name = "SyncApiClient" -%}
+{%- set methods = group.operations -%}
 {% include "partials/tag_client_class.py.tera" %}
 {% endfor %}
-{% for client in package.clients %}
+
+{%- set is_async = true -%}
+{%- set class_name = "AsyncApiClient" -%}
+{%- set client_type = "httpx.AsyncClient" -%}
+{%- set methods = flat_ops -%}
 {% include "partials/client_class.py.tera" %}
-{% endfor %}
+
+{%- set is_async = false -%}
+{%- set class_name = "SyncApiClient" -%}
+{%- set client_type = "httpx.Client" -%}
+{%- set methods = flat_ops -%}
+{% include "partials/client_class.py.tera" %}
 ApiClient = AsyncApiClient

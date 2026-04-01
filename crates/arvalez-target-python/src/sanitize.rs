@@ -1,4 +1,4 @@
-pub(crate) fn sanitize_class_name(name: &str) -> String {
+pub fn sanitize_class_name(name: &str) -> String {
     let mut out = String::new();
     for part in split_words(name) {
         if part.len() > 1
@@ -25,7 +25,7 @@ pub(crate) fn sanitize_class_name(name: &str) -> String {
     }
 }
 
-pub(crate) fn sanitize_identifier(name: &str) -> String {
+pub fn sanitize_identifier(name: &str) -> String {
     let words = split_words(name);
     let mut candidate = if words.is_empty() {
         "value".into()
@@ -44,37 +44,6 @@ pub(crate) fn sanitize_identifier(name: &str) -> String {
         candidate.insert(0, '_');
     }
     if is_python_keyword(&candidate) {
-        candidate.push('_');
-    }
-    candidate
-}
-
-pub(crate) fn sanitize_enum_member_name(value: &str) -> String {
-    let mut candidate = String::new();
-    let mut last_was_separator = false;
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
-            candidate.push(ch.to_ascii_uppercase());
-            last_was_separator = false;
-        } else if !last_was_separator && !candidate.is_empty() {
-            candidate.push('_');
-            last_was_separator = true;
-        }
-    }
-    while candidate.ends_with('_') {
-        candidate.pop();
-    }
-    if candidate.is_empty() {
-        candidate = "VALUE".into();
-    }
-    if candidate
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_digit())
-    {
-        candidate.insert(0, '_');
-    }
-    if is_python_keyword(&candidate.to_ascii_lowercase()) {
         candidate.push('_');
     }
     candidate
@@ -108,6 +77,7 @@ pub(crate) fn is_python_keyword(value: &str) -> bool {
             | "in"
             | "is"
             | "lambda"
+            | "match"
             | "none"
             | "nonlocal"
             | "not"
@@ -117,6 +87,8 @@ pub(crate) fn is_python_keyword(value: &str) -> bool {
             | "return"
             | "true"
             | "try"
+            | "type"
+            | "case"
             | "while"
             | "with"
             | "yield"

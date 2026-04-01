@@ -1,7 +1,7 @@
 use std::fs;
 
 use arvalez_ir::{Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody, Response, TypeRef};
-use arvalez_target_core::CommonConfig;
+use arvalez_target_core::{CommonConfig, PackageConfig};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -9,8 +9,11 @@ use crate::{TargetConfig, generate};
 
 fn common(package_name: &str) -> CommonConfig {
     CommonConfig {
-        package_name: package_name.to_owned(),
-        version: "0.1.0".into(),
+        package: PackageConfig {
+            name: package_name.to_owned(),
+            version: "0.1.0".into(),
+            description: None,
+        },
     }
 }
 
