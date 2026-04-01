@@ -1,7 +1,7 @@
-class {{ client.class_name }}(_BaseApiClient):
+class {{ class_name }}(_BaseApiClient):
     def __init__(
         self,
-        client: {{ client.client_type }},
+        client: {{ client_type }},
         *,
         on_error: ErrorHandler | None = None,
         validate_content_encodings: bool = True,
@@ -10,16 +10,16 @@ class {{ client.class_name }}(_BaseApiClient):
         self._client = client
         self._on_error = on_error or self._default_on_error
         self._validate_content_encodings = validate_content_encodings
-{% for binding in client.service_bindings %}
-        self.{{ binding.property_name }} = {{ binding.class_name }}(self)
-{% endfor %}
+{% for group in groups %}
+        self.{{ group.property_name }} = {% if is_async %}{{ group.async_class_name }}{% else %}{{ group.sync_class_name }}{% endif %}(self)
+{%- endfor %}
 
-{% if client.is_async %}
+{% if is_async %}
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
 
-    async def __aenter__(self) -> {{ client.class_name }}:
+    async def __aenter__(self) -> {{ class_name }}:
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
@@ -29,13 +29,13 @@ class {{ client.class_name }}(_BaseApiClient):
         if self._owns_client:
             self._client.close()
 
-    def __enter__(self) -> {{ client.class_name }}:
+    def __enter__(self) -> {{ class_name }}:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self.close()
 {% endif %}
 
-{% for operation in client.methods %}
+{% for op in methods %}
 {% include "partials/client_method.py.tera" %}
 {% endfor %}

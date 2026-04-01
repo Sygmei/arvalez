@@ -1,0 +1,35 @@
+{%- set class_name = model.name | py_class_name -%}
+{%- if model.attributes.enum_values %}
+{%- if model.attributes.enum_base_type == "integer" %}
+class {{ class_name }}(int, Enum):
+{%- elif model.attributes.enum_base_type == "number" %}
+class {{ class_name }}(float, Enum):
+{%- else %}
+class {{ class_name }}(str, Enum):
+{%- endif %}
+{%- for val in model.attributes.enum_values %}
+    {{ val | screaming_snake_case }} = {{ val | json_encode }}
+{%- endfor %}
+
+{%- elif model.attributes.alias_type_ref %}
+{%- set alias_expr = model.attributes.alias_type_ref | py_type %}
+{%- if model.attributes.alias_nullable %}
+{%- set alias_expr = alias_expr ~ " | None" %}
+{%- endif %}
+{{ class_name }}: TypeAlias = "{{ alias_expr }}"
+
+{%- else %}
+class {{ class_name }}(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+{%- if model.fields %}
+{%- for field in model.fields %}
+{%- set py_name = field.name | py_id %}
+{%- set is_optional = field.optional or field.nullable %}
+{%- set needs_alias = field.name != py_name %}
+    {{ py_name }}: {{ field.type_ref | py_type }}{% if is_optional %} | None{% endif %}{% if needs_alias %} = Field({% if is_optional %}default=None, {% endif %}alias="{{ field.name }}"){% elif is_optional %} = None{% endif %}
+
+{%- endfor %}
+{%- else %}
+    pass
+{%- endif %}
+{%- endif %}

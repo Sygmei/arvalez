@@ -1,74 +1,96 @@
-    {% if operation.is_async %}async def{% else %}def{% endif %} {{ operation.raw_method_name }}({% if operation.args_signature %}self, {{ operation.args_signature }}{% else %}self{% endif %}) -> httpx.Response:
-        """Returns the raw HTTP response without parsing it or raising for HTTP errors.{% if operation.summary %}
+{%- set py_name = op.name | py_id -%}
+{%- set raw_name = "_" ~ py_name ~ "_raw" -%}
+{%- set args = op | py_method_args -%}
+{%- set forward = op | py_forward_args -%}
+{%- set path_params = op.params | filter(attribute="location", value="path") -%}
+{%- set query_params = op.params | filter(attribute="location", value="query") -%}
+{%- set header_params = op.params | filter(attribute="location", value="header") -%}
+{%- set doc_params = op | py_doc_params -%}
+{%- set ret = op | py_return_type -%}
 
-        {{ operation.summary }}{% endif %}{% if operation.doc_params %}
+    {% if is_async %}async def{% else %}def{% endif %} {{ raw_name }}({% if args %}self, {{ args }}{% else %}self{% endif %}) -> httpx.Response:
+        """Returns the raw HTTP response without parsing it or raising for HTTP errors.{% if op.attributes.summary %}
 
-        Args:{% for p in operation.doc_params %}
-            {{ p.name }}: {{ p.description }}{% endfor %}{% endif %}
+        {{ op.attributes.summary }}{% endif %}{% if doc_params %}
+
+        Args:{% for p in doc_params %}
+            {{ p.name | py_id }}: {{ p.attributes.description }}{% endfor %}{% endif %}
 
         """
-        url = f"{{ operation.path_fstring }}"
-{% for p in operation.path_params %}{% if p.content_encoding %}
-        self._validate_string_encoding({{ p.name }}, "{{ p.content_encoding }}", "path parameter `{{ p.raw_name }}`", request_options)
-{% endif %}{% endfor %}
-{% if operation.query_params %}
+        url = f"{{ op.path | py_fstring }}"
+{%- for p in path_params %}{% if p.attributes.content_encoding %}
+        self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "path parameter `{{ p.name }}`", request_options)
+{%- endif %}{% endfor %}
+{% if query_params %}
         params: dict[str, Any] = {}
-{% for p in operation.query_params %}{% if p.required %}{% if p.content_encoding %}
-        self._validate_string_encoding({{ p.name }}, "{{ p.content_encoding }}", "query parameter `{{ p.raw_name }}`", request_options)
-{% endif %}
-        params["{{ p.raw_name }}"] = {{ p.name }}
-{% else %}
-        if {{ p.name }} is not None:
-{% if p.content_encoding %}
-            self._validate_string_encoding({{ p.name }}, "{{ p.content_encoding }}", "query parameter `{{ p.raw_name }}`", request_options)
-{% endif %}
-            params["{{ p.raw_name }}"] = {{ p.name }}
-{% endif %}{% endfor %}
-{% endif %}
-{% if operation.header_params %}
+{%- for p in query_params %}
+{%- if p.required %}{% if p.attributes.content_encoding %}
+        self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", request_options)
+{%- endif %}
+        params["{{ p.name }}"] = {{ p.name | py_id }}
+{%- else %}
+        if {{ p.name | py_id }} is not None:
+{%- if p.attributes.content_encoding %}
+            self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", request_options)
+{%- endif %}
+            params["{{ p.name }}"] = {{ p.name | py_id }}
+{%- endif %}
+{%- endfor %}
+{%- endif %}
+{% if header_params %}
         headers: dict[str, Any] = {}
-{% for p in operation.header_params %}{% if p.required %}{% if p.content_encoding %}
-        self._validate_string_encoding({{ p.name }}, "{{ p.content_encoding }}", "header `{{ p.raw_name }}`", request_options)
-{% endif %}
-        headers["{{ p.raw_name }}"] = {{ p.name }}
-{% else %}
-        if {{ p.name }} is not None:
-{% if p.content_encoding %}
-            self._validate_string_encoding({{ p.name }}, "{{ p.content_encoding }}", "header `{{ p.raw_name }}`", request_options)
-{% endif %}
-            headers["{{ p.raw_name }}"] = {{ p.name }}
-{% endif %}{% endfor %}
-{% endif %}
+{%- for p in header_params %}
+{%- if p.required %}{% if p.attributes.content_encoding %}
+        self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", request_options)
+{%- endif %}
+        headers["{{ p.name }}"] = {{ p.name | py_id }}
+{%- else %}
+        if {{ p.name | py_id }} is not None:
+{%- if p.attributes.content_encoding %}
+            self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", request_options)
+{%- endif %}
+            headers["{{ p.name }}"] = {{ p.name | py_id }}
+{%- endif %}
+{%- endfor %}
+{%- endif %}
         request_kwargs: dict[str, Any] = {}
-{% if operation.body %}{% if operation.body.required %}{% if operation.body.content_encoding %}
-        self._validate_string_encoding(body, "{{ operation.body.content_encoding }}", "request body", request_options)
-{% endif %}
-        request_kwargs["{{ operation.body.kind }}"] = self._serialize_body(body, json_mode={% if operation.body.kind == "json" %}True{% else %}False{% endif %})
-{% else %}
+{%- if op.request_body %}
+{%- if op.request_body.required %}{% if op.request_body.attributes.content_encoding %}
+        self._validate_string_encoding(body, "{{ op.request_body.attributes.content_encoding }}", "request body", request_options)
+{%- endif %}
+        request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = self._serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %})
+{%- else %}
         if body is not None:
-{% if operation.body.content_encoding %}
-            self._validate_string_encoding(body, "{{ operation.body.content_encoding }}", "request body", request_options)
-{% endif %}
-            request_kwargs["{{ operation.body.kind }}"] = self._serialize_body(body, json_mode={% if operation.body.kind == "json" %}True{% else %}False{% endif %})
-{% endif %}{% endif %}
-        request_kwargs = self._apply_request_options(request_kwargs, request_options, params={% if operation.query_params %}params{% else %}None{% endif %}, headers={% if operation.header_params %}headers{% else %}None{% endif %})
-        {% if operation.is_async %}response = await self._client.request("{{ operation.http_method }}", url, **request_kwargs){% else %}response = self._client.request("{{ operation.http_method }}", url, **request_kwargs){% endif %}
+{%- if op.request_body.attributes.content_encoding %}
+            self._validate_string_encoding(body, "{{ op.request_body.attributes.content_encoding }}", "request body", request_options)
+{%- endif %}
+            request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = self._serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %})
+{%- endif %}
+{%- endif %}
+        request_kwargs = self._apply_request_options(request_kwargs, request_options, params={% if query_params %}params{% else %}None{% endif %}, headers={% if header_params %}headers{% else %}None{% endif %})
+        {% if is_async %}response = await self._client.request("{{ op.method | upper }}", url, **request_kwargs){% else %}response = self._client.request("{{ op.method | upper }}", url, **request_kwargs){% endif %}
         return response
 
-    {% if operation.is_async %}async def{% else %}def{% endif %} {{ operation.method_name }}({% if operation.args_signature %}self, {{ operation.args_signature }}{% else %}self{% endif %}) -> {{ operation.return_type.annotation }}:
-{% if operation.summary or operation.doc_params %}
-        """{% if operation.summary %}
-        {{ operation.summary }}{% endif %}{% if operation.doc_params %}
+    {% if is_async %}async def{% else %}def{% endif %} {{ py_name }}({% if args %}self, {{ args }}{% else %}self{% endif %}) -> {{ ret.annotation }}:
+{%- if op.attributes.summary or doc_params %}
+        """
+{%- if op.attributes.summary %}
+        {{ op.attributes.summary }}
+{%- endif %}
+{%- if doc_params %}
 
-        Args:{% for p in operation.doc_params %}
-            {{ p.name }}: {{ p.description }}{% endfor %}{% endif %}
+        Args:
+{%- for p in doc_params %}
+            {{ p.name | py_id }}: {{ p.attributes.description }}
+{%- endfor %}
+{%- endif %}
 
         """
-{% endif %}
-        {% if operation.is_async %}response = await self.{{ operation.raw_method_name }}({{ operation.forward_args }}){% else %}response = self.{{ operation.raw_method_name }}({{ operation.forward_args }}){% endif %}
+{%- endif %}
+        {% if is_async %}response = await self.{{ raw_name }}({{ forward }}){% else %}response = self.{{ raw_name }}({{ forward }}){% endif %}
         self._handle_error(response, request_options)
-{% if operation.return_type.has_result %}
-        return self._parse_response(response, {{ operation.return_type.parse_expression }}, response_encoding={% if operation.return_type.content_encoding %}"{{ operation.return_type.content_encoding }}"{% else %}None{% endif %}, request_options=request_options)
-{% else %}
-        return self._parse_response(response, response_encoding={% if operation.return_type.content_encoding %}"{{ operation.return_type.content_encoding }}"{% else %}None{% endif %}, request_options=request_options)
-{% endif %}
+{%- if ret.has_result %}
+        return self._parse_response(response, {{ ret.parse_expression }}, response_encoding={% if ret.content_encoding %}"{{ ret.content_encoding }}"{% else %}None{% endif %}, request_options=request_options)
+{%- else %}
+        return self._parse_response(response, response_encoding={% if ret.content_encoding %}"{{ ret.content_encoding }}"{% else %}None{% endif %}, request_options=request_options)
+{%- endif %}
