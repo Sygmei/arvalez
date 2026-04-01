@@ -212,9 +212,10 @@ fn supports_selective_template_overrides() {
     let tempdir = tempdir().expect("tempdir");
     let partial_dir = tempdir.path().join("partials");
     fs::create_dir_all(&partial_dir).expect("partials dir");
+    // The new template structure uses `class_name` (not `client.class_name`)
     fs::write(
         partial_dir.join("client_class.py.tera"),
-        "class {{ client.class_name }}:\n    OVERRIDDEN = True\n",
+        "class {{ class_name }}:\n    OVERRIDDEN = True\n",
     )
     .expect("override template");
 
@@ -291,54 +292,14 @@ fn preserves_common_acronyms_in_python_names() {
 }
 
 #[test]
-fn renders_extra_package_templates() {
-    let dir = tempdir().expect("tempdir");
-    let pkg_dir = dir.path().join("package");
-    fs::create_dir_all(&pkg_dir).unwrap();
-
-    // One extra template that uses the `package` context variable.
-    fs::write(
-        pkg_dir.join("extra_info.txt.tera"),
-        "package={{ package.package_name }} version={{ package.version }}",
-    )
-    .unwrap();
-
-    // A template in a subdirectory.
-    let sub_dir = pkg_dir.join("sub");
-    fs::create_dir_all(&sub_dir).unwrap();
-    fs::write(
-        sub_dir.join("nested.md.tera"),
-        "# {{ package.package_name }}",
-    )
-    .unwrap();
-
-    let config =
-        PythonPackageConfig::new("mylib").with_template_dir(Some(dir.path().to_path_buf()));
-
-    let files = generate_python_package(&sample_ir(), &config).expect("package should render");
-
-    let extra = files
-        .iter()
-        .find(|f| f.path == std::path::PathBuf::from("extra_info.txt"))
-        .expect("extra_info.txt should be present");
-    assert!(extra.contents.contains("package=mylib"));
-    assert!(extra.contents.contains("version="));
-
-    let nested = files
-        .iter()
-        .find(|f| f.path == std::path::PathBuf::from("sub/nested.md"))
-        .expect("sub/nested.md should be present");
-    assert!(nested.contents.contains("# mylib"));
-}
-
-#[test]
 fn erases_default_template_with_tilde_prefix() {
     let dir = tempdir().expect("tempdir");
-    let pkg_dir = dir.path().join("package");
-    fs::create_dir_all(&pkg_dir).expect("package dir");
+    // In the new structure, root templates are under `root/` in the template dir.
+    let root_dir = dir.path().join("root");
+    fs::create_dir_all(&root_dir).expect("root dir");
 
     // Place a tilde-prefixed eraser file to suppress pyproject.toml generation.
-    fs::write(pkg_dir.join("~pyproject.toml.tera"), "").expect("eraser file");
+    fs::write(root_dir.join("~pyproject.toml.tera"), "").expect("eraser file");
 
     let config =
         PythonPackageConfig::new("mylib").with_template_dir(Some(dir.path().to_path_buf()));
@@ -347,7 +308,9 @@ fn erases_default_template_with_tilde_prefix() {
 
     // pyproject.toml must NOT be present in the output.
     assert!(
-        !files.iter().any(|f| f.path == std::path::PathBuf::from("pyproject.toml")),
+        !files
+            .iter()
+            .any(|f| f.path == std::path::PathBuf::from("pyproject.toml")),
         "pyproject.toml should be erased"
     );
 

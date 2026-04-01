@@ -1,0 +1,3 @@
+# {{ package_name | replace(from="_", to="-") }}
+
+Generated Python SDK package.
