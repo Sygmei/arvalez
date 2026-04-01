@@ -1,22 +1,48 @@
-{% if operation.summary %}# {{ operation.summary }}
-{% endif %}export def "{{ operation.command_name }}" [
-{% for param in operation.positional_params %}    {{ param.name }}: {{ param.nu_type }}{% if param.description %}  # {{ param.description }}{% endif %}
+{%- set path_params = op.params | filter(attribute="location", value="path") -%}
+{%- set query_params = op.params | filter(attribute="location", value="query") -%}
+{%- set header_params = op.params | filter(attribute="location", value="header") -%}
+{%- set flag_params = query_params | concat(with=header_params) -%}
+{%- set_global _cmd = op.name | nu_cmd -%}
+{%- set_global _tag = "" -%}
+{%- if group_by_tag -%}
+{%- set_global _op_tags = op.attributes.tags | default(value=[]) -%}
+{%- if _op_tags | length > 0 -%}
+{%- set_global _tag = _op_tags | first | nu_cmd -%}
+{%- if _tag -%}
+{%- set_global _cmd = _tag ~ " " ~ _cmd -%}
+{%- endif -%}
+{%- endif -%}
+{%- endif -%}
+{%- set_global _found_2xx = false -%}
+{%- set_global _return_type = "any" -%}
+{%- for r in op.responses -%}
+{%- if not _found_2xx and r.status is starting_with("2") -%}
+{%- set_global _found_2xx = true -%}
+{%- if r.type_ref -%}
+{%- set_global _return_type = r.type_ref | nu_type -%}
+{%- endif -%}
+{%- endif -%}
+{%- endfor -%}
+{% if op.attributes.summary %}# {{ op.attributes.summary | trim }}
+{% endif %}export def "{{ _cmd }}" [
+{% for p in path_params %}    {{ p.name | nu_var }}: {{ p.type_ref | nu_type }}{% if p.attributes.description %}  # {{ p.attributes.description | trim }}{% endif %}
 
-{% endfor %}    --base-url: string = "{{ operation.default_base_url }}"
-{% for flag in operation.flag_params %}    --{{ flag.flag_name }}: {{ flag.nu_type }}{% if flag.description %}  # {{ flag.description }}{% endif %}
+{% endfor %}    --base-url: string = "{{ default_base_url }}"
+{% for p in flag_params %}    --{{ p.name | nu_cmd }}: {{ p.type_ref | nu_type }}{% if p.attributes.description %}  # {{ p.attributes.description | trim }}{% endif %}
 
-{% endfor %}{% if operation.has_body %}    --body: {{ operation.body_nu_type }}
-{% endif %}]: nothing -> {{ operation.return_nu_type }} {
-    let path = "{{ operation.path_template | safe }}"
-{% if operation.query_params | length == 0 %}    let full_url = $base_url ++ $path
+{% endfor %}{% if op.request_body %}    --body: {% if op.request_body.type_ref %}{{ op.request_body.type_ref | nu_type }}{% else %}any{% endif %}
+{% endif %}]: nothing -> {{ _return_type }} {
+    let path = "{{ op.path | nu_path }}"
+{% if query_params | length == 0 %}    let full_url = $base_url ++ $path
 {% else %}    mut query_parts: list<string> = []
-{% for p in operation.query_params %}{% if p.required %}    $query_parts = ($query_parts | append ("{{ p.raw_name }}" ++ "=" ++ (${{ p.name }} | into string)))
-{% else %}    if (${{ p.name }} | is-not-empty) { $query_parts = ($query_parts | append ("{{ p.raw_name }}" ++ "=" ++ (${{ p.name }} | into string))) }
+{% for p in query_params %}{% if p.required %}    $query_parts = ($query_parts | append ("{{ p.name }}" ++ "=" ++ (${{ p.name | nu_var }} | into string)))
+{% else %}    if (${{ p.name | nu_var }} | is-not-empty) { $query_parts = ($query_parts | append ("{{ p.name }}" ++ "=" ++ (${{ p.name | nu_var }} | into string))) }
 {% endif %}{% endfor %}    let full_url = if ($query_parts | is-empty) { $base_url ++ $path } else { $base_url ++ $path ++ "?" ++ ($query_parts | str join "&") }
-{% endif %}{% if operation.header_params | length > 0 %}    mut headers = {}
-{% for p in operation.header_params %}{% if p.required %}    $headers = ($headers | insert "{{ p.raw_name }}" ${{ p.name }})
-{% else %}    if (${{ p.name }} | is-not-empty) { $headers = ($headers | insert "{{ p.raw_name }}" ${{ p.name }}) }
-{% endif %}{% endfor %}{% endif %}{% if operation.has_body %}{% if operation.body_required %}    http {{ operation.http_verb }} $full_url $body{% if operation.header_params | length > 0 %} --headers $headers{% endif %}
-{% else %}    http {{ operation.http_verb }} $full_url (if ($body | is-not-empty) { $body }){% if operation.header_params | length > 0 %} --headers $headers{% endif %}
-{% endif %}{% else %}    http {{ operation.http_verb }} $full_url{% if operation.header_params | length > 0 %} --headers $headers{% endif %}
+{% endif %}{% if header_params | length > 0 %}    mut headers = {}
+{% for p in header_params %}{% if p.required %}    $headers = ($headers | insert "{{ p.name }}" ${{ p.name | nu_var }})
+{% else %}    if (${{ p.name | nu_var }} | is-not-empty) { $headers = ($headers | insert "{{ p.name }}" ${{ p.name | nu_var }}) }
+{% endif %}{% endfor %}{% endif %}{% if op.request_body %}{% if op.request_body.required %}    http {{ op.method }} $full_url $body{% if header_params | length > 0 %} --headers $headers{% endif %}
+{% else %}    http {{ op.method }} $full_url (if ($body | is-not-empty) { $body }){% if header_params | length > 0 %} --headers $headers{% endif %}
+{% endif %}{% else %}    http {{ op.method }} $full_url{% if header_params | length > 0 %} --headers $headers{% endif %}
 {% endif %}}
+

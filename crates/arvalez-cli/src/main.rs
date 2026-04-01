@@ -11,7 +11,7 @@ use anyhow::{Result, bail};
 use arvalez_openapi::{OpenApiLoadResult, load_openapi_to_ir_with_options};
 use arvalez_target_core::CommonConfig;
 use arvalez_target_go::{generate_go_package, write_go_package};
-use arvalez_target_nushell::{generate_nushell_package, write_nushell_package};
+use arvalez_target_nushell::{generate as generate_nushell_package, write_package as write_nushell_package};
 use arvalez_target_python::{generate, write_package as write_python_package};
 use arvalez_target_pythonmini::{
     TargetConfig, generate as generate_pythonmini_package,
@@ -177,7 +177,7 @@ enum Command {
         #[arg(long)]
         ignore_unhandled: bool,
         #[arg(long)]
-        module_name: Option<String>,
+        package_name: Option<String>,
         #[arg(long)]
         template_dir: Option<PathBuf>,
         #[arg(long)]
@@ -421,7 +421,7 @@ fn main() -> Result<()> {
             }
 
             if nushell_enabled {
-                let nushell_config = resolve_nushell_config(
+                let (template_dir, common, nushell_config) = resolve_nushell_config(
                     &config_file,
                     None,
                     None,
@@ -430,7 +430,7 @@ fn main() -> Result<()> {
                     output_version.clone(),
                 );
                 let files = timing_collector.measure_result("nushell_generate", || {
-                    generate_nushell_package(&ir, &nushell_config)
+                    generate_nushell_package(&ir, template_dir.as_deref(), &common, &nushell_config)
                 })?;
                 let output = config_file
                     .target
@@ -570,7 +570,7 @@ fn main() -> Result<()> {
             config,
             output_directory,
             ignore_unhandled,
-            module_name,
+            package_name,
             template_dir,
             default_base_url,
             group_by_tag,
@@ -589,16 +589,16 @@ fn main() -> Result<()> {
                 output_directory,
                 "nushell-client",
             );
-            let nushell_config = resolve_nushell_config(
+            let (tpl_dir, common, nushell_config) = resolve_nushell_config(
                 &config_file,
-                module_name,
+                package_name,
                 template_dir,
                 default_base_url,
                 group_by_tag,
                 output_version,
             );
             let files = timing_collector.measure_result("nushell_generate", || {
-                generate_nushell_package(&ir, &nushell_config)
+                generate_nushell_package(&ir, tpl_dir.as_deref(), &common, &nushell_config)
             })?;
             timing_collector
                 .measure_result("nushell_write", || write_nushell_package(&output, &files))?;

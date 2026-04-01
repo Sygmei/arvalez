@@ -17,10 +17,11 @@ use arvalez_openapi::{
     OpenApiDiagnostic, OpenApiLoadResult, categorize_reference, diagnostic_pointer_tail,
     load_openapi_to_ir_with_options, normalize_diagnostic_feature,
 };
-use arvalez_target_core::CommonConfig as PythonCommonConfig;
+use arvalez_target_core::CommonConfig;
 use arvalez_target_go::{generate_go_package, write_go_package};
 use arvalez_target_nushell::{
-    NushellPackageConfig, generate_nushell_package, write_nushell_package,
+    generate as generate_nushell_package, write_package as write_nushell_package,
+    TargetConfig as NushellTargetConfig,
 };
 use arvalez_target_python::{
     TargetConfig as PythonTargetConfig, generate as generate_python,
@@ -411,11 +412,13 @@ pub(crate) fn run_corpus_spec_inline(
                     typescript_config,
                 ));
             }
-            if let Some(nushell_config) = nushell_config.as_ref() {
+            if let Some((tpl_dir, common, nushell_config)) = nushell_config.as_ref() {
                 targets.push(run_nushell_corpus_target(
                     &ir,
                     relative_spec,
                     options,
+                    tpl_dir.as_deref(),
+                    common,
                     nushell_config,
                 ));
             }
@@ -591,7 +594,7 @@ fn run_python_corpus_target(
     relative_spec: &str,
     options: &CorpusTestOptions,
     config: &(
-        PythonCommonConfig,
+        CommonConfig,
         PythonTargetConfig,
         Option<std::path::PathBuf>,
     ),
@@ -646,9 +649,11 @@ fn run_nushell_corpus_target(
     ir: &CoreIr,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    config: &NushellPackageConfig,
+    template_dir: Option<&std::path::Path>,
+    common: &CommonConfig,
+    config: &NushellTargetConfig,
 ) -> CorpusTargetResult {
-    match generate_nushell_package(ir, config) {
+    match generate_nushell_package(ir, template_dir, common, config) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,

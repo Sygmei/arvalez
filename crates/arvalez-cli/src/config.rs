@@ -1,11 +1,10 @@
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
-use arvalez_target_core::{CommonConfig as PythonCommonConfig, PackageConfig as PackageMetadata};
+use arvalez_target_core::{CommonConfig, PackageConfig};
 use arvalez_target_go::TargetConfig as GoGenConfig;
-use arvalez_target_nushell::NushellPackageConfig;
+use arvalez_target_nushell::TargetConfig as NushellTargetConfig;
 use arvalez_target_python::TargetConfig as PythonTargetConfig;
-use arvalez_target_core::CommonConfig;
 use arvalez_target_typescript::TargetConfig as TypeScriptTargetConfig;
 use serde::Deserialize;
 
@@ -162,10 +161,9 @@ pub(crate) struct GoTargetConfig {
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct NushellTargetConfig {
+pub(crate) struct NushellTargetConfigExt {
     #[serde(flatten)]
     pub(crate) base: TargetConfig,
-    pub(crate) module_name: Option<String>,
     pub(crate) default_base_url: Option<String>,
 }
 
@@ -182,7 +180,7 @@ pub(crate) struct TargetSection {
     #[serde(default)]
     pub(crate) typescript: TargetConfig,
     #[serde(default)]
-    pub(crate) nushell: NushellTargetConfig,
+    pub(crate) nushell: NushellTargetConfigExt,
 }
 
 // ── Loading ───────────────────────────────────────────────────────────────────
@@ -284,7 +282,7 @@ pub(crate) fn resolve_python_config(
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
     output_version: Option<String>,
-) -> (PythonCommonConfig, PythonTargetConfig, Option<PathBuf>) {
+) -> (CommonConfig, PythonTargetConfig, Option<PathBuf>) {
     let target = &config_file.target.python;
     let common = &config_file.common;
 
@@ -295,8 +293,8 @@ pub(crate) fn resolve_python_config(
     let description = target.resolve_description(&common.package);
     let effective_group_by_tag = target.resolve_group_by_tag(group_by_tag, &common.output);
 
-    let common_cfg = PythonCommonConfig {
-        package: PackageMetadata {
+    let common_cfg = CommonConfig {
+        package: PackageConfig {
             name: package_name,
             version,
             description,
@@ -341,33 +339,35 @@ pub(crate) fn resolve_typescript_config(
 
 pub(crate) fn resolve_nushell_config(
     config_file: &AppConfig,
-    module_name: Option<String>,
+    package_name: Option<String>,
     template_dir: Option<PathBuf>,
     default_base_url: Option<String>,
     group_by_tag: bool,
     output_version: Option<String>,
-) -> NushellPackageConfig {
+) -> (Option<PathBuf>, CommonConfig, NushellTargetConfig) {
     let target = &config_file.target.nushell;
     let common = &config_file.common;
 
-    let module_name = module_name
-        .or_else(|| target.module_name.clone())
-        .or_else(|| common.package.name.clone())
-        .unwrap_or_else(|| "arvalez-client".into());
-    let template_dir = target
-        .base
-        .resolve_template_dir(template_dir, config_file.common.template_dir.clone());
+    let package_name =
+        target.base.resolve_package_name(package_name, &common.package, "arvalez-client");
+    let template_dir =
+        target.base.resolve_template_dir(template_dir, config_file.common.template_dir.clone());
     let version = target.base.resolve_version(output_version, &common.package);
     let base_url = default_base_url
         .or_else(|| target.default_base_url.clone())
         .unwrap_or_default();
-    let effective_group_by_tag = target
-        .base
-        .resolve_group_by_tag(group_by_tag, &common.output);
+    let effective_group_by_tag = target.base.resolve_group_by_tag(group_by_tag, &common.output);
 
-    NushellPackageConfig::new(module_name)
-        .with_version(version)
-        .with_template_dir(template_dir)
-        .with_default_base_url(base_url)
-        .with_group_by_tag(effective_group_by_tag)
+    let common_cfg = CommonConfig {
+        package: PackageConfig {
+            name: package_name,
+            version,
+            description: None,
+        },
+    };
+    let target_cfg = NushellTargetConfig {
+        default_base_url: base_url,
+        group_by_tag: effective_group_by_tag,
+    };
+    (template_dir, common_cfg, target_cfg)
 }
