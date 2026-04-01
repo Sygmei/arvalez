@@ -192,7 +192,7 @@ mod tests {
         Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation,
         RequestBody, Response, TypeRef,
     };
-    use arvalez_target_core::CommonConfig;
+    use arvalez_target_core::{CommonConfig, PackageConfig};
     use serde_json::{Value, json};
 
     use crate::{TargetConfig, generate};
@@ -282,13 +282,14 @@ mod tests {
     }
 
     fn default_common() -> CommonConfig {
-        CommonConfig { package_name: "my-api".into(), version: "0.1.0".into() }
+        CommonConfig { package: PackageConfig { name: "my-api".into(), version: "0.1.0".into(), description: None } }
     }
 
     #[test]
     fn renders_basic_nushell_package() {
-        let common =
-            CommonConfig { package_name: "my-api".into(), version: "1.0.0".into() };
+        let common = CommonConfig {
+            package: PackageConfig { name: "my-api".into(), version: "1.0.0".into(), description: None },
+        };
         let config = TargetConfig {
             default_base_url: "https://api.example.com".into(),
             group_by_tag: false,
