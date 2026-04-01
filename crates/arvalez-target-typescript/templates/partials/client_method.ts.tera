@@ -1,44 +1,54 @@
-{%- set has_query_params = operation.query_params | length > 0 -%}
-{%- set has_json_body = operation.body and operation.body.kind == "json" -%}
-{%- set has_headers = operation.header_params | length > 0 or has_json_body -%}
-{%- set has_doc = operation.summary or operation.doc_params | length > 0 -%}
+{%- set raw_method_name = operation.name | ts_raw_method -%}
+{%- set method_name = operation.name | ts_id -%}
+{%- set args_sig = operation | ts_args_sig -%}
+{%- set fwd_args = operation | ts_fwd_args -%}
+{%- set return_type = operation | ts_return_type -%}
+{%- set response_encoding = operation | ts_response_encoding -%}
+{%- set summary = operation.attributes.summary | default(value="") | trim -%}
+{%- set doc_params = operation.params | ts_doc_params -%}
+{%- set has_doc = summary or doc_params | length > 0 -%}
+{%- set path_params = operation.params | filter(attribute="location", value="path") -%}
+{%- set query_params = operation.params | filter(attribute="location", value="query") -%}
+{%- set header_params = operation.params | filter(attribute="location", value="header") -%}
+{%- set has_json_body = operation.request_body and operation.request_body.media_type == "application/json" -%}
+{%- set has_headers = header_params | length > 0 or has_json_body -%}
 {%- if has_doc %}
   /**
-{%- if operation.summary %}
-   * {{ operation.summary }}
+{%- if summary %}
+   * {{ summary }}
    *
 {%- endif %}
    * Returns the raw HTTP response without parsing it or throwing for HTTP errors.
-{%- for p in operation.doc_params %}
+{%- for p in doc_params %}
    * @param {{ p.name }} {{ p.description }}
 {%- endfor %}
    */
 {%- endif %}
-  async {{ operation.raw_method_name }}({{ operation.args_signature }}): Promise<Response> {
-    const path = {{ operation.path_template }};
-{%- for param in operation.path_params %}{%- if param.content_encoding %}
-    this.validateStringEncoding({{ param.name }}, "{{ param.content_encoding }}", "path parameter `{{ param.raw_name }}`", requestOptions);
+  async {{ raw_method_name }}({{ args_sig }}): Promise<Response> {
+    const path = {{ operation.path | ts_path }};
+{%- for param in path_params %}{%- if param.attributes.content_encoding %}
+    this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "path parameter `{{ param.name }}`", requestOptions);
 {%- endif %}{%- endfor %}
-{%- for param in operation.query_params %}{%- if param.required and param.content_encoding %}
-    this.validateStringEncoding({{ param.name }}, "{{ param.content_encoding }}", "query parameter `{{ param.raw_name }}`", requestOptions);
+{%- for param in query_params %}{%- if param.required and param.attributes.content_encoding %}
+    this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "query parameter `{{ param.name }}`", requestOptions);
 {%- endif %}{%- endfor %}
-{%- for param in operation.header_params %}{%- if param.required and param.content_encoding %}
-    this.validateStringEncoding({{ param.name }}, "{{ param.content_encoding }}", "header `{{ param.raw_name }}`", requestOptions);
+{%- for param in header_params %}{%- if param.required and param.attributes.content_encoding %}
+    this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "header `{{ param.name }}`", requestOptions);
 {%- endif %}{%- endfor %}
-{%- if operation.body and operation.body.required and operation.body.content_encoding %}
-    this.validateStringEncoding(body, "{{ operation.body.content_encoding }}", "request body", requestOptions);
+{%- if operation.request_body and operation.request_body.required and operation.request_body.attributes.content_encoding %}
+    this.validateStringEncoding(body, "{{ operation.request_body.attributes.content_encoding }}", "request body", requestOptions);
 {%- endif %}
-{%- if has_query_params %}
+{%- if query_params | length > 0 %}
     const baseQuery = new URLSearchParams();
-{%- for param in operation.query_params %}
+{%- for param in query_params %}
 {%- if param.required %}
-    baseQuery.set("{{ param.raw_name }}", String({{ param.name }}));
+    baseQuery.set("{{ param.name }}", String({{ param.name | ts_id }}));
 {%- else %}
-    if ({{ param.name }} !== undefined) {
-{%- if param.content_encoding %}
-      this.validateStringEncoding({{ param.name }}, "{{ param.content_encoding }}", "query parameter `{{ param.raw_name }}`", requestOptions);
+    if ({{ param.name | ts_id }} !== undefined) {
+{%- if param.attributes.content_encoding %}
+      this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "query parameter `{{ param.name }}`", requestOptions);
 {%- endif %}
-      baseQuery.set("{{ param.raw_name }}", String({{ param.name }}));
+      baseQuery.set("{{ param.name }}", String({{ param.name | ts_id }}));
     }
 {%- endif %}
 {%- endfor %}
@@ -48,15 +58,15 @@
 {%- endif %}
 {%- if has_headers %}
     const headers = this.createHeaders();
-{%- for param in operation.header_params %}
+{%- for param in header_params %}
 {%- if param.required %}
-    headers.set("{{ param.raw_name }}", String({{ param.name }}));
+    headers.set("{{ param.name }}", String({{ param.name | ts_id }}));
 {%- else %}
-    if ({{ param.name }} !== undefined) {
-{%- if param.content_encoding %}
-      this.validateStringEncoding({{ param.name }}, "{{ param.content_encoding }}", "header `{{ param.raw_name }}`", requestOptions);
+    if ({{ param.name | ts_id }} !== undefined) {
+{%- if param.attributes.content_encoding %}
+      this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "header `{{ param.name }}`", requestOptions);
 {%- endif %}
-      headers.set("{{ param.raw_name }}", String({{ param.name }}));
+      headers.set("{{ param.name }}", String({{ param.name | ts_id }}));
     }
 {%- endif %}
 {%- endfor %}
@@ -68,25 +78,26 @@
     const mergedHeaders = this.mergeHeaders(undefined, requestOptions);
 {%- endif %}
     const requestInit = this.createRequestInit(requestOptions);
-    requestInit.method = "{{ operation.http_method }}";
+    requestInit.method = "{{ operation.method | upper }}";
     if (mergedHeaders) { requestInit.headers = mergedHeaders; }
-{%- if operation.body %}
-{%- if operation.body.required %}
-{%- if operation.body.kind == "json" %}
+{%- if operation.request_body %}
+{%- set body_kind = operation.request_body.media_type | ts_body_kind %}
+{%- if operation.request_body.required %}
+{%- if body_kind == "json" %}
     requestInit.body = JSON.stringify(body);
-{%- elif operation.body.kind == "form" %}
+{%- elif body_kind == "form" %}
     requestInit.body = this.toFormData(body as unknown as Record<string, unknown>);
 {%- else %}
     requestInit.body = body as BodyInit;
 {%- endif %}
 {%- else %}
     if (body !== undefined) {
-{%- if operation.body.content_encoding %}
-      this.validateStringEncoding(body, "{{ operation.body.content_encoding }}", "request body", requestOptions);
+{%- if operation.request_body.attributes.content_encoding %}
+      this.validateStringEncoding(body, "{{ operation.request_body.attributes.content_encoding }}", "request body", requestOptions);
 {%- endif %}
-{%- if operation.body.kind == "json" %}
+{%- if body_kind == "json" %}
       requestInit.body = JSON.stringify(body);
-{%- elif operation.body.kind == "form" %}
+{%- elif body_kind == "form" %}
       requestInit.body = this.toFormData(body as unknown as Record<string, unknown>);
 {%- else %}
       requestInit.body = body as BodyInit;
@@ -100,16 +111,16 @@
 {%- if has_doc %}
 
   /**
-{%- if operation.summary %}
-   * {{ operation.summary }}
+{%- if summary %}
+   * {{ summary }}
 {%- endif %}
-{%- for p in operation.doc_params %}
+{%- for p in doc_params %}
    * @param {{ p.name }} {{ p.description }}
 {%- endfor %}
    */
 {%- endif %}
-  async {{ operation.method_name }}({{ operation.args_signature }}): Promise<{{ operation.return_type }}> {
-    const response = await this.{{ operation.raw_method_name }}({{ operation.forward_args }});
+  async {{ method_name }}({{ args_sig }}): Promise<{{ return_type }}> {
+    const response = await this.{{ raw_method_name }}({{ fwd_args }});
     await this.handleError(response, requestOptions);
-    return await this.parseResponse<{{ operation.return_type }}>(response, {% if operation.response_content_encoding %}"{{ operation.response_content_encoding }}"{% else %}undefined{% endif %}, requestOptions);
+    return await this.parseResponse<{{ return_type }}>(response, {% if response_encoding %}"{{ response_encoding }}"{% else %}undefined{% endif %}, requestOptions);
   }

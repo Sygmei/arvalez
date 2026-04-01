@@ -5,7 +5,8 @@ use arvalez_target_core::{CommonConfig as PythonCommonConfig, PackageConfig as P
 use arvalez_target_go::GoPackageConfig;
 use arvalez_target_nushell::NushellPackageConfig;
 use arvalez_target_python::TargetConfig as PythonTargetConfig;
-use arvalez_target_typescript::TypeScriptPackageConfig;
+use arvalez_target_core::CommonConfig;
+use arvalez_target_typescript::TargetConfig as TypeScriptTargetConfig;
 use serde::Deserialize;
 
 // ── App config ────────────────────────────────────────────────────────────────
@@ -291,7 +292,7 @@ pub(crate) fn resolve_typescript_config(
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
     output_version: Option<String>,
-) -> TypeScriptPackageConfig {
+) -> (CommonConfig, TypeScriptTargetConfig, Option<PathBuf>) {
     let target = &config_file.target.typescript;
     let common = &config_file.common;
 
@@ -302,10 +303,17 @@ pub(crate) fn resolve_typescript_config(
     let version = target.resolve_version(output_version, &common.package);
     let effective_group_by_tag = target.resolve_group_by_tag(group_by_tag, &common.output);
 
-    TypeScriptPackageConfig::new(package_name)
-        .with_version(version)
-        .with_template_dir(template_dir)
-        .with_group_by_tag(effective_group_by_tag)
+    let common_cfg = CommonConfig {
+        package: arvalez_target_core::PackageConfig {
+            name: package_name,
+            version,
+            description: common.package.description.clone(),
+        },
+    };
+    let target_cfg = TypeScriptTargetConfig {
+        group_by_tag: effective_group_by_tag,
+    };
+    (common_cfg, target_cfg, template_dir)
 }
 
 pub(crate) fn resolve_nushell_config(

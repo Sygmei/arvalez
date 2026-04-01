@@ -27,7 +27,8 @@ use arvalez_target_python::{
     write_package as write_python_package,
 };
 use arvalez_target_typescript::{
-    TypeScriptPackageConfig, generate_typescript_package, write_typescript_package,
+    TargetConfig as TypeScriptTargetConfig, generate as generate_typescript,
+    write_package as write_typescript_package,
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -619,9 +620,10 @@ fn run_typescript_corpus_target(
     ir: &CoreIr,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    config: &TypeScriptPackageConfig,
+    config: &(arvalez_target_core::CommonConfig, TypeScriptTargetConfig, Option<std::path::PathBuf>),
 ) -> CorpusTargetResult {
-    match generate_typescript_package(ir, config) {
+    let (common, ts_config, template_dir) = config;
+    match generate_typescript(ir, template_dir.as_deref(), common, ts_config) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,
