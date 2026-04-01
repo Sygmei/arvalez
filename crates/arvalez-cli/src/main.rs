@@ -12,7 +12,7 @@ use arvalez_openapi::{OpenApiLoadResult, load_openapi_to_ir_with_options};
 use arvalez_target_core::CommonConfig;
 use arvalez_target_go::{generate_go_package, write_go_package};
 use arvalez_target_nushell::{generate_nushell_package, write_nushell_package};
-use arvalez_target_python::{generate_python_package, write_python_package};
+use arvalez_target_python::{generate, write_package as write_python_package};
 use arvalez_target_pythonmini::{
     TargetConfig, generate as generate_pythonmini_package,
     write_package as write_pythonmini_package,
@@ -23,8 +23,9 @@ use arvalez_target_pythonmini::{
 use arvalez_target_typescript::{generate_typescript_package, write_typescript_package};
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{
-    load_optional_config, resolve_go_config, resolve_nushell_config, resolve_output_root,
-    resolve_python_config, resolve_target_output_directory, resolve_typescript_config,
+    is_target_enabled, load_optional_config, resolve_go_config, resolve_nushell_config,
+    resolve_output_root, resolve_python_config, resolve_target_output_directory,
+    resolve_typescript_config,
 };
 use corpus::{CorpusTestOptions, run_apis_guru_corpus_test, run_corpus_spec_inline};
 use generate::{
@@ -332,10 +333,17 @@ fn main() -> Result<()> {
                 timing_collector.measure_result("config_load", || load_optional_config(&config))?;
             let output_root = resolve_output_root(&config_file, output_directory);
 
-            let go_enabled = !no_go && !config_file.output.go.disabled;
-            let python_enabled = !no_python && !config_file.output.python.disabled;
-            let typescript_enabled = !no_typescript && !config_file.output.typescript.disabled;
-            let nushell_enabled = !no_nushell && !config_file.output.nushell.disabled;
+            let go_enabled = !no_go
+                && is_target_enabled(&config_file.common, config_file.target.go.base.disabled);
+            let python_enabled = !no_python
+                && is_target_enabled(&config_file.common, config_file.target.python.disabled);
+            let typescript_enabled = !no_typescript
+                && is_target_enabled(&config_file.common, config_file.target.typescript.disabled);
+            let nushell_enabled = !no_nushell
+                && is_target_enabled(
+                    &config_file.common,
+                    config_file.target.nushell.base.disabled,
+                );
 
             if !go_enabled && !python_enabled && !typescript_enabled && !nushell_enabled {
                 bail!("no generation targets enabled");
@@ -352,19 +360,32 @@ fn main() -> Result<()> {
                 );
                 let files = timing_collector
                     .measure_result("go_generate", || generate_go_package(&ir, go_config.2.as_deref(), &go_config.0, &go_config.1))?;
-                let output = output_root.join("go-client");
+                let output = config_file
+                    .target
+                    .go
+                    .base
+                    .output
+                    .directory
+                    .clone()
+                    .unwrap_or_else(|| output_root.join("go-client"));
                 timing_collector
                     .measure_result("go_write", || write_go_package(&output, &files))?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
             }
 
             if python_enabled {
-                let python_config =
+                let (python_common, python_target, python_tpl) =
                     resolve_python_config(&config_file, None, None, false, output_version.clone());
                 let files = timing_collector.measure_result("python_generate", || {
-                    generate_python_package(&ir, &python_config)
+                    generate(&ir, python_tpl.as_deref(), &python_common, &python_target)
                 })?;
-                let output = output_root.join("python-client");
+                let output = config_file
+                    .target
+                    .python
+                    .output
+                    .directory
+                    .clone()
+                    .unwrap_or_else(|| output_root.join("python-client"));
                 timing_collector
                     .measure_result("python_write", || write_python_package(&output, &files))?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
@@ -381,7 +402,13 @@ fn main() -> Result<()> {
                 let files = timing_collector.measure_result("typescript_generate", || {
                     generate_typescript_package(&ir, &typescript_config)
                 })?;
-                let output = output_root.join("typescript-client");
+                let output = config_file
+                    .target
+                    .typescript
+                    .output
+                    .directory
+                    .clone()
+                    .unwrap_or_else(|| output_root.join("typescript-client"));
                 timing_collector.measure_result("typescript_write", || {
                     write_typescript_package(&output, &files)
                 })?;
@@ -400,7 +427,14 @@ fn main() -> Result<()> {
                 let files = timing_collector.measure_result("nushell_generate", || {
                     generate_nushell_package(&ir, &nushell_config)
                 })?;
-                let output = output_root.join("nushell-client");
+                let output = config_file
+                    .target
+                    .nushell
+                    .base
+                    .output
+                    .directory
+                    .clone()
+                    .unwrap_or_else(|| output_root.join("nushell-client"));
                 timing_collector
                     .measure_result("nushell_write", || write_nushell_package(&output, &files))?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
@@ -426,8 +460,12 @@ fn main() -> Result<()> {
             print_openapi_warnings(&warnings);
             let config_file =
                 timing_collector.measure_result("config_load", || load_optional_config(&config))?;
-            let output =
-                resolve_target_output_directory(&config_file, output_directory, "go-client");
+            let output = resolve_target_output_directory(
+                &config_file,
+                &config_file.target.go.base,
+                output_directory,
+                "go-client",
+            );
             let go_config = resolve_go_config(
                 &config_file,
                 module_path,
@@ -460,9 +498,13 @@ fn main() -> Result<()> {
             print_openapi_warnings(&warnings);
             let config_file =
                 timing_collector.measure_result("config_load", || load_optional_config(&config))?;
-            let output =
-                resolve_target_output_directory(&config_file, output_directory, "python-client");
-            let python_config = resolve_python_config(
+            let output = resolve_target_output_directory(
+                &config_file,
+                &config_file.target.python,
+                output_directory,
+                "python-client",
+            );
+            let (python_common, python_target, python_tpl) = resolve_python_config(
                 &config_file,
                 package_name,
                 template_dir,
@@ -470,7 +512,7 @@ fn main() -> Result<()> {
                 output_version,
             );
             let files = timing_collector.measure_result("python_generate", || {
-                generate_python_package(&ir, &python_config)
+                generate(&ir, python_tpl.as_deref(), &python_common, &python_target)
             })?;
             timing_collector
                 .measure_result("python_write", || write_python_package(&output, &files))?;
@@ -497,6 +539,7 @@ fn main() -> Result<()> {
                 timing_collector.measure_result("config_load", || load_optional_config(&config))?;
             let output = resolve_target_output_directory(
                 &config_file,
+                &config_file.target.typescript,
                 output_directory,
                 "typescript-client",
             );
@@ -535,8 +578,12 @@ fn main() -> Result<()> {
             print_openapi_warnings(&warnings);
             let config_file =
                 timing_collector.measure_result("config_load", || load_optional_config(&config))?;
-            let output =
-                resolve_target_output_directory(&config_file, output_directory, "nushell-client");
+            let output = resolve_target_output_directory(
+                &config_file,
+                &config_file.target.nushell.base,
+                output_directory,
+                "nushell-client",
+            );
             let nushell_config = resolve_nushell_config(
                 &config_file,
                 module_name,
@@ -569,8 +616,11 @@ fn main() -> Result<()> {
             print_openapi_warnings(&warnings);
             let output = output_directory.unwrap_or_else(|| PathBuf::from("pythonmini-client"));
             let common = CommonConfig {
-                package_name: package_name.unwrap_or_else(|| "client".into()),
-                version: version.unwrap_or_else(|| "0.1.0".into()),
+                package: arvalez_target_core::PackageConfig {
+                    name: package_name.unwrap_or_else(|| "client".into()),
+                    version: version.unwrap_or_else(|| "0.1.0".into()),
+                    description: None,
+                },
             };
             let config = TargetConfig {};
             let files = timing_collector.measure_result("pythonmini_generate", || {

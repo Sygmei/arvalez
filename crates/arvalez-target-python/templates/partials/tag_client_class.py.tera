@@ -1,9 +1,10 @@
-class {{ client.class_name }}(_BaseApiClient):
-    def __init__(self, owner: {{ client.owner_class_name }}) -> None:
+class {{ class_name }}(_BaseApiClient):
+    def __init__(self, owner: {{ owner_class_name }}) -> None:
         self._owner = owner
         self._client = owner._client
         self._on_error = owner._on_error
+        self._validate_content_encodings = owner._validate_content_encodings
 
-{% for operation in client.methods %}
+{% for op in methods %}
 {% include "partials/client_method.py.tera" %}
 {% endfor %}

@@ -5,7 +5,7 @@ use arvalez_ir::{
     Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody,
     Response, TypeRef,
 };
-use arvalez_target_core::CommonConfig;
+use arvalez_target_core::{CommonConfig, PackageConfig};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -73,7 +73,7 @@ fn sample_ir() -> CoreIr {
 }
 
 fn default_common() -> CommonConfig {
-    CommonConfig { package_name: "client".into(), version: "0.1.0".into() }
+    CommonConfig { package: PackageConfig { name: "client".into(), version: "0.1.0".into(), description: None } }
 }
 
 #[test]
