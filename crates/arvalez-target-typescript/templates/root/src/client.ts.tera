@@ -1,4 +1,4 @@
-import type { {{ package.client_imports }} } from "./models";
+import type { {{ models | ts_client_imports }} } from "./models";
 
 export type ErrorHandler = (response: globalThis.Response) => void | Promise<void>;
 
@@ -24,9 +24,10 @@ export class ApiClient {
   private readonly defaultHeaders: globalThis.Headers;
   private readonly onError: ErrorHandler;
   private readonly validateContentEncodings: boolean;
-{% if package.tag_group_blocks | length > 0 %}
-
-{{ package.tag_group_blocks | join(sep="\n\n") | safe }}
+{% if config.group_by_tag %}
+{% for tag_group in operations | ts_tag_groups %}
+{% include "partials/tag_group.ts.tera" %}
+{% endfor %}
 {% endif %}
 
   constructor(options: ApiClientOptions) {
@@ -180,7 +181,7 @@ export class ApiClient {
     return formData;
   }
 
-{% if package.method_blocks | length > 0 %}
-{{ package.method_blocks | join(sep="\n\n") | safe }}
-{% endif %}
+{% for operation in operations %}
+{% include "partials/client_method.ts.tera" %}
+{% endfor %}
 }

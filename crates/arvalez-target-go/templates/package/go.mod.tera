@@ -1,3 +1,0 @@
-module {{ package.module_path }}
-
-go 1.22

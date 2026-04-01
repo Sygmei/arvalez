@@ -18,7 +18,7 @@ use arvalez_openapi::{
     load_openapi_to_ir_with_options, normalize_diagnostic_feature,
 };
 use arvalez_target_core::CommonConfig;
-use arvalez_target_go::{GoPackageConfig, generate_go_package, write_go_package};
+use arvalez_target_go::{generate_go_package, write_go_package};
 use arvalez_target_nushell::{
     generate as generate_nushell_package, write_package as write_nushell_package,
     TargetConfig as NushellTargetConfig,
@@ -28,7 +28,8 @@ use arvalez_target_python::{
     write_package as write_python_package,
 };
 use arvalez_target_typescript::{
-    TypeScriptPackageConfig, generate_typescript_package, write_typescript_package,
+    TargetConfig as TypeScriptTargetConfig, generate as generate_typescript,
+    write_package as write_typescript_package,
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -567,9 +568,9 @@ fn run_go_corpus_target(
     ir: &CoreIr,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    config: &GoPackageConfig,
+    config: &(arvalez_target_core::CommonConfig, arvalez_target_go::TargetConfig, Option<std::path::PathBuf>),
 ) -> CorpusTargetResult {
-    match generate_go_package(ir, config) {
+    match generate_go_package(ir, config.2.as_deref(), &config.0, &config.1) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,
@@ -622,9 +623,10 @@ fn run_typescript_corpus_target(
     ir: &CoreIr,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    config: &TypeScriptPackageConfig,
+    config: &(arvalez_target_core::CommonConfig, TypeScriptTargetConfig, Option<std::path::PathBuf>),
 ) -> CorpusTargetResult {
-    match generate_typescript_package(ir, config) {
+    let (common, ts_config, template_dir) = config;
+    match generate_typescript(ir, template_dir.as_deref(), common, ts_config) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,

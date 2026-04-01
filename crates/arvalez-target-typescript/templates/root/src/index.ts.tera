@@ -1,0 +1,5 @@
+export { ApiClient } from "./client";
+export type { ApiClientOptions, ErrorHandler, RequestOptions } from "./client";
+{% if models | length > 0 %}
+export type { {% for model in models | sort(attribute="name") %}{{ model.name | ts_type_name }}{% if not loop.last %}, {% endif %}{% endfor %} } from "./models";
+{% endif %}

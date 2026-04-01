@@ -2,10 +2,10 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use arvalez_target_core::{CommonConfig, PackageConfig};
-use arvalez_target_go::GoPackageConfig;
+use arvalez_target_go::TargetConfig as GoGenConfig;
 use arvalez_target_nushell::TargetConfig as NushellTargetConfig;
 use arvalez_target_python::TargetConfig as PythonTargetConfig;
-use arvalez_target_typescript::TypeScriptPackageConfig;
+use arvalez_target_typescript::TargetConfig as TypeScriptTargetConfig;
 use serde::Deserialize;
 
 // ── App config ────────────────────────────────────────────────────────────────
@@ -61,6 +61,7 @@ pub(crate) struct TargetOutputConfig {
 pub(crate) struct TargetPackageConfig {
     pub(crate) name: Option<String>,
     pub(crate) version: Option<String>,
+    pub(crate) description: Option<String>,
 }
 
 /// Fields present at the root of every `[target.<name>]` table.
@@ -107,6 +108,15 @@ impl TargetConfig {
             .or_else(|| self.package.version.clone())
             .or_else(|| common.version.clone())
             .unwrap_or_else(|| "0.1.0".into())
+    }
+
+    /// Resolve the effective package description.
+    /// Precedence: target.package.description > common.package.description.
+    pub(crate) fn resolve_description(&self, common: &CommonPackageConfig) -> Option<String> {
+        self.package
+            .description
+            .clone()
+            .or_else(|| common.description.clone())
     }
 
     /// Resolve the effective package name.
@@ -227,7 +237,7 @@ pub(crate) fn resolve_go_config(
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
     output_version: Option<String>,
-) -> GoPackageConfig {
+) -> (arvalez_target_core::CommonConfig, GoGenConfig, Option<PathBuf>) {
     let target = &config_file.target.go;
     let common = &config_file.common;
 
@@ -245,14 +255,25 @@ pub(crate) fn resolve_go_config(
         .base
         .resolve_group_by_tag(group_by_tag, &common.output);
 
-    let mut config = GoPackageConfig::new(module_path)
-        .with_version(version)
-        .with_template_dir(template_dir)
-        .with_group_by_tag(effective_group_by_tag);
-    if !resolved_package_name.is_empty() {
-        config = config.with_package_name(resolved_package_name);
-    }
-    config
+    // Derive package_name from module_path if not explicitly set.
+    let package_name = if resolved_package_name.is_empty() {
+        module_path
+            .rsplit('/')
+            .next()
+            .map(|s| {
+                let clean: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+                if clean.is_empty() { "client".into() } else { clean.to_ascii_lowercase() }
+            })
+            .unwrap_or_else(|| "client".into())
+    } else {
+        resolved_package_name
+    };
+
+    let common_cfg = arvalez_target_core::CommonConfig {
+        package: arvalez_target_core::PackageConfig { name: package_name, version, description: None },
+    };
+    let target_cfg = GoGenConfig { module_path, group_by_tag: effective_group_by_tag };
+    (common_cfg, target_cfg, template_dir)
 }
 
 pub(crate) fn resolve_python_config(
@@ -269,13 +290,14 @@ pub(crate) fn resolve_python_config(
     let template_dir =
         target.resolve_template_dir(template_dir, config_file.common.template_dir.clone());
     let version = target.resolve_version(output_version, &common.package);
+    let description = target.resolve_description(&common.package);
     let effective_group_by_tag = target.resolve_group_by_tag(group_by_tag, &common.output);
 
     let common_cfg = CommonConfig {
         package: PackageConfig {
             name: package_name,
             version,
-            description: common.package.description.clone(),
+            description,
         },
     };
     let target_cfg = PythonTargetConfig {
@@ -290,7 +312,7 @@ pub(crate) fn resolve_typescript_config(
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
     output_version: Option<String>,
-) -> TypeScriptPackageConfig {
+) -> (CommonConfig, TypeScriptTargetConfig, Option<PathBuf>) {
     let target = &config_file.target.typescript;
     let common = &config_file.common;
 
@@ -299,12 +321,20 @@ pub(crate) fn resolve_typescript_config(
     let template_dir =
         target.resolve_template_dir(template_dir, config_file.common.template_dir.clone());
     let version = target.resolve_version(output_version, &common.package);
+    let description = target.resolve_description(&common.package);
     let effective_group_by_tag = target.resolve_group_by_tag(group_by_tag, &common.output);
 
-    TypeScriptPackageConfig::new(package_name)
-        .with_version(version)
-        .with_template_dir(template_dir)
-        .with_group_by_tag(effective_group_by_tag)
+    let common_cfg = CommonConfig {
+        package: arvalez_target_core::PackageConfig {
+            name: package_name,
+            version,
+            description,
+        },
+    };
+    let target_cfg = TypeScriptTargetConfig {
+        group_by_tag: effective_group_by_tag,
+    };
+    (common_cfg, target_cfg, template_dir)
 }
 
 pub(crate) fn resolve_nushell_config(
