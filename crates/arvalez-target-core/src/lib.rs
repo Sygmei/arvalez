@@ -34,19 +34,35 @@ pub use tera;
 /// Config fields shared across all targets. Injected into the Tera context
 /// before target-specific fields (which can override them).
 ///
-/// - `package_name` is also expanded as `{package_name}` in output file paths.
-/// - `version` is injected as `{{ version }}` in templates.
+/// - `package.name` is also expanded as `{package_name}` in output file paths.
+/// - `package.version` is injected as `{{ version }}` in templates.
+/// - `package.description` is available to templates as `{{ description }}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageConfig {
+    pub name: String,
+    pub version: String,
+    pub description: Option<String>,
+}
+
+impl Default for PackageConfig {
+    fn default() -> Self {
+        Self {
+            name: "client".into(),
+            version: "0.1.0".into(),
+            description: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommonConfig {
-    pub package_name: String,
-    pub version: String,
+    pub package: PackageConfig,
 }
 
 impl Default for CommonConfig {
     fn default() -> Self {
         Self {
-            package_name: "client".into(),
-            version: "0.1.0".into(),
+            package: PackageConfig::default(),
         }
     }
 }
@@ -227,8 +243,12 @@ pub fn render_root_templates(
     ctx.insert("models", &serde_json::to_value(sorted_models(ir))?);
     ctx.insert("operations", &serde_json::to_value(sorted_operations(ir))?);
     // Common fields go in first, then target config fields override them.
-    ctx.insert("package_name", &common.package_name);
-    ctx.insert("version", &common.version);
+    ctx.insert("package", &common.package);
+    ctx.insert("package_name", &common.package.name);
+    ctx.insert("version", &common.package.version);
+    if let Some(description) = &common.package.description {
+        ctx.insert("description", description);
+    }
     ctx.insert("config", config_val);
     if let Some(obj) = config_val.as_object() {
         for (k, v) in obj {
@@ -244,8 +264,8 @@ pub fn render_root_templates(
             // Path expansion: common fields first, target config fields override.
             let base = rel.strip_suffix(".tera").unwrap_or(rel).to_string();
             let after_common = base
-                .replace("{package_name}", &common.package_name)
-                .replace("{version}", &common.version);
+                .replace("{package_name}", &common.package.name)
+                .replace("{version}", &common.package.version);
             let out_path = if let Some(obj) = config_val.as_object() {
                 obj.iter()
                     .filter_map(|(k, v)| v.as_str().map(|s| (k.as_str(), s)))

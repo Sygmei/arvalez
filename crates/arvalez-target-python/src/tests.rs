@@ -4,15 +4,30 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use crate::sanitize::{sanitize_class_name, sanitize_identifier};
-use crate::{PythonPackageConfig, generate_python_package};
+use crate::{CommonConfig, GeneratedFile, TargetConfig, generate};
 use arvalez_ir::{
     Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody,
     Response, TypeRef,
 };
 use serde_json::Value;
 
-fn sample_ir() -> CoreIr {
-    CoreIr {
+fn make_package(
+    package_name: &str,
+    template_dir: Option<std::path::PathBuf>,
+    target: TargetConfig,
+) -> anyhow::Result<Vec<GeneratedFile>> {
+    let common = CommonConfig {
+        package: arvalez_target_core::PackageConfig {
+            name: package_name.into(),
+            version: "0.1.0".into(),
+            description: None,
+        },
+    };
+    generate(&sample_ir(), template_dir.as_deref(), &common, &target)
+}
+
+fn sample_ir() -> arvalez_ir::CoreIr {
+    arvalez_ir::CoreIr {
         models: vec![
             arvalez_ir::Model {
                 id: "model.widget_path".into(),
@@ -107,8 +122,8 @@ fn sample_ir() -> CoreIr {
 
 #[test]
 fn renders_basic_python_package() {
-    let files = generate_python_package(&sample_ir(), &PythonPackageConfig::new("demo_client"))
-        .expect("package should render");
+    let files =
+        make_package("demo_client", None, TargetConfig::default()).expect("package should render");
     let init = files
         .iter()
         .find(|file| file.path.ends_with("__init__.py"))
@@ -219,9 +234,12 @@ fn supports_selective_template_overrides() {
     )
     .expect("override template");
 
-    let config = PythonPackageConfig::new("demo_client")
-        .with_template_dir(Some(tempdir.path().to_path_buf()));
-    let files = generate_python_package(&sample_ir(), &config).expect("package should render");
+    let files = make_package(
+        "demo_client",
+        Some(tempdir.path().to_path_buf()),
+        TargetConfig::default(),
+    )
+    .expect("package should render");
     let client = files
         .iter()
         .find(|file| file.path.ends_with("client.py"))
@@ -241,8 +259,15 @@ fn supports_selective_template_overrides() {
 
 #[test]
 fn groups_operations_by_tag_when_enabled() {
-    let config = PythonPackageConfig::new("demo_client").with_group_by_tag(true);
-    let files = generate_python_package(&sample_ir(), &config).expect("package should render");
+    let files = make_package(
+        "demo_client",
+        None,
+        TargetConfig {
+            group_by_tag: true,
+            ..Default::default()
+        },
+    )
+    .expect("package should render");
     let client = files
         .iter()
         .find(|file| file.path.ends_with("client.py"))
@@ -301,10 +326,12 @@ fn erases_default_template_with_tilde_prefix() {
     // Place a tilde-prefixed eraser file to suppress pyproject.toml generation.
     fs::write(root_dir.join("~pyproject.toml.tera"), "").expect("eraser file");
 
-    let config =
-        PythonPackageConfig::new("mylib").with_template_dir(Some(dir.path().to_path_buf()));
-
-    let files = generate_python_package(&sample_ir(), &config).expect("package should render");
+    let files = make_package(
+        "mylib",
+        Some(dir.path().to_path_buf()),
+        TargetConfig::default(),
+    )
+    .expect("package should render");
 
     // pyproject.toml must NOT be present in the output.
     assert!(

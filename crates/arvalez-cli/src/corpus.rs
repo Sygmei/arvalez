@@ -14,22 +14,27 @@ use std::{
 use anyhow::{Context, Result, bail};
 use arvalez_ir::CoreIr;
 use arvalez_openapi::{
-    OpenApiDiagnostic, OpenApiLoadResult, categorize_reference,
-    diagnostic_pointer_tail, load_openapi_to_ir_with_options, normalize_diagnostic_feature,
+    OpenApiDiagnostic, OpenApiLoadResult, categorize_reference, diagnostic_pointer_tail,
+    load_openapi_to_ir_with_options, normalize_diagnostic_feature,
 };
+use arvalez_target_core::CommonConfig as PythonCommonConfig;
 use arvalez_target_go::{GoPackageConfig, generate_go_package, write_go_package};
-use arvalez_target_python::{PythonPackageConfig, generate_python_package, write_python_package};
+use arvalez_target_nushell::{
+    NushellPackageConfig, generate_nushell_package, write_nushell_package,
+};
+use arvalez_target_python::{
+    TargetConfig as PythonTargetConfig, generate as generate_python,
+    write_package as write_python_package,
+};
 use arvalez_target_typescript::{
     TypeScriptPackageConfig, generate_typescript_package, write_typescript_package,
 };
-use arvalez_target_nushell::{NushellPackageConfig, generate_nushell_package, write_nushell_package};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, is_target_enabled};
 use crate::corpus_ui::{
-    CorpusMonitor, exit_status_signal, spawn_corpus_heartbeat,
-    spawn_corpus_ui,
+    CorpusMonitor, exit_status_signal, spawn_corpus_heartbeat, spawn_corpus_ui,
 };
 use crate::generate::openapi_options;
 
@@ -165,10 +170,17 @@ pub(crate) fn run_apis_guru_corpus_test(
 
     eprintln!("found {} spec file(s)", specs.len());
 
-    let go_enabled = !options.no_go && !config_file.output.go.disabled;
-    let python_enabled = !options.no_python && !config_file.output.python.disabled;
-    let typescript_enabled = !options.no_typescript && !config_file.output.typescript.disabled;
-    let nushell_enabled = !options.no_nushell && !config_file.output.nushell.disabled;
+    let go_enabled = !options.no_go
+        && is_target_enabled(&config_file.common, config_file.target.go.base.disabled);
+    let python_enabled = !options.no_python
+        && is_target_enabled(&config_file.common, config_file.target.python.disabled);
+    let typescript_enabled = !options.no_typescript
+        && is_target_enabled(&config_file.common, config_file.target.typescript.disabled);
+    let nushell_enabled = !options.no_nushell
+        && is_target_enabled(
+            &config_file.common,
+            config_file.target.nushell.base.disabled,
+        );
 
     if !go_enabled && !python_enabled && !typescript_enabled && !nushell_enabled {
         bail!("no generation targets enabled");
@@ -279,8 +291,7 @@ pub(crate) fn run_apis_guru_corpus_test(
     let failed_specs = results
         .iter()
         .filter(|result| {
-            result.failure.is_some()
-                || result.targets.iter().any(|target| target.failure.is_some())
+            result.failure.is_some() || result.targets.iter().any(|target| target.failure.is_some())
         })
         .count();
     let passed_specs = total_specs - failed_specs;
@@ -303,9 +314,7 @@ pub(crate) fn run_apis_guru_corpus_test(
     let report_path = write_corpus_report(&report_directory, &report_data)?;
     eprintln!("wrote report to {}", report_path.display());
 
-    eprintln!(
-        "completed APIs.guru corpus run: {passed_specs}/{total_specs} specs passed"
-    );
+    eprintln!("completed APIs.guru corpus run: {passed_specs}/{total_specs} specs passed");
     print_failure_summary(&report_data.summary);
 
     if failed_specs > 0 {
@@ -321,28 +330,59 @@ pub(crate) fn run_corpus_spec_inline(
     relative_spec: &str,
     options: &CorpusTestOptions,
 ) -> CorpusSpecResult {
-    use crate::config::{resolve_go_config, resolve_nushell_config, resolve_python_config, resolve_typescript_config};
+    use crate::config::{
+        resolve_go_config, resolve_nushell_config, resolve_python_config, resolve_typescript_config,
+    };
 
-    let go_config = (!options.no_go && !config_file.output.go.disabled).then(|| {
-        resolve_go_config(config_file, None, None, None, false, options.output_version.clone())
+    let go_config = (!options.no_go
+        && is_target_enabled(&config_file.common, config_file.target.go.base.disabled))
+    .then(|| {
+        resolve_go_config(
+            config_file,
+            None,
+            None,
+            None,
+            false,
+            options.output_version.clone(),
+        )
     });
-    let python_config = (!options.no_python && !config_file.output.python.disabled).then(|| {
-        resolve_python_config(config_file, None, None, false, options.output_version.clone())
+    let python_config = (!options.no_python
+        && is_target_enabled(&config_file.common, config_file.target.python.disabled))
+    .then(|| {
+        resolve_python_config(
+            config_file,
+            None,
+            None,
+            false,
+            options.output_version.clone(),
+        )
     });
-    let typescript_config =
-        (!options.no_typescript && !config_file.output.typescript.disabled).then(|| {
-            resolve_typescript_config(
-                config_file,
-                None,
-                None,
-                false,
-                options.output_version.clone(),
-            )
-        });
-    let nushell_config =
-        (!options.no_nushell && !config_file.output.nushell.disabled).then(|| {
-            resolve_nushell_config(config_file, None, None, None, false, options.output_version.clone())
-        });
+    let typescript_config = (!options.no_typescript
+        && is_target_enabled(&config_file.common, config_file.target.typescript.disabled))
+    .then(|| {
+        resolve_typescript_config(
+            config_file,
+            None,
+            None,
+            false,
+            options.output_version.clone(),
+        )
+    });
+    let nushell_config = (!options.no_nushell
+        && is_target_enabled(
+            &config_file.common,
+            config_file.target.nushell.base.disabled,
+        ))
+    .then(|| {
+        resolve_nushell_config(
+            config_file,
+            None,
+            None,
+            None,
+            false,
+            options.output_version.clone(),
+        )
+    });
 
     match load_openapi_to_ir_with_options(
         spec_path,
@@ -440,16 +480,25 @@ fn run_corpus_spec_subprocess(
     if options.ignore_unhandled {
         command.arg("--ignore-unhandled");
     }
-    if config_file.output.go.disabled || options.no_go {
+    if !is_target_enabled(&config_file.common, config_file.target.go.base.disabled) || options.no_go
+    {
         command.arg("--no-go");
     }
-    if config_file.output.python.disabled || options.no_python {
+    if !is_target_enabled(&config_file.common, config_file.target.python.disabled)
+        || options.no_python
+    {
         command.arg("--no-python");
     }
-    if config_file.output.typescript.disabled || options.no_typescript {
+    if !is_target_enabled(&config_file.common, config_file.target.typescript.disabled)
+        || options.no_typescript
+    {
         command.arg("--no-typescript");
     }
-    if config_file.output.nushell.disabled || options.no_nushell {
+    if !is_target_enabled(
+        &config_file.common,
+        config_file.target.nushell.base.disabled,
+    ) || options.no_nushell
+    {
         command.arg("--no-nushell");
     }
     if let Some(output_version) = &options.output_version {
@@ -540,9 +589,14 @@ fn run_python_corpus_target(
     ir: &CoreIr,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    config: &PythonPackageConfig,
+    config: &(
+        PythonCommonConfig,
+        PythonTargetConfig,
+        Option<std::path::PathBuf>,
+    ),
 ) -> CorpusTargetResult {
-    match generate_python_package(ir, config) {
+    let (common, target, tpl) = config;
+    match generate_python(ir, tpl.as_deref(), common, target) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,
@@ -977,7 +1031,10 @@ pub(crate) fn classify_failure(message: &str, target: Option<&str>) -> CorpusFai
     }
 
     if let Some(reference) = extract_between(message, "unsupported reference `", "`") {
-        return make_failure("unsupported_reference".into(), categorize_reference(reference));
+        return make_failure(
+            "unsupported_reference".into(),
+            categorize_reference(reference),
+        );
     }
 
     if message.contains("request body has no content entries") {
@@ -1019,8 +1076,7 @@ pub(crate) fn classify_failure(message: &str, target: Option<&str>) -> CorpusFai
         } else if message.contains("control characters are not allowed") {
             "control_characters".into()
         } else if message.contains("invalid type:") {
-            let expected = extract_between(message, "expected ", " at line")
-                .unwrap_or("unknown");
+            let expected = extract_between(message, "expected ", " at line").unwrap_or("unknown");
             let stripped = expected
                 .strip_prefix("a ")
                 .or_else(|| expected.strip_prefix("an "))
@@ -1188,11 +1244,7 @@ fn extract_indented_block(message: &str, label: &str) -> Option<String> {
     }
 }
 
-pub(crate) fn extract_between<'a>(
-    message: &'a str,
-    prefix: &str,
-    suffix: &str,
-) -> Option<&'a str> {
+pub(crate) fn extract_between<'a>(message: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
     let start = message.find(prefix)? + prefix.len();
     let rest = &message[start..];
     let end = rest.find(suffix)?;

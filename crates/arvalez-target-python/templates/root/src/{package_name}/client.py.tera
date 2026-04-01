@@ -141,7 +141,7 @@ class _BaseApiClient:
             on_error = request_options["on_error"]
         on_error(response)
 
-{%- set groups = [] -%}
+{% set groups = [] -%}
 {%- set flat_ops = operations -%}
 {%- if config.group_by_tag -%}
 {%- set groups = operations | tag_groups -%}

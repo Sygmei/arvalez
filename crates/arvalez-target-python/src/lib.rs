@@ -16,13 +16,13 @@ mod sanitize;
 #[cfg(test)]
 mod tests;
 
-pub use arvalez_target_core::{CommonConfig, GeneratedFile, write_files as write_python_package};
-pub use sanitize::{sanitize_class_name, sanitize_identifier};
+pub use arvalez_target_core::{CommonConfig, GeneratedFile};
 use sanitize::is_python_keyword;
+pub use sanitize::{sanitize_class_name, sanitize_identifier};
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TargetConfig {
     #[serde(default)]
     pub group_by_tag: bool,
@@ -152,16 +152,6 @@ pub fn register_filters(tera: &mut Tera) {
         },
     );
 
-    // {{ op | py_method_args }} — operation → method signature args string
-    tera.register_filter("py_method_args", |v: &Value, _: &HashMap<String, Value>| {
-        Ok(Value::String(build_method_args(v)))
-    });
-
-    // {{ op | py_forward_args }} — operation → forward args string for calling raw method
-    tera.register_filter("py_forward_args", |v: &Value, _: &HashMap<String, Value>| {
-        Ok(Value::String(build_forward_args(v)))
-    });
-
     // {{ op | py_doc_params }} — operation → params that carry a non-empty description
     tera.register_filter("py_doc_params", |v: &Value, _: &HashMap<String, Value>| {
         let params = v
@@ -190,9 +180,11 @@ pub fn register_filters(tera: &mut Tera) {
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let success = responses
-            .iter()
-            .find(|r| r.get("status").and_then(Value::as_str).is_some_and(|s| s.starts_with('2')));
+        let success = responses.iter().find(|r| {
+            r.get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.starts_with('2'))
+        });
 
         let result = match success {
             Some(r) => match r.get("type_ref").filter(|v| !v.is_null()) {
@@ -303,170 +295,10 @@ fn compute_tag_groups(ops: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-// ── Method arg builders ───────────────────────────────────────────────────────
-
-fn op_params(op: &Value) -> &[Value] {
-    op.get("params")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-}
-
-fn param_type_str(p: &Value) -> String {
-    p.get("type_ref")
-        .map(|tr| type_ref_to_py(tr, true))
-        .unwrap_or_else(|| "Any".into())
-}
-
-fn body_type_str(op: &Value) -> String {
-    op.get("request_body")
-        .and_then(|rb| rb.get("type_ref"))
-        .filter(|v| !v.is_null())
-        .map(|tr| type_ref_to_py(tr, true))
-        .unwrap_or_else(|| "Any".into())
-}
-
-fn has_body(op: &Value) -> bool {
-    op.get("request_body")
-        .is_some_and(|rb| !rb.is_null())
-}
-
-fn body_required(op: &Value) -> bool {
-    op.get("request_body")
-        .and_then(|rb| rb.get("required"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
-fn build_method_args(op: &Value) -> String {
-    let mut args: Vec<String> = Vec::new();
-    let params = op_params(op);
-
-    for p in params.iter().filter(|p| {
-        p.get("required")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }) {
-        let name = sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("param"));
-        args.push(format!("{name}: {}", param_type_str(p)));
-    }
-
-    if has_body(op) && body_required(op) {
-        args.push(format!("body: {}", body_type_str(op)));
-    }
-
-    for p in params.iter().filter(|p| {
-        !p.get("required")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }) {
-        let name = sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("param"));
-        args.push(format!("{name}: {} | None = None", param_type_str(p)));
-    }
-
-    if has_body(op) && !body_required(op) {
-        args.push(format!("body: {} | None = None", body_type_str(op)));
-    }
-
-    args.push("request_options: RequestOptions | None = None".into());
-    args.join(", ")
-}
-
-fn build_forward_args(op: &Value) -> String {
-    let mut args: Vec<String> = Vec::new();
-    let params = op_params(op);
-
-    for p in params.iter().filter(|p| {
-        p.get("required")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }) {
-        let name = sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("param"));
-        args.push(format!("{name}={name}"));
-    }
-
-    if has_body(op) && body_required(op) {
-        args.push("body=body".into());
-    }
-
-    for p in params.iter().filter(|p| {
-        !p.get("required")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }) {
-        let name = sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("param"));
-        args.push(format!("{name}={name}"));
-    }
-
-    if has_body(op) && !body_required(op) {
-        args.push("body=body".into());
-    }
-
-    args.push("request_options=request_options".into());
-    args.join(", ")
-}
-
 // ── Declare target ─────────────────────────────────────────────────────────────
 
 arvalez_target_core::declare_target! {
     config:    TargetConfig,
     templates: TEMPLATES,
     filters:   register_filters,
-}
-
-// ── Backward-compatible public API ────────────────────────────────────────────
-
-/// Configuration for the Python SDK generator (backward-compatible API).
-pub struct PythonPackageConfig {
-    pub package_name: String,
-    pub project_name: String,
-    pub version: String,
-    pub template_dir: Option<std::path::PathBuf>,
-    pub group_by_tag: bool,
-}
-
-impl PythonPackageConfig {
-    pub fn new(package_name: impl Into<String>) -> Self {
-        let package_name = package_name.into();
-        let project_name = package_name.replace('_', "-");
-        Self {
-            package_name,
-            project_name,
-            version: "0.1.0".into(),
-            template_dir: None,
-            group_by_tag: false,
-        }
-    }
-
-    pub fn with_version(mut self, version: impl Into<String>) -> Self {
-        self.version = version.into();
-        self
-    }
-
-    pub fn with_template_dir(mut self, template_dir: Option<std::path::PathBuf>) -> Self {
-        self.template_dir = template_dir;
-        self
-    }
-
-    pub fn with_group_by_tag(mut self, group_by_tag: bool) -> Self {
-        self.group_by_tag = group_by_tag;
-        self
-    }
-}
-
-/// Generate a Python client package from an IR snapshot.
-///
-/// Convenience wrapper around [`generate`] using the legacy [`PythonPackageConfig`] API.
-pub fn generate_python_package(
-    ir: &arvalez_ir::CoreIr,
-    config: &PythonPackageConfig,
-) -> anyhow::Result<Vec<GeneratedFile>> {
-    let common = CommonConfig {
-        package_name: config.package_name.clone(),
-        version: config.version.clone(),
-    };
-    let target_config = TargetConfig {
-        group_by_tag: config.group_by_tag,
-    };
-    generate(ir, config.template_dir.as_deref(), &common, &target_config)
 }
