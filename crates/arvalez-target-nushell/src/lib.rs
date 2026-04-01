@@ -39,7 +39,6 @@ impl NushellGenerator {
         let mut tera = load_templates(
             config.template_dir.as_deref(),
             BUILTIN_TEMPLATES,
-            OVERRIDABLE_TEMPLATES,
         )?;
         let extra_package_templates = if let Some(dir) = config.template_dir.as_deref() {
             load_extra_package_templates(dir, OVERRIDABLE_TEMPLATES, &mut tera)?

@@ -5,27 +5,46 @@ mod generate;
 #[cfg(test)]
 mod tests;
 
-use std::{
-    io::Write,
-    path::PathBuf,
-};
+use std::{io::Write, path::PathBuf};
 
 use anyhow::{Result, bail};
 use arvalez_openapi::{OpenApiLoadResult, load_openapi_to_ir_with_options};
+use arvalez_target_core::CommonConfig;
 use arvalez_target_go::{generate_go_package, write_go_package};
-use arvalez_target_python::{generate_python_package, write_python_package};
-use arvalez_target_typescript::{generate_typescript_package, write_typescript_package};
 use arvalez_target_nushell::{generate_nushell_package, write_nushell_package};
-use clap::{Parser, Subcommand};
+use arvalez_target_python::{generate_python_package, write_python_package};
+use arvalez_target_pythonmini::{
+    TargetConfig, generate as generate_pythonmini_package,
+    write_package as write_pythonmini_package,
+};
+use arvalez_target_pythonmini::{
+    dump_erasers as dump_pythonmini_erasers, dump_templates as dump_pythonmini_templates,
+};
+use arvalez_target_typescript::{generate_typescript_package, write_typescript_package};
+use clap::{Parser, Subcommand, ValueEnum};
 use config::{
-    load_optional_config, resolve_go_config, resolve_output_root, resolve_python_config,
-    resolve_target_output_directory, resolve_typescript_config, resolve_nushell_config,
+    load_optional_config, resolve_go_config, resolve_nushell_config, resolve_output_root,
+    resolve_python_config, resolve_target_output_directory, resolve_typescript_config,
 };
 use corpus::{CorpusTestOptions, run_apis_guru_corpus_test, run_corpus_spec_inline};
 use generate::{
     TimingCollector, load_input_ir, load_ir, openapi_options, print_openapi_warnings,
     run_with_large_stack,
 };
+
+/// A target to dump templates or erasers for.
+#[derive(Clone, ValueEnum)]
+enum DumpTarget {
+    PythonMini,
+}
+
+impl DumpTarget {
+    fn slug(&self) -> &'static str {
+        match self {
+            DumpTarget::PythonMini => "python-mini",
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(author, version, about = "Arvalez local development CLI")]
@@ -163,6 +182,44 @@ enum Command {
         output_version: Option<String>,
         #[arg(long)]
         timings: bool,
+    },
+    GeneratePythonMini {
+        #[arg(long)]
+        ir: Option<PathBuf>,
+        #[arg(long)]
+        openapi: Option<PathBuf>,
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
+        #[arg(long)]
+        ignore_unhandled: bool,
+        #[arg(long)]
+        package_name: Option<String>,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        template_dir: Option<PathBuf>,
+        #[arg(long)]
+        timings: bool,
+    },
+    /// Dump the built-in templates for a target to a directory so they can be
+    /// inspected and customised. Pass the directory to `--template-dir` to use
+    /// your overrides.
+    DumpTemplates {
+        #[arg(long)]
+        target: DumpTarget,
+        /// Destination directory (defaults to `templates/<target>`).
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
+    },
+    /// Dump empty tilde-prefixed eraser files for a target. Placing any of
+    /// these in your `--template-dir` suppresses generation of the
+    /// corresponding output file entirely.
+    DumpErasers {
+        #[arg(long)]
+        target: DumpTarget,
+        /// Destination directory (defaults to `templates/<target>`).
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
     },
     TestApisGuru {
         #[arg(
@@ -332,8 +389,14 @@ fn main() -> Result<()> {
             }
 
             if nushell_enabled {
-                let nushell_config =
-                    resolve_nushell_config(&config_file, None, None, None, false, output_version.clone());
+                let nushell_config = resolve_nushell_config(
+                    &config_file,
+                    None,
+                    None,
+                    None,
+                    false,
+                    output_version.clone(),
+                );
                 let files = timing_collector.measure_result("nushell_generate", || {
                     generate_nushell_package(&ir, &nushell_config)
                 })?;
@@ -489,6 +552,57 @@ fn main() -> Result<()> {
                 .measure_result("nushell_write", || write_nushell_package(&output, &files))?;
             eprintln!("generated {} files into {}", files.len(), output.display());
             timing_collector.print();
+        }
+        Command::GeneratePythonMini {
+            ir,
+            openapi,
+            output_directory,
+            ignore_unhandled,
+            package_name,
+            version,
+            template_dir,
+            timings,
+        } => {
+            let mut timing_collector = TimingCollector::new(timings);
+            let (ir, warnings) =
+                load_input_ir(ir, openapi, ignore_unhandled, &mut timing_collector)?;
+            print_openapi_warnings(&warnings);
+            let output = output_directory.unwrap_or_else(|| PathBuf::from("pythonmini-client"));
+            let common = CommonConfig {
+                package_name: package_name.unwrap_or_else(|| "client".into()),
+                version: version.unwrap_or_else(|| "0.1.0".into()),
+            };
+            let config = TargetConfig {};
+            let files = timing_collector.measure_result("pythonmini_generate", || {
+                generate_pythonmini_package(&ir, template_dir.as_deref(), &common, &config)
+            })?;
+            timing_collector.measure_result("pythonmini_write", || {
+                write_pythonmini_package(&output, &files)
+            })?;
+            eprintln!("generated {} files into {}", files.len(), output.display());
+            timing_collector.print();
+        }
+        Command::DumpTemplates {
+            target,
+            output_directory,
+        } => {
+            let dir = output_directory
+                .unwrap_or_else(|| PathBuf::from(format!("templates/{}", target.slug())));
+            match target {
+                DumpTarget::PythonMini => dump_pythonmini_templates(&dir)?,
+            }
+            eprintln!("dumped templates into {}", dir.display());
+        }
+        Command::DumpErasers {
+            target,
+            output_directory,
+        } => {
+            let dir = output_directory
+                .unwrap_or_else(|| PathBuf::from(format!("templates/{}", target.slug())));
+            match target {
+                DumpTarget::PythonMini => dump_pythonmini_erasers(&dir)?,
+            }
+            eprintln!("dumped erasers into {}", dir.display());
         }
         Command::TestApisGuru {
             repository,

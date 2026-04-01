@@ -78,26 +78,7 @@ pub(crate) fn sanitize_doc_text(value: &str) -> String {
     value.replace("*/", "*\\/")
 }
 
-pub(crate) fn split_words(input: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            if ch.is_uppercase() && !current.is_empty() {
-                words.push(current.clone());
-                current.clear();
-            }
-            current.push(ch.to_ascii_lowercase());
-        } else if !current.is_empty() {
-            words.push(current.clone());
-            current.clear();
-        }
-    }
-    if !current.is_empty() {
-        words.push(current);
-    }
-    words
-}
+pub(crate) use arvalez_target_core::split_words;
 
 pub(crate) fn is_typescript_keyword(value: &str) -> bool {
     matches!(

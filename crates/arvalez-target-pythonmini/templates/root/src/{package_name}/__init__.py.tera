@@ -1,0 +1,7 @@
+from {{ package_name }}.client import ApiClient
+from {{ package_name }} import models
+
+__all__ = [
+    "ApiClient",
+    "models",
+]

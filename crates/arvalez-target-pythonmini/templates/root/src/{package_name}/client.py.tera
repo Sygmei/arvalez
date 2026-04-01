@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+
+import {{ package_name }}.models as models
+
+
+class ApiClient:
+    def __init__(self, base_url: str, **kwargs: Any) -> None:
+        self._client = httpx.Client(base_url=base_url, **kwargs)
+
+    def __enter__(self) -> ApiClient:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self._client.close()
+
+    def close(self) -> None:
+        self._client.close()
+{% for op in operations %}
+{%- set query_params = op.params | filter(attribute="location", value="query") %}
+{%- set header_params = op.params | filter(attribute="location", value="header") %}
+    def {{ op.name | py_id }}(
+        self,
+{%- for p in op.params %}{% if p.required %}
+        {{ p.name | py_id }}: {{ p.type_ref | py_type }},
+{%- endif %}{% endfor %}
+{%- if op.request_body and op.request_body.required %}
+        body: Any,
+{%- endif %}
+{%- for p in op.params %}{% if not p.required %}
+        {{ p.name | py_id }}: {{ p.type_ref | py_type }} | None = None,
+{%- endif %}{% endfor %}
+{%- if op.request_body and not op.request_body.required %}
+        body: Any = None,
+{%- endif %}
+    ) -> Any:
+        url = f"{{ op.path | py_fstring }}"
+{%- if query_params %}
+        params: dict[str, Any] = {}
+{%- for p in query_params %}
+{%- if p.required %}
+        params["{{ p.name }}"] = {{ p.name | py_id }}
+{%- else %}
+        if {{ p.name | py_id }} is not None:
+            params["{{ p.name }}"] = {{ p.name | py_id }}
+{%- endif %}
+{%- endfor %}
+{%- endif %}
+{%- if header_params %}
+        headers: dict[str, Any] = {}
+{%- for p in header_params %}
+{%- if p.required %}
+        headers["{{ p.name }}"] = {{ p.name | py_id }}
+{%- else %}
+        if {{ p.name | py_id }} is not None:
+            headers["{{ p.name }}"] = {{ p.name | py_id }}
+{%- endif %}
+{%- endfor %}
+{%- endif %}
+        response = self._client.request(
+            "{{ op.method | upper }}",
+            url,
+{%- if query_params %}
+            params=params,
+{%- endif %}
+{%- if header_params %}
+            headers=headers,
+{%- endif %}
+{%- if op.request_body %}
+            json=body,
+{%- endif %}
+        )
+        response.raise_for_status()
+        return response.json()
+{% endfor %}

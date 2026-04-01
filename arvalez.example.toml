@@ -14,6 +14,11 @@ package_name = "arvalez_client"
 version = "0.1.1"
 template_dir = "./templates/python"
 
+[output.pythonmini]
+package_name = "arvalez_client_mini"
+version = "0.1.1"
+template_dir = "./templates/pythonmini"
+
 [output.typescript]
 package_name = "@arvalez/client"
 version = "0.1.2"

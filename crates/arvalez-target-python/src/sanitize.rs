@@ -80,42 +80,7 @@ pub(crate) fn sanitize_enum_member_name(value: &str) -> String {
     candidate
 }
 
-pub(crate) fn split_words(input: &str) -> Vec<String> {
-    let chars = input.chars().collect::<Vec<_>>();
-    let mut words = Vec::new();
-    let mut current = String::new();
-    for (index, ch) in chars.iter().copied().enumerate() {
-        if ch.is_ascii_alphanumeric() {
-            let previous = index.checked_sub(1).and_then(|value| chars.get(value)).copied();
-            let next = chars.get(index + 1).copied();
-            let next_next = chars.get(index + 2).copied();
-            let should_split = !current.is_empty()
-                && previous.is_some_and(|prev| {
-                    (prev.is_ascii_lowercase() && ch.is_ascii_uppercase())
-                        || (prev.is_ascii_digit() && ch.is_ascii_alphabetic())
-                        || (prev.is_ascii_uppercase()
-                            && ch.is_ascii_uppercase()
-                            && (current.len() > 1
-                                || (current.len() == 1
-                                    && next_next
-                                        .is_some_and(|candidate| candidate.is_ascii_lowercase())))
-                            && next.is_some_and(|candidate| candidate.is_ascii_lowercase()))
-                });
-            if should_split {
-                words.push(current.clone());
-                current.clear();
-            }
-            current.push(ch);
-        } else if !current.is_empty() {
-            words.push(current.clone());
-            current.clear();
-        }
-    }
-    if !current.is_empty() {
-        words.push(current);
-    }
-    words
-}
+pub(crate) use arvalez_target_core::split_words;
 
 pub(crate) fn is_python_keyword(value: &str) -> bool {
     matches!(
