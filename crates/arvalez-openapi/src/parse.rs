@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow};
-use serde::Deserialize;
+use anyhow::{Result, anyhow};
 
 use crate::document::{OpenApiDocument, Swagger2Document, OpenApi3Document};
 use crate::source::{LoadedOpenApiDocument, OpenApiSource, SourceFormat};

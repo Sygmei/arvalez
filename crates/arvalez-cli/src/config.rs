@@ -175,6 +175,7 @@ pub(crate) struct TargetSection {
     pub(crate) go: GoTargetConfig,
     #[serde(default)]
     pub(crate) python: TargetConfig,
+    #[allow(dead_code)]
     #[serde(default)]
     pub(crate) pythonmini: TargetConfig,
     #[serde(default)]

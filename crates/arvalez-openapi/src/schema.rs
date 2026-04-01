@@ -1,10 +1,9 @@
 use anyhow::{Result, anyhow, bail};
-use arvalez_ir::{Attributes, TypeRef};
+use arvalez_ir::Attributes;
 use serde_json::Value;
 
 use crate::document::{
-    AdditionalProperties, MediaTypeSpec, ParameterSpec, ResponseSpec, Schema, SchemaOrBool,
-    SchemaTypeDecl,
+    AdditionalProperties, ParameterSpec, ResponseSpec, Schema, SchemaOrBool,
 };
 
 

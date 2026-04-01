@@ -4,15 +4,15 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow, bail};
 use arvalez_ir::{
-    Attributes, CoreIr, Field, HttpMethod, Model, Operation, Parameter, ParameterLocation,
-    RequestBody, Response, SourceRef, TypeRef, validate_ir,
+    Attributes, CoreIr, Field, HttpMethod, Model, Operation, Parameter, RequestBody, Response,
+    SourceRef, TypeRef, validate_ir,
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 use crate::diagnostic::{DiagnosticKind, OpenApiDiagnostic, OpenApiLoadResult};
 use crate::document::{
-    AdditionalProperties, Components, MediaTypeSpec, OperationSpec, OpenApiDocument,
+    AdditionalProperties, OperationSpec, OpenApiDocument,
     ParameterOrRef, ParameterSpec, PathItem, RawParameterLocation, RequestBodyOrRef,
     RequestBodySpec, ResponseSpec, ResponseSpecOrRef, Schema, SchemaOrBool, SchemaTypeDecl,
     raw_parameter_location_label,
@@ -27,7 +27,7 @@ use crate::schema::{
     decode_json_pointer_segment,
     is_generic_object_placeholder, is_inline_local_schema_reference,
     is_known_but_unimplemented_schema_keyword, is_known_ignored_schema_keyword,
-    is_named_schema_reference, is_unconstrained_schema, is_validation_only_schema_variant,
+    is_unconstrained_schema, is_validation_only_schema_variant,
     parameter_attributes, ref_name, resolve_nested_schema_reference,
     resolve_response_schema_reference, schema_has_non_all_of_shape, schema_is_object_like,
     schema_runtime_attributes,

@@ -446,12 +446,6 @@ impl SchemaOrBool {
             SchemaOrBool::Bool(_) => None,
         }
     }
-    pub(crate) fn into_schema(self) -> Option<Schema> {
-        match self {
-            SchemaOrBool::Schema(s) => Some(s),
-            SchemaOrBool::Bool(_) => None,
-        }
-    }
 }
 
 impl<'de> serde::Deserialize<'de> for SchemaOrBool {

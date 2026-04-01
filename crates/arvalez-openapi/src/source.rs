@@ -98,26 +98,6 @@ impl OpenApiSource {
         let dedented: Vec<&str> = lines.iter().map(|l| &l[indent.min(l.len())..]).collect();
         dedented.join("\n")
     }
-    /// Return the exact 1-based line number for the node identified by `pointer`.
-    ///
-    /// For YAML sources this is resolved via an exact pointer→line map produced
-    /// by walking the YAML event stream (see [`build_yaml_line_map`]).  For JSON
-    /// sources a best-effort text-search heuristic is used as a fallback.
-    fn resolve_pointer_line(&self, pointer: &str) -> Option<usize> {
-        // For YAML, pointer_info() is the unified entry point; this helper is
-        // retained for callers that only need the line (e.g. make_diagnostic
-        // routes through pointer_info directly).
-        let key = pointer.strip_prefix('#').unwrap_or(pointer);
-        match self.format {
-            SourceFormat::Yaml => self
-                .line_map
-                .get_or_init(|| Some(build_yaml_line_map(&self.raw)))
-                .as_ref()
-                .and_then(|m| m.get(key).copied()),
-            SourceFormat::Json => self.resolve_pointer_line_heuristic(pointer),
-        }
-    }
-
     /// Text-search heuristic used for JSON sources (or as a last-resort fallback).
     fn resolve_pointer_line_heuristic(&self, pointer: &str) -> Option<usize> {
         let inner = pointer.strip_prefix('#').unwrap_or(pointer);
