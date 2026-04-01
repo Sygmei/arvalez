@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use arvalez_target_core::{CommonConfig as PythonCommonConfig, PackageConfig as PackageMetadata};
-use arvalez_target_go::GoPackageConfig;
+use arvalez_target_go::TargetConfig as GoGenConfig;
 use arvalez_target_nushell::NushellPackageConfig;
 use arvalez_target_python::TargetConfig as PythonTargetConfig;
 use arvalez_target_core::CommonConfig;
@@ -239,7 +239,7 @@ pub(crate) fn resolve_go_config(
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
     output_version: Option<String>,
-) -> GoPackageConfig {
+) -> (arvalez_target_core::CommonConfig, GoGenConfig, Option<PathBuf>) {
     let target = &config_file.target.go;
     let common = &config_file.common;
 
@@ -257,14 +257,25 @@ pub(crate) fn resolve_go_config(
         .base
         .resolve_group_by_tag(group_by_tag, &common.output);
 
-    let mut config = GoPackageConfig::new(module_path)
-        .with_version(version)
-        .with_template_dir(template_dir)
-        .with_group_by_tag(effective_group_by_tag);
-    if !resolved_package_name.is_empty() {
-        config = config.with_package_name(resolved_package_name);
-    }
-    config
+    // Derive package_name from module_path if not explicitly set.
+    let package_name = if resolved_package_name.is_empty() {
+        module_path
+            .rsplit('/')
+            .next()
+            .map(|s| {
+                let clean: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+                if clean.is_empty() { "client".into() } else { clean.to_ascii_lowercase() }
+            })
+            .unwrap_or_else(|| "client".into())
+    } else {
+        resolved_package_name
+    };
+
+    let common_cfg = arvalez_target_core::CommonConfig {
+        package: arvalez_target_core::PackageConfig { name: package_name, version, description: None },
+    };
+    let target_cfg = GoGenConfig { module_path, group_by_tag: effective_group_by_tag };
+    (common_cfg, target_cfg, template_dir)
 }
 
 pub(crate) fn resolve_python_config(

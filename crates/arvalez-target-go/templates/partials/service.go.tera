@@ -1,5 +1,9 @@
 type {{ service.struct_name }} struct {
-    client *Client
+	client *Client
 }
-
-{{ service.methods_block }}
+{% for op in service.operations %}
+{%- set receiver_name = "s" %}
+{%- set receiver_type = service.struct_name %}
+{%- set client_expression = "s.client" %}
+{% include "partials/client_method.go.tera" %}
+{% endfor %}

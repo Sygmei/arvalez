@@ -1,0 +1,4 @@
+package {{ package_name }}
+{% for model in models %}
+{% include "partials/model_struct.go.tera" %}
+{% endfor %}

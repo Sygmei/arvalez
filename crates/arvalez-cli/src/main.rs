@@ -364,7 +364,7 @@ fn main() -> Result<()> {
                     output_version.clone(),
                 );
                 let files = timing_collector
-                    .measure_result("go_generate", || generate_go_package(&ir, &go_config))?;
+                    .measure_result("go_generate", || generate_go_package(&ir, go_config.2.as_deref(), &go_config.0, &go_config.1))?;
                 let output = config_file
                     .target
                     .go
@@ -480,7 +480,7 @@ fn main() -> Result<()> {
                 output_version,
             );
             let files = timing_collector
-                .measure_result("go_generate", || generate_go_package(&ir, &go_config))?;
+                .measure_result("go_generate", || generate_go_package(&ir, go_config.2.as_deref(), &go_config.0, &go_config.1))?;
             timing_collector.measure_result("go_write", || write_go_package(&output, &files))?;
             eprintln!("generated {} files into {}", files.len(), output.display());
             timing_collector.print();

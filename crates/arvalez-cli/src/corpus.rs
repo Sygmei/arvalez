@@ -18,7 +18,7 @@ use arvalez_openapi::{
     load_openapi_to_ir_with_options, normalize_diagnostic_feature,
 };
 use arvalez_target_core::CommonConfig as PythonCommonConfig;
-use arvalez_target_go::{GoPackageConfig, generate_go_package, write_go_package};
+use arvalez_target_go::{generate_go_package, write_go_package};
 use arvalez_target_nushell::{
     NushellPackageConfig, generate_nushell_package, write_nushell_package,
 };
@@ -565,9 +565,9 @@ fn run_go_corpus_target(
     ir: &CoreIr,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    config: &GoPackageConfig,
+    config: &(arvalez_target_core::CommonConfig, arvalez_target_go::TargetConfig, Option<std::path::PathBuf>),
 ) -> CorpusTargetResult {
-    match generate_go_package(ir, config) {
+    match generate_go_package(ir, config.2.as_deref(), &config.0, &config.1) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,
