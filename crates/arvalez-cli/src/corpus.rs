@@ -20,7 +20,7 @@ use arvalez_openapi::{
 use arvalez_target_go::{GoPackageConfig, generate_go_package, write_go_package};
 use arvalez_target_python::{PythonPackageConfig, generate_python_package, write_python_package};
 use arvalez_target_typescript::{
-    TypeScriptPackageConfig, generate_typescript_package, write_typescript_package,
+    TargetConfig as TypeScriptTargetConfig, generate as generate_typescript, write_package as write_typescript_package,
 };
 use arvalez_target_nushell::{NushellPackageConfig, generate_nushell_package, write_nushell_package};
 use serde::{Deserialize, Serialize};
@@ -334,7 +334,6 @@ pub(crate) fn run_corpus_spec_inline(
             resolve_typescript_config(
                 config_file,
                 None,
-                None,
                 false,
                 options.output_version.clone(),
             )
@@ -565,9 +564,10 @@ fn run_typescript_corpus_target(
     ir: &CoreIr,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    config: &TypeScriptPackageConfig,
+    config: &(arvalez_target_core::CommonConfig, TypeScriptTargetConfig),
 ) -> CorpusTargetResult {
-    match generate_typescript_package(ir, config) {
+    let (common, ts_config) = config;
+    match generate_typescript(ir, None, common, ts_config) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,

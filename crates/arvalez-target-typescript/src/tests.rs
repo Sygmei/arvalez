@@ -1,10 +1,18 @@
 use std::fs;
 
 use arvalez_ir::{Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody, Response, TypeRef};
+use arvalez_target_core::CommonConfig;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-use crate::{TypeScriptPackageConfig, generate_typescript_package};
+use crate::{TargetConfig, generate};
+
+fn common(package_name: &str) -> CommonConfig {
+    CommonConfig {
+        package_name: package_name.to_owned(),
+        version: "0.1.0".into(),
+    }
+}
 
 fn sample_ir() -> CoreIr {
     CoreIr {
@@ -69,7 +77,7 @@ fn sample_ir() -> CoreIr {
 
 #[test]
 fn renders_basic_typescript_package() {
-    let files = generate_typescript_package(&sample_ir(), &TypeScriptPackageConfig::new("@demo/client"))
+    let files = generate(&sample_ir(), None, &common("@demo/client"), &TargetConfig::default())
         .expect("package should render");
 
     let package_json = files
@@ -164,7 +172,7 @@ fn renders_aliases_and_enums_as_typescript_types() {
         ..Default::default()
     };
 
-    let files = generate_typescript_package(&ir, &TypeScriptPackageConfig::new("@demo/client"))
+    let files = generate(&ir, None, &common("@demo/client"), &TargetConfig::default())
         .expect("package should render");
     let models = files
         .iter()
@@ -177,9 +185,11 @@ fn renders_aliases_and_enums_as_typescript_types() {
 
 #[test]
 fn groups_operations_by_tag_when_enabled() {
-    let files = generate_typescript_package(
+    let files = generate(
         &sample_ir(),
-        &TypeScriptPackageConfig::new("@demo/client").with_group_by_tag(true),
+        None,
+        &common("@demo/client"),
+        &TargetConfig { group_by_tag: true },
     )
     .expect("package should render");
     let client = files
@@ -211,11 +221,11 @@ fn supports_selective_template_overrides() {
     )
     .expect("override template");
 
-    let files = generate_typescript_package(
+    let files = generate(
         &sample_ir(),
-        &TypeScriptPackageConfig::new("@demo/client")
-            .with_group_by_tag(true)
-            .with_template_dir(Some(tempdir.path().to_path_buf())),
+        Some(tempdir.path()),
+        &common("@demo/client"),
+        &TargetConfig { group_by_tag: true },
     )
     .expect("package should render");
     let client = files

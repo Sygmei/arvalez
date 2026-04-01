@@ -20,7 +20,10 @@ use arvalez_target_pythonmini::{
 use arvalez_target_pythonmini::{
     dump_erasers as dump_pythonmini_erasers, dump_templates as dump_pythonmini_templates,
 };
-use arvalez_target_typescript::{generate_typescript_package, write_typescript_package};
+use arvalez_target_typescript::{
+    generate as generate_typescript, write_package as write_typescript_package,
+    dump_templates as dump_typescript_templates, dump_erasers as dump_typescript_erasers,
+};
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{
     load_optional_config, resolve_go_config, resolve_nushell_config, resolve_output_root,
@@ -36,12 +39,14 @@ use generate::{
 #[derive(Clone, ValueEnum)]
 enum DumpTarget {
     PythonMini,
+    Typescript,
 }
 
 impl DumpTarget {
     fn slug(&self) -> &'static str {
         match self {
             DumpTarget::PythonMini => "python-mini",
+            DumpTarget::Typescript => "typescript",
         }
     }
 }
@@ -371,15 +376,15 @@ fn main() -> Result<()> {
             }
 
             if typescript_enabled {
-                let typescript_config = resolve_typescript_config(
+                let effective_template_dir = config_file.output.typescript.template_dir.clone();
+                let (common, ts_config) = resolve_typescript_config(
                     &config_file,
-                    None,
                     None,
                     false,
                     output_version.clone(),
                 );
                 let files = timing_collector.measure_result("typescript_generate", || {
-                    generate_typescript_package(&ir, &typescript_config)
+                    generate_typescript(&ir, effective_template_dir.as_deref(), &common, &ts_config)
                 })?;
                 let output = output_root.join("typescript-client");
                 timing_collector.measure_result("typescript_write", || {
@@ -500,15 +505,16 @@ fn main() -> Result<()> {
                 output_directory,
                 "typescript-client",
             );
-            let typescript_config = resolve_typescript_config(
+            let effective_template_dir = template_dir
+                .or(config_file.output.typescript.template_dir.clone());
+            let (common, ts_config) = resolve_typescript_config(
                 &config_file,
                 package_name,
-                template_dir,
                 group_by_tag,
                 output_version,
             );
             let files = timing_collector.measure_result("typescript_generate", || {
-                generate_typescript_package(&ir, &typescript_config)
+                generate_typescript(&ir, effective_template_dir.as_deref(), &common, &ts_config)
             })?;
             timing_collector.measure_result("typescript_write", || {
                 write_typescript_package(&output, &files)
@@ -590,6 +596,7 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|| PathBuf::from(format!("templates/{}", target.slug())));
             match target {
                 DumpTarget::PythonMini => dump_pythonmini_templates(&dir)?,
+                DumpTarget::Typescript => dump_typescript_templates(&dir)?,
             }
             eprintln!("dumped templates into {}", dir.display());
         }
@@ -601,6 +608,7 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|| PathBuf::from(format!("templates/{}", target.slug())));
             match target {
                 DumpTarget::PythonMini => dump_pythonmini_erasers(&dir)?,
+                DumpTarget::Typescript => dump_typescript_erasers(&dir)?,
             }
             eprintln!("dumped erasers into {}", dir.display());
         }

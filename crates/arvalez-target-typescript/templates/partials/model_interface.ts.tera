@@ -1,11 +1,12 @@
-{% if model.is_enum -%}
-export type {{ model.type_name }} = {{ model.enum_expression }};
-{% elif model.is_alias -%}
-export type {{ model.type_name }} = {{ model.alias_expression }};
-{% else -%}
-export interface {{ model.type_name }} {
+{%- set type_name = model.name | ts_type_name -%}
+{%- if model.attributes.enum_values -%}
+export type {{ type_name }} = {{ model.attributes.enum_values | ts_enum_expression }};
+{%- elif model.attributes.alias_type_ref -%}
+export type {{ type_name }} = {{ model.attributes.alias_type_ref | ts_type }}{% if model.attributes.alias_nullable %} | null{% endif %};
+{%- else -%}
+export interface {{ type_name }} {
 {%- for field in model.fields %}
-  {{ field.name }}{% if field.optional %}?{% endif %}: {{ field.ts_type }};
+  {{ field.name | ts_property }}{% if field.optional %}?{% endif %}: {{ field.type_ref | ts_type }}{% if field.nullable %} | null{% endif %};
 {%- endfor %}
 }
-{% endif %}
+{%- endif %}
