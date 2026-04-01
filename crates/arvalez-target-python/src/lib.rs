@@ -157,7 +157,7 @@ pub(crate) fn assemble_python_files(
     erased_templates: &[String],
 ) -> Result<Vec<GeneratedFile>> {
     let package_dir = PathBuf::from("src").join(&config.package_name);
-    let package_context = PackageTemplateContext::from_ir(ir, config, tera)?;
+    let package_context = PackageTemplateContext::from_ir(ir, config);
     let mut template_context = TeraContext::new();
     template_context.insert("package", &package_context);
 

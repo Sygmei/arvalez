@@ -5,4 +5,5 @@ from typing import Any, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
-{{ package.model_blocks | join(sep="\n\n") | safe }}
+{% for model in package.models %}{% include "partials/model_class.py.tera" %}
+{% endfor %}
