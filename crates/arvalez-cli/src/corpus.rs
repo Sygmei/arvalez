@@ -22,7 +22,7 @@ use arvalez_target_python::{PythonPackageConfig, generate_python_package, write_
 use arvalez_target_typescript::{
     TypeScriptPackageConfig, generate_typescript_package, write_typescript_package,
 };
-use arvalez_target_nushell::{NushellPackageConfig, generate_nushell_package, write_nushell_package};
+use arvalez_target_nushell::{generate as generate_nushell_package, write_package as write_nushell_package, TargetConfig as NushellTargetConfig};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
@@ -370,11 +370,13 @@ pub(crate) fn run_corpus_spec_inline(
                     typescript_config,
                 ));
             }
-            if let Some(nushell_config) = nushell_config.as_ref() {
+            if let Some((tpl_dir, common, nushell_config)) = nushell_config.as_ref() {
                 targets.push(run_nushell_corpus_target(
                     &ir,
                     relative_spec,
                     options,
+                    tpl_dir.as_deref(),
+                    common,
                     nushell_config,
                 ));
             }
@@ -590,9 +592,11 @@ fn run_nushell_corpus_target(
     ir: &CoreIr,
     relative_spec: &str,
     options: &CorpusTestOptions,
-    config: &NushellPackageConfig,
+    template_dir: Option<&std::path::Path>,
+    common: &arvalez_target_core::CommonConfig,
+    config: &NushellTargetConfig,
 ) -> CorpusTargetResult {
-    match generate_nushell_package(ir, config) {
+    match generate_nushell_package(ir, template_dir, common, config) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,

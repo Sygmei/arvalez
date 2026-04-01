@@ -167,7 +167,6 @@ dependencies = [
  "arvalez-target-core",
  "serde",
  "serde_json",
- "tempfile",
  "tera",
 ]
 

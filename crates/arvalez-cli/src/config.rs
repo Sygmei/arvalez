@@ -4,10 +4,11 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use arvalez_target_core::CommonConfig;
 use arvalez_target_go::GoPackageConfig;
+use arvalez_target_nushell::TargetConfig as NushellTargetConfig;
 use arvalez_target_python::PythonPackageConfig;
 use arvalez_target_typescript::TypeScriptPackageConfig;
-use arvalez_target_nushell::NushellPackageConfig;
 use serde::Deserialize;
 
 #[derive(Debug, Default, Deserialize)]
@@ -67,7 +68,7 @@ pub(crate) struct TypeScriptConfig {
 pub(crate) struct NushellConfig {
     #[serde(default)]
     pub(crate) disabled: bool,
-    pub(crate) module_name: Option<String>,
+    pub(crate) package_name: Option<String>,
     pub(crate) version: Option<String>,
     pub(crate) template_dir: Option<PathBuf>,
     pub(crate) default_base_url: Option<String>,
@@ -200,14 +201,14 @@ pub(crate) fn resolve_typescript_config(
 
 pub(crate) fn resolve_nushell_config(
     config_file: &AppConfig,
-    module_name: Option<String>,
+    package_name: Option<String>,
     template_dir: Option<PathBuf>,
     default_base_url: Option<String>,
     group_by_tag: bool,
     output_version: Option<String>,
-) -> NushellPackageConfig {
-    let module_name = module_name
-        .or(config_file.output.nushell.module_name.clone())
+) -> (Option<PathBuf>, CommonConfig, NushellTargetConfig) {
+    let package_name = package_name
+        .or(config_file.output.nushell.package_name.clone())
         .unwrap_or_else(|| "arvalez-client".into());
     let template_dir = template_dir.or(config_file.output.nushell.template_dir.clone());
     let version = output_version
@@ -224,9 +225,7 @@ pub(crate) fn resolve_nushell_config(
             .group_by_tag
             .unwrap_or(config_file.output.group_by_tag);
 
-    NushellPackageConfig::new(module_name)
-        .with_version(version)
-        .with_template_dir(template_dir)
-        .with_default_base_url(base_url)
-        .with_group_by_tag(effective_group_by_tag)
+    let common = CommonConfig { package_name, version };
+    let config = NushellTargetConfig { default_base_url: base_url, group_by_tag: effective_group_by_tag };
+    (template_dir, common, config)
 }

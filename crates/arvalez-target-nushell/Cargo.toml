@@ -17,4 +17,3 @@ serde_json.workspace = true
 tera.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
