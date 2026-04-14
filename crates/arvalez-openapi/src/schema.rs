@@ -258,6 +258,9 @@ pub(crate) fn schema_runtime_attributes(schema: &Schema) -> Attributes {
     {
         attributes.insert("description".into(), Value::String(description.to_owned()));
     }
+    if let Some(format) = &schema.format {
+        attributes.insert("format".into(), Value::String(format.clone()));
+    }
     if let Some(content_encoding) = schema
         .extra_keywords
         .get("contentEncoding")

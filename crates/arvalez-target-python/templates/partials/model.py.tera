@@ -12,7 +12,7 @@ class {{ class_name }}(str, Enum):
 {%- endfor %}
 
 {%- elif model.attributes.alias_type_ref %}
-{%- set alias_expr = model.attributes.alias_type_ref | py_type %}
+{%- set alias_expr = model.attributes.alias_type_ref | py_type(attributes=model.attributes) %}
 {%- if model.attributes.alias_nullable %}
 {%- set alias_expr = alias_expr ~ " | None" %}
 {%- endif %}
@@ -26,7 +26,7 @@ class {{ class_name }}(BaseModel):
 {%- set py_name = field.name | py_id %}
 {%- set is_optional = field.optional or field.nullable %}
 {%- set needs_alias = field.name != py_name %}
-    {{ py_name }}: {{ field.type_ref | py_type }}{% if is_optional %} | None{% endif %}{% if needs_alias %} = Field({% if is_optional %}default=None, {% endif %}alias="{{ field.name }}"){% elif is_optional %} = None{% endif %}
+    {{ py_name }}: {{ field.type_ref | py_type(attributes=field.attributes) }}{% if is_optional %} | None{% endif %}{% if needs_alias %} = Field({% if is_optional %}default=None, {% endif %}alias="{{ field.name }}"){% elif is_optional %} = None{% endif %}
 
 {%- endfor %}
 {%- else %}

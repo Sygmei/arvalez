@@ -1220,15 +1220,17 @@ impl OpenApiImporter {
             ))));
         }
 
-        if let Some(type_ref) = infer_format_only_type(schema.format.as_deref()) {
-            return Ok(Some(ImportedType::plain(type_ref)));
-        }
+        if schema.schema_type.is_none() {
+            if let Some(type_ref) = infer_format_only_type(schema.format.as_deref()) {
+                return Ok(Some(ImportedType::plain(type_ref)));
+            }
 
-        // Format present but unrecognized by type inference (e.g. a human-readable
-        // sentence used as the format value). Treat the schema as unconstrained
-        // rather than failing with an unsupported-shape error.
-        if schema.format.is_some() {
-            return Ok(Some(ImportedType::plain(TypeRef::primitive("any"))));
+            // Format present but unrecognized by type inference (e.g. a human-readable
+            // sentence used as the format value). Treat the schema as unconstrained
+            // rather than failing with an unsupported-shape error.
+            if schema.format.is_some() {
+                return Ok(Some(ImportedType::plain(TypeRef::primitive("any"))));
+            }
         }
 
         Ok(None)

@@ -2249,3 +2249,56 @@ components:
             .expect("score field should exist");
         assert!(matches!(&score_field.type_ref, t if format!("{t:?}").contains("number")));
     }
+
+#[test]
+fn preserves_explicit_string_type_for_uuid4_parameters() {
+    let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {
+    "/widgets/{widget_id}": {
+      "get": {
+        "operationId": "get_widget",
+        "parameters": [
+          {
+            "name": "widget_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid4"
+            }
+          }
+        ],
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    }
+  }
+}
+"##;
+
+    let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
+    let result = OpenApiImporter::new(
+        document,
+        json_test_source(spec),
+        LoadOpenApiOptions::default(),
+    )
+    .build_ir()
+    .expect("uuid4 path parameter should remain typed as string");
+
+    let operation = result
+        .ir
+        .operations
+        .iter()
+        .find(|operation| operation.name == "get_widget")
+        .expect("operation should exist");
+    let parameter = &operation.params[0];
+
+    assert_eq!(parameter.type_ref, TypeRef::primitive("string"));
+    assert_eq!(
+        parameter.attributes.get("format"),
+        Some(&Value::String("uuid4".into()))
+    );
+}

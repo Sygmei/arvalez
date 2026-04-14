@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, TypeAlias
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, UUID4
 
 {% for model in models %}
 {% include "partials/model.py.tera" %}

@@ -16,6 +16,15 @@ fn make_package(
     template_dir: Option<std::path::PathBuf>,
     target: TargetConfig,
 ) -> anyhow::Result<Vec<GeneratedFile>> {
+    make_package_from_ir(sample_ir(), package_name, template_dir, target)
+}
+
+fn make_package_from_ir(
+    ir: CoreIr,
+    package_name: &str,
+    template_dir: Option<std::path::PathBuf>,
+    target: TargetConfig,
+) -> anyhow::Result<Vec<GeneratedFile>> {
     let common = CommonConfig {
         package: arvalez_target_core::PackageConfig {
             name: package_name.into(),
@@ -23,7 +32,7 @@ fn make_package(
             description: None,
         },
     };
-    generate(&sample_ir(), template_dir.as_deref(), &common, &target)
+    generate(&ir, template_dir.as_deref(), &common, &target)
 }
 
 fn sample_ir() -> arvalez_ir::CoreIr {
@@ -345,4 +354,114 @@ fn erases_default_template_with_tilde_prefix() {
     assert!(files.iter().any(|f| f.path.ends_with("README.md")));
     assert!(files.iter().any(|f| f.path.ends_with("client.py")));
     assert!(files.iter().any(|f| f.path.ends_with("models.py")));
+}
+
+#[test]
+fn renders_uuid_annotations_for_models_and_client_inputs() {
+    let ir = CoreIr {
+        models: vec![arvalez_ir::Model {
+            id: "model.widget".into(),
+            name: "Widget".into(),
+            fields: vec![
+                Field {
+                    name: "id".into(),
+                    type_ref: TypeRef::primitive("string"),
+                    optional: false,
+                    nullable: false,
+                    attributes: Attributes::from([(
+                        "format".into(),
+                        Value::String("uuid4".into()),
+                    )]),
+                },
+                Field {
+                    name: "legacy_id".into(),
+                    type_ref: TypeRef::primitive("string"),
+                    optional: false,
+                    nullable: false,
+                    attributes: Attributes::from([(
+                        "format".into(),
+                        Value::String("uuid".into()),
+                    )]),
+                },
+            ],
+            attributes: Attributes::default(),
+            source: None,
+        }],
+        operations: vec![
+            Operation {
+                id: "operation.get_widget".into(),
+                name: "get_widget".into(),
+                method: HttpMethod::Get,
+                path: "/widgets/{widget_id}".into(),
+                params: vec![Parameter {
+                    name: "widget_id".into(),
+                    location: ParameterLocation::Path,
+                    type_ref: TypeRef::primitive("string"),
+                    required: true,
+                    attributes: Attributes::from([(
+                        "format".into(),
+                        Value::String("uuid4".into()),
+                    )]),
+                }],
+                request_body: None,
+                responses: vec![Response {
+                    status: "200".into(),
+                    media_type: Some("application/json".into()),
+                    type_ref: Some(TypeRef::primitive("string")),
+                    attributes: Attributes::from([(
+                        "format".into(),
+                        Value::String("uuid4".into()),
+                    )]),
+                }],
+                attributes: Attributes::default(),
+                source: None,
+            },
+            Operation {
+                id: "operation.create_widget".into(),
+                name: "create_widget".into(),
+                method: HttpMethod::Post,
+                path: "/widgets".into(),
+                params: Vec::new(),
+                request_body: Some(RequestBody {
+                    required: true,
+                    media_type: "application/json".into(),
+                    type_ref: Some(TypeRef::primitive("string")),
+                    attributes: Attributes::from([(
+                        "format".into(),
+                        Value::String("uuid4".into()),
+                    )]),
+                }),
+                responses: vec![Response {
+                    status: "200".into(),
+                    media_type: Some("application/json".into()),
+                    type_ref: Some(TypeRef::named("Widget")),
+                    attributes: Attributes::default(),
+                }],
+                attributes: Attributes::default(),
+                source: None,
+            },
+        ],
+        ..Default::default()
+    };
+
+    let files = make_package_from_ir(ir, "demo_client", None, TargetConfig::default())
+        .expect("package should render");
+    let client = files
+        .iter()
+        .find(|file| file.path.ends_with("client.py"))
+        .expect("client.py");
+    let models = files
+        .iter()
+        .find(|file| file.path.ends_with("models.py"))
+        .expect("models.py");
+
+    assert!(models.contents.contains("from uuid import UUID"));
+    assert!(models.contents.contains("from pydantic import BaseModel, ConfigDict, Field, UUID4"));
+    assert!(models.contents.contains("id: UUID4"));
+    assert!(models.contents.contains("legacy_id: UUID"));
+
+    assert!(client.contents.contains("from uuid import UUID"));
+    assert!(client.contents.contains("widget_id: UUID | str"));
+    assert!(client.contents.contains("def get_widget(self, widget_id: UUID | str, request_options: RequestOptions | None = None) -> UUID4:"));
+    assert!(client.contents.contains("def create_widget(self, body: UUID | str, request_options: RequestOptions | None = None) -> models.Widget:"));
 }

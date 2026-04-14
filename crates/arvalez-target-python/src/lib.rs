@@ -77,10 +77,22 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 
 pub fn register_filters(tera: &mut Tera) {
     // {{ type_ref | py_type }} — TypeRef JSON → Python type annotation (models context)
-    // {{ type_ref | py_type(context="client") }} — adds "models." prefix for named types
+    // {{ type_ref | py_type(context="client_input") }} — client input annotation
+    // {{ type_ref | py_type(context="client_output") }} — client output annotation
     tera.register_filter("py_type", |v: &Value, args: &HashMap<String, Value>| {
-        let client_ctx = args.get("context").and_then(Value::as_str) == Some("client");
-        Ok(Value::String(type_ref_to_py(v, client_ctx)))
+        let context = args
+            .get("context")
+            .and_then(Value::as_str)
+            .unwrap_or("model");
+        let format = args
+            .get("format")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                args.get("attributes")
+                    .and_then(|attributes| attributes.get("format"))
+                    .and_then(Value::as_str)
+            });
+        Ok(Value::String(type_ref_to_py(v, context, format)))
     });
 
     // {{ "someIdentifier" | py_id }} — string → snake_case Python identifier
@@ -189,7 +201,11 @@ pub fn register_filters(tera: &mut Tera) {
         let result = match success {
             Some(r) => match r.get("type_ref").filter(|v| !v.is_null()) {
                 Some(type_ref) => {
-                    let annotation = type_ref_to_py(type_ref, true);
+                    let format = r
+                        .get("attributes")
+                        .and_then(|a| a.get("format"))
+                        .and_then(Value::as_str);
+                    let annotation = type_ref_to_py(type_ref, "client_output", format);
                     let content_encoding = r
                         .get("attributes")
                         .and_then(|a| a.get("content_encoding"))
@@ -222,10 +238,21 @@ pub fn register_filters(tera: &mut Tera) {
 
 // ── TypeRef → Python type ─────────────────────────────────────────────────────
 
-fn type_ref_to_py(v: &Value, client_context: bool) -> String {
+fn type_ref_to_py(v: &Value, context: &str, format: Option<&str>) -> String {
+    let client_context = matches!(context, "client" | "client_input" | "client_output");
     match v.get("kind").and_then(Value::as_str) {
         Some("primitive") => match v["name"].as_str().unwrap_or("any") {
-            "string" => "str",
+            "string" => match format {
+                Some("uuid4") => match context {
+                    "client" | "client_input" => "UUID | str",
+                    _ => "UUID4",
+                },
+                Some("uuid") => match context {
+                    "client" | "client_input" => "UUID | str",
+                    _ => "UUID",
+                },
+                _ => "str",
+            },
             "integer" => "int",
             "number" => "float",
             "boolean" => "bool",
@@ -242,13 +269,13 @@ fn type_ref_to_py(v: &Value, client_context: bool) -> String {
                 name
             }
         }
-        Some("array") => format!("list[{}]", type_ref_to_py(&v["item"], client_context)),
-        Some("map") => format!("dict[str, {}]", type_ref_to_py(&v["value"], client_context)),
+        Some("array") => format!("list[{}]", type_ref_to_py(&v["item"], context, None)),
+        Some("map") => format!("dict[str, {}]", type_ref_to_py(&v["value"], context, None)),
         Some("union") => v["variants"]
             .as_array()
             .map(|vs| {
                 vs.iter()
-                    .map(|v| type_ref_to_py(v, client_context))
+                    .map(|v| type_ref_to_py(v, context, None))
                     .collect::<Vec<_>>()
                     .join(" | ")
             })
