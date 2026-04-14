@@ -1,4 +1,24 @@
+use crate::config::{AppConfig, normalize_python_package_name, resolve_python_config};
 use crate::corpus::classify_failure;
+
+#[test]
+fn normalize_python_package_name_replaces_hyphens() {
+    assert_eq!(normalize_python_package_name("arvalez-client"), "arvalez_client");
+}
+
+#[test]
+fn resolve_python_config_normalizes_module_name() {
+    let config = AppConfig::default();
+    let (common, _, _) = resolve_python_config(
+        &config,
+        Some("arvalez-client".into()),
+        None,
+        false,
+        Some("0.1.0".into()),
+    );
+
+    assert_eq!(common.package.name, "arvalez_client");
+}
 
 #[test]
 fn classifies_empty_request_body_content() {

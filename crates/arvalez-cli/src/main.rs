@@ -622,7 +622,9 @@ fn main() -> Result<()> {
             let output = output_directory.unwrap_or_else(|| PathBuf::from("pythonmini-client"));
             let common = CommonConfig {
                 package: arvalez_target_core::PackageConfig {
-                    name: package_name.unwrap_or_else(|| "client".into()),
+                    name: config::normalize_python_package_name(
+                        package_name.as_deref().unwrap_or("client"),
+                    ),
                     version: version.unwrap_or_else(|| "0.1.0".into()),
                     description: None,
                 },

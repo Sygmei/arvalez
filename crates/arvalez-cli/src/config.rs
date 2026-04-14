@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use arvalez_target_core::{CommonConfig, PackageConfig};
 use arvalez_target_go::TargetConfig as GoGenConfig;
 use arvalez_target_nushell::TargetConfig as NushellTargetConfig;
+use arvalez_target_python::sanitize_identifier as sanitize_python_identifier;
 use arvalez_target_python::TargetConfig as PythonTargetConfig;
 use arvalez_target_typescript::TargetConfig as TypeScriptTargetConfig;
 use serde::Deserialize;
@@ -229,6 +230,10 @@ pub(crate) fn resolve_target_output_directory(
     )
 }
 
+pub(crate) fn normalize_python_package_name(package_name: &str) -> String {
+    sanitize_python_identifier(package_name)
+}
+
 // ── Per-target config resolvers ───────────────────────────────────────────────
 
 pub(crate) fn resolve_go_config(
@@ -287,7 +292,11 @@ pub(crate) fn resolve_python_config(
     let target = &config_file.target.python;
     let common = &config_file.common;
 
-    let package_name = target.resolve_package_name(package_name, &common.package, "arvalez_client");
+    let package_name = normalize_python_package_name(&target.resolve_package_name(
+        package_name,
+        &common.package,
+        "arvalez_client",
+    ));
     let template_dir =
         target.resolve_template_dir(template_dir, config_file.common.template_dir.clone());
     let version = target.resolve_version(output_version, &common.package);
