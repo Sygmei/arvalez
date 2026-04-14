@@ -50,6 +50,66 @@ jobs:
             echo "publish_latest=false" >> "$GITHUB_OUTPUT"
           fi
 
+  publish-cli-binaries:
+    runs-on: ${{ matrix.runner }}
+    needs: validate-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_name: arvalez-cli-linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset_name: arvalez-cli-linux-arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            asset_name: arvalez-cli-macos-x86_64
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            asset_name: arvalez-cli-macos-arm64
+          - runner: windows-2022
+            target: i686-pc-windows-msvc
+            asset_name: arvalez-cli-windows-x86.exe
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            asset_name: arvalez-cli-windows-arm64.exe
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        id: package
+        shell: pwsh
+        run: |
+          $binaryName = "arvalez-cli"
+          if ($env:RUNNER_OS -eq "Windows") {
+            $binaryName += ".exe"
+          }
+
+          cargo build --locked --release -p arvalez-cli --target "${{ matrix.target }}"
+
+          $sourcePath = Join-Path "target/${{ matrix.target }}/release" $binaryName
+          $assetPath = Join-Path $env:RUNNER_TEMP "${{ matrix.asset_name }}"
+          Copy-Item -Path $sourcePath -Destination $assetPath
+          $resolvedAssetPath = (Resolve-Path $assetPath).Path
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "asset_path=$resolvedAssetPath"
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" "${{ steps.package.outputs.asset_path }}" --clobber
+
   publish-docker-amd64:
     runs-on: ubuntu-latest
     needs: validate-release

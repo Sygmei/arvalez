@@ -212,6 +212,7 @@ docker run --rm -v "$PWD:/work" -w /work arvalez generate-python --openapi opena
 Publishing a GitHub release triggers `.github/workflows/release.yml`, which:
 
 - checks that the release tag matches the workspace version in `Cargo.toml`
+- uploads prebuilt `arvalez-cli` binaries for Windows, macOS, and Linux on x86 and arm64 targets
 - builds and pushes the multi-arch `arvalez/cli` image to Docker Hub
 - publishes the Rust crates to crates.io in dependency order
 
