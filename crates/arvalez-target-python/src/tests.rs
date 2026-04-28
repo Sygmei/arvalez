@@ -211,6 +211,16 @@ fn renders_basic_python_package() {
     assert!(
         client
             .contents
+            .contains("return body.model_dump(mode=\"json\", by_alias=True, exclude_unset=True)")
+    );
+    assert!(
+        client
+            .contents
+            .contains("return body.model_dump(by_alias=True, exclude_unset=True)")
+    );
+    assert!(
+        client
+            .contents
             .contains("self._handle_error(response, request_options)")
     );
     assert!(
@@ -464,4 +474,65 @@ fn renders_uuid_annotations_for_models_and_client_inputs() {
     assert!(client.contents.contains("widget_id: UUID | str"));
     assert!(client.contents.contains("def get_widget(self, widget_id: UUID | str, request_options: RequestOptions | None = None) -> UUID4:"));
     assert!(client.contents.contains("def create_widget(self, body: UUID | str, request_options: RequestOptions | None = None) -> models.Widget:"));
+}
+
+#[test]
+fn stringifies_header_values_before_passing_them_to_httpx() {
+    let ir = CoreIr {
+        operations: vec![Operation {
+            id: "operation.list_widgets".into(),
+            name: "list_widgets".into(),
+            method: HttpMethod::Get,
+            path: "/widgets".into(),
+            params: vec![
+                Parameter {
+                    name: "x-enabled".into(),
+                    location: ParameterLocation::Header,
+                    type_ref: TypeRef::primitive("boolean"),
+                    required: true,
+                    attributes: Attributes::default(),
+                },
+                Parameter {
+                    name: "x-attempts".into(),
+                    location: ParameterLocation::Header,
+                    type_ref: TypeRef::primitive("integer"),
+                    required: false,
+                    attributes: Attributes::default(),
+                },
+            ],
+            request_body: None,
+            responses: vec![Response {
+                status: "200".into(),
+                media_type: Some("application/json".into()),
+                type_ref: Some(TypeRef::primitive("string")),
+                attributes: Attributes::default(),
+            }],
+            attributes: Attributes::default(),
+            source: None,
+        }],
+        ..Default::default()
+    };
+
+    let files = make_package_from_ir(ir, "demo_client", None, TargetConfig::default())
+        .expect("package should render");
+    let client = files
+        .iter()
+        .find(|file| file.path.ends_with("client.py"))
+        .expect("client.py");
+
+    assert!(
+        client
+            .contents
+            .contains("def _stringify_header_value(value: Any) -> str:")
+    );
+    assert!(
+        client
+            .contents
+            .contains("merged_headers = cls._stringify_headers(headers)")
+    );
+    assert!(
+        client
+            .contents
+            .contains("merged_headers.update(cls._stringify_headers(request_options[\"headers\"]))")
+    );
 }

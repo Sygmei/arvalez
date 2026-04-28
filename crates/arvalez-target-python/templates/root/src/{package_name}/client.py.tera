@@ -29,6 +29,23 @@ class _BaseApiClient:
     _validate_content_encodings: bool
 
     @staticmethod
+    def _stringify_header_value(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, bytes):
+            return value.decode("latin-1")
+        return str(value)
+
+    @classmethod
+    def _stringify_headers(cls, headers: dict[str, Any] | None) -> dict[str, str]:
+        if not headers:
+            return {}
+        return {
+            name: cls._stringify_header_value(value)
+            for name, value in headers.items()
+        }
+
+    @staticmethod
     def _default_on_error(response: httpx.Response) -> None:
         response.raise_for_status()
 
@@ -69,8 +86,8 @@ class _BaseApiClient:
             return None
         if hasattr(body, "model_dump"):
             if json_mode:
-                return body.model_dump(mode="json", by_alias=True, exclude_none=True)
-            return body.model_dump(by_alias=True, exclude_none=True)
+                return body.model_dump(mode="json", by_alias=True, exclude_unset=True)
+            return body.model_dump(by_alias=True, exclude_unset=True)
         return body
 
     def _parse_response(
@@ -94,8 +111,9 @@ class _BaseApiClient:
             return payload
         return TypeAdapter(response_type).validate_python(payload)
 
-    @staticmethod
+    @classmethod
     def _apply_request_options(
+        cls,
         request_kwargs: dict[str, Any],
         request_options: RequestOptions | None,
         *,
@@ -103,13 +121,13 @@ class _BaseApiClient:
         headers: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         merged_params = dict(params or {})
-        merged_headers = dict(headers or {})
+        merged_headers = cls._stringify_headers(headers)
 
         if request_options is not None:
             if "params" in request_options:
                 merged_params.update(request_options["params"])
             if "headers" in request_options:
-                merged_headers.update(request_options["headers"])
+                merged_headers.update(cls._stringify_headers(request_options["headers"]))
             if "cookies" in request_options:
                 request_kwargs["cookies"] = dict(request_options["cookies"])
             if "auth" in request_options:

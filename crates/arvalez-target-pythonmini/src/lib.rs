@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tera::Tera;
 
+#[cfg(test)]
+mod tests;
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

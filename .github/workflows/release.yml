@@ -219,9 +219,12 @@ jobs:
           crates=(
             arvalez-ir
             arvalez-openapi
+            arvalez-target-core
             arvalez-target-go
             arvalez-target-python
             arvalez-target-typescript
+            arvalez-target-nushell
+            arvalez-target-pythonmini
             arvalez-cli
           )
 
