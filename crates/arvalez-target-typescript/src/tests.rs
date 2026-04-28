@@ -101,6 +101,26 @@ fn renders_basic_typescript_package() {
         .expect("index.ts");
 
     assert!(package_json.contents.contains("\"name\": \"@demo/client\""));
+    assert!(
+        package_json
+            .contents
+            .contains("\"types\": \"./src/index.ts\"")
+    );
+    assert!(
+        package_json
+            .contents
+            .contains("\"import\": \"./src/index.ts\"")
+    );
+    assert!(package_json.contents.contains("\"files\": [\n    \"src\"\n  ]"));
+    assert!(!package_json.contents.contains("\"main\":"));
+    assert!(!package_json.contents.contains("\"module\":"));
+    assert!(!package_json.contents.contains("\"dist/index"));
+    assert!(!package_json.contents.contains("\"prepack\":"));
+    assert!(
+        !package_json
+            .contents
+            .contains("\"typescript\": \"^5.0.0\"")
+    );
     assert!(models.contents.contains("export interface Widget"));
     assert!(models.contents.contains("count?: number;"));
     assert!(client.contents.contains("export class ApiClient"));
