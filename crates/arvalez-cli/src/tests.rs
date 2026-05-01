@@ -1,4 +1,7 @@
-use crate::config::{AppConfig, normalize_python_package_name, resolve_python_config};
+use crate::config::{
+    AppConfig, normalize_go_package_name, normalize_python_package_name, resolve_go_config,
+    resolve_python_config,
+};
 use crate::corpus::classify_failure;
 
 #[test]
@@ -18,6 +21,26 @@ fn resolve_python_config_normalizes_module_name() {
     );
 
     assert_eq!(common.package.name, "arvalez_client");
+}
+
+#[test]
+fn normalize_go_package_name_replaces_hyphens() {
+    assert_eq!(normalize_go_package_name("arvalez-client"), "arvalezclient");
+}
+
+#[test]
+fn resolve_go_config_normalizes_explicit_package_name() {
+    let config = AppConfig::default();
+    let (common, _, _) = resolve_go_config(
+        &config,
+        Some("github.com/acme/arvalez-client".into()),
+        Some("arvalez-client".into()),
+        None,
+        false,
+        Some("0.1.0".into()),
+    );
+
+    assert_eq!(common.package.name, "arvalezclient");
 }
 
 #[test]

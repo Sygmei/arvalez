@@ -234,6 +234,75 @@ pub(crate) fn normalize_python_package_name(package_name: &str) -> String {
     sanitize_python_identifier(package_name)
 }
 
+pub(crate) fn normalize_go_package_name(package_name: &str) -> String {
+    let mut words = Vec::new();
+    let mut current = String::new();
+
+    for ch in package_name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if ch.is_uppercase() && !current.is_empty() {
+                words.push(current.clone());
+                current.clear();
+            }
+            current.push(ch.to_ascii_lowercase());
+        } else if !current.is_empty() {
+            words.push(current.clone());
+            current.clear();
+        }
+    }
+
+    if !current.is_empty() {
+        words.push(current);
+    }
+
+    let mut normalized = words.join("");
+    if normalized.is_empty() {
+        normalized = "client".into();
+    }
+    if normalized
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_digit())
+    {
+        normalized.insert(0, 'x');
+    }
+    if is_go_keyword(&normalized) {
+        normalized.push_str("pkg");
+    }
+    normalized
+}
+
+fn is_go_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "break"
+            | "default"
+            | "func"
+            | "interface"
+            | "select"
+            | "case"
+            | "defer"
+            | "go"
+            | "map"
+            | "struct"
+            | "chan"
+            | "else"
+            | "goto"
+            | "package"
+            | "switch"
+            | "const"
+            | "fallthrough"
+            | "if"
+            | "range"
+            | "type"
+            | "continue"
+            | "for"
+            | "import"
+            | "return"
+            | "var"
+    )
+}
+
 // ── Per-target config resolvers ───────────────────────────────────────────────
 
 pub(crate) fn resolve_go_config(
@@ -263,16 +332,14 @@ pub(crate) fn resolve_go_config(
 
     // Derive package_name from module_path if not explicitly set.
     let package_name = if resolved_package_name.is_empty() {
-        module_path
+        normalize_go_package_name(
+            module_path
             .rsplit('/')
             .next()
-            .map(|s| {
-                let clean: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-                if clean.is_empty() { "client".into() } else { clean.to_ascii_lowercase() }
-            })
-            .unwrap_or_else(|| "client".into())
+            .unwrap_or("client"),
+        )
     } else {
-        resolved_package_name
+        normalize_go_package_name(&resolved_package_name)
     };
 
     let common_cfg = arvalez_target_core::CommonConfig {
