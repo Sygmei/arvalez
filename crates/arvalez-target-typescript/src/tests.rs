@@ -95,6 +95,10 @@ fn renders_basic_typescript_package() {
         .iter()
         .find(|file| file.path.ends_with("client.ts"))
         .expect("client.ts");
+    let utils = files
+        .iter()
+        .find(|file| file.path.ends_with("utils.ts"))
+        .expect("utils.ts");
     let index = files
         .iter()
         .find(|file| file.path.ends_with("index.ts"))
@@ -124,9 +128,11 @@ fn renders_basic_typescript_package() {
     assert!(models.contents.contains("export interface Widget"));
     assert!(models.contents.contains("count?: number;"));
     assert!(client.contents.contains("export class ApiClient"));
-    assert!(client.contents.contains("export interface RequestOptions"));
+    assert!(client.contents.contains("export type { ErrorHandler, RequestOptions } from \"./utils\";"));
+    assert!(client.contents.contains("import type { ErrorHandler, RequestOptions } from \"./utils\";"));
+    assert!(utils.contents.contains("export interface RequestOptions"));
     assert!(
-        client.contents.contains(
+        utils.contents.contains(
             "export type ErrorHandler = (response: globalThis.Response) => void | Promise<void>;"
         )
     );
@@ -138,7 +144,7 @@ fn renders_basic_typescript_package() {
             .contains("@param widgetId Unique widget identifier.")
     );
     assert!(client.contents.contains("requestOptions?: RequestOptions"));
-    assert!(client.contents.contains("onError?: ErrorHandler;"));
+    assert!(utils.contents.contains("onError?: ErrorHandler;"));
     assert!(
         client
             .contents
@@ -147,7 +153,7 @@ fn renders_basic_typescript_package() {
     assert!(
         client
             .contents
-            .contains("const query = this.mergeQuery(baseQuery, requestOptions);")
+            .contains("const query = mergeQuery(baseQuery, requestOptions);")
     );
     assert!(client.contents.contains("body?: Widget"));
     assert!(
@@ -158,7 +164,7 @@ fn renders_basic_typescript_package() {
     assert!(
         client
             .contents
-            .contains("await this.handleError(response, requestOptions);")
+            .contains("await handleError(response, this.onError, requestOptions);")
     );
     assert!(
         index

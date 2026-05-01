@@ -8,7 +8,7 @@ class {{ class_name }}(_BaseApiClient):
     ) -> None:
         self._owns_client = False
         self._client = client
-        self._on_error = on_error or self._default_on_error
+        self._on_error = on_error or default_on_error
         self._validate_content_encodings = validate_content_encodings
 {% for group in groups %}
         self.{{ group.property_name }} = {% if is_async %}{{ group.async_class_name }}{% else %}{{ group.sync_class_name }}{% endif %}(self)

@@ -1,0 +1,170 @@
+export type ErrorHandler = (response: globalThis.Response) => void | Promise<void>;
+
+export interface RequestOptions extends Omit<globalThis.RequestInit, "method" | "body" | "headers"> {
+  headers?: globalThis.HeadersInit;
+  query?: globalThis.URLSearchParams | Record<string, string | number | boolean | undefined | null>;
+  cookies?: Record<string, string>;
+  onError?: ErrorHandler;
+  validateContentEncodings?: boolean;
+}
+
+function shouldValidateContentEncodings(
+  defaultValidateContentEncodings: boolean,
+  requestOptions?: RequestOptions,
+): boolean {
+  return requestOptions?.validateContentEncodings ?? defaultValidateContentEncodings;
+}
+
+export function validateStringEncoding(
+  value: unknown,
+  encoding: string,
+  context: string,
+  defaultValidateContentEncodings: boolean,
+  requestOptions?: RequestOptions,
+): void {
+  if (!shouldValidateContentEncodings(defaultValidateContentEncodings, requestOptions) || value === undefined || value === null) {
+    return;
+  }
+  if (encoding !== "base64") {
+    return;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`${context} must be a base64 string`);
+  }
+
+  const candidate = value.trim();
+  const base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+  if (candidate.length === 0 || candidate.length % 4 !== 0 || !base64Pattern.test(candidate)) {
+    throw new Error(`${context} must be valid base64`);
+  }
+}
+
+export function mergeHeaders(
+  defaultHeaders: globalThis.HeadersInit,
+  headers: globalThis.HeadersInit | undefined,
+  requestOptions?: RequestOptions,
+): globalThis.Headers | undefined {
+  const merged = new globalThis.Headers(defaultHeaders);
+
+  if (headers) {
+    const baseHeaders = new globalThis.Headers(headers);
+    for (const [key, value] of baseHeaders.entries()) {
+      merged.set(key, value);
+    }
+  }
+
+  if (requestOptions?.headers) {
+    const overrideHeaders = new globalThis.Headers(requestOptions.headers);
+    for (const [key, value] of overrideHeaders.entries()) {
+      merged.set(key, value);
+    }
+  }
+
+  if (requestOptions?.cookies && Object.keys(requestOptions.cookies).length > 0) {
+    const cookieHeader = Object.entries(requestOptions.cookies)
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+      .join("; ");
+    if (cookieHeader.length > 0) {
+      merged.set("Cookie", cookieHeader);
+    }
+  }
+
+  return Array.from(merged.keys()).length > 0 ? merged : undefined;
+}
+
+export function mergeQuery(
+  baseQuery: globalThis.URLSearchParams | undefined,
+  requestOptions?: RequestOptions,
+): globalThis.URLSearchParams | undefined {
+  const merged = baseQuery ? new globalThis.URLSearchParams(baseQuery) : new globalThis.URLSearchParams();
+
+  if (requestOptions?.query instanceof globalThis.URLSearchParams) {
+    for (const [key, value] of requestOptions.query.entries()) {
+      merged.set(key, value);
+    }
+  } else if (requestOptions?.query) {
+    for (const [key, value] of Object.entries(requestOptions.query)) {
+      if (value !== undefined && value !== null) {
+        merged.set(key, String(value));
+      }
+    }
+  }
+
+  return Array.from(merged.keys()).length > 0 ? merged : undefined;
+}
+
+export function createRequestInit(requestOptions?: RequestOptions): globalThis.RequestInit {
+  if (!requestOptions) {
+    return {};
+  }
+
+  const { headers: _headers, query: _query, cookies: _cookies, onError: _onError, ...requestInit } = requestOptions;
+  return { ...requestInit };
+}
+
+export async function handleError(
+  response: globalThis.Response,
+  defaultOnError: ErrorHandler,
+  requestOptions?: RequestOptions,
+): Promise<void> {
+  if (!response.ok) {
+    await (requestOptions?.onError ?? defaultOnError)(response);
+  }
+}
+
+export function buildUrl(
+  baseUrl: string,
+  path: string,
+  query?: globalThis.URLSearchParams,
+): string {
+  const url = new globalThis.URL(`${baseUrl}${path}`);
+  if (query) {
+    url.search = query.toString();
+  }
+  return url.toString();
+}
+
+export async function parseResponse<T>(
+  response: globalThis.Response,
+  defaultValidateContentEncodings: boolean,
+  responseEncoding?: string,
+  requestOptions?: RequestOptions,
+): Promise<T> {
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const payload = await response.json();
+    if (responseEncoding) {
+      validateStringEncoding(payload, responseEncoding, "response body", defaultValidateContentEncodings, requestOptions);
+    }
+    return payload as T;
+  }
+
+  const payload = await response.text();
+  if (responseEncoding) {
+    validateStringEncoding(payload, responseEncoding, "response body", defaultValidateContentEncodings, requestOptions);
+  }
+  return payload as T;
+}
+
+export function toFormData(payload: Record<string, unknown>): FormData {
+  const formData = new FormData();
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item !== undefined && item !== null) {
+          formData.append(key, item as string | Blob);
+        }
+      }
+      continue;
+    }
+    formData.append(key, value as string | Blob);
+  }
+  return formData;
+}

@@ -1,164 +1,27 @@
 from __future__ import annotations
 
-import base64
-import binascii
-from typing import Any, Callable, TypedDict
+from typing import Any
 from uuid import UUID
 
 import httpx
-from pydantic import TypeAdapter
 
 import {{ package_name }}.models as models
+from {{ package_name }}.utils import (
+    ErrorHandler,
+    RequestOptions,
+    apply_request_options,
+    default_on_error,
+    handle_error,
+    parse_response,
+    serialize_body,
+    validate_string_encoding,
+)
 
-ErrorHandler = Callable[[httpx.Response], None]
-
-class RequestOptions(TypedDict, total=False):
-    params: dict[str, Any]
-    headers: dict[str, Any]
-    cookies: dict[str, Any]
-    auth: Any
-    timeout: float | httpx.Timeout | None
-    follow_redirects: bool
-    extensions: dict[str, Any]
-    extra: dict[str, Any]
-    on_error: ErrorHandler
-    validate_content_encodings: bool
 
 class _BaseApiClient:
     _on_error: ErrorHandler
     _validate_content_encodings: bool
 
-    @staticmethod
-    def _stringify_header_value(value: Any) -> str:
-        if isinstance(value, str):
-            return value
-        if isinstance(value, bytes):
-            return value.decode("latin-1")
-        return str(value)
-
-    @classmethod
-    def _stringify_headers(cls, headers: dict[str, Any] | None) -> dict[str, str]:
-        if not headers:
-            return {}
-        return {
-            name: cls._stringify_header_value(value)
-            for name, value in headers.items()
-        }
-
-    @staticmethod
-    def _default_on_error(response: httpx.Response) -> None:
-        response.raise_for_status()
-
-    def _should_validate_content_encodings(
-        self,
-        request_options: RequestOptions | None,
-    ) -> bool:
-        if request_options is not None and "validate_content_encodings" in request_options:
-            return request_options["validate_content_encodings"]
-        return self._validate_content_encodings
-
-    def _validate_string_encoding(
-        self,
-        value: Any,
-        encoding: str,
-        context: str,
-        request_options: RequestOptions | None,
-    ) -> None:
-        if not self._should_validate_content_encodings(request_options) or value is None:
-            return
-        if encoding != "base64":
-            return
-
-        candidate = value
-        if isinstance(candidate, bytes):
-            candidate = candidate.decode("ascii")
-        if not isinstance(candidate, str):
-            raise ValueError(f"{context} must be a base64 string")
-
-        try:
-            base64.b64decode(candidate, validate=True)
-        except (binascii.Error, ValueError) as error:
-            raise ValueError(f"{context} must be valid base64") from error
-
-    @staticmethod
-    def _serialize_body(body: Any, *, json_mode: bool) -> Any:
-        if body is None:
-            return None
-        if hasattr(body, "model_dump"):
-            if json_mode:
-                return body.model_dump(mode="json", by_alias=True, exclude_unset=True)
-            return body.model_dump(by_alias=True, exclude_unset=True)
-        return body
-
-    def _parse_response(
-        self,
-        response: httpx.Response,
-        response_type: Any | None = None,
-        *,
-        response_encoding: str | None = None,
-        request_options: RequestOptions | None = None,
-    ) -> Any:
-        if response.status_code == 204 or not response.content:
-            return None
-        content_type = response.headers.get("content-type", "")
-        if "application/json" in content_type:
-            payload = response.json()
-        else:
-            payload = response.text
-        if response_encoding is not None:
-            self._validate_string_encoding(payload, response_encoding, "response body", request_options)
-        if response_type is None:
-            return payload
-        return TypeAdapter(response_type).validate_python(payload)
-
-    @classmethod
-    def _apply_request_options(
-        cls,
-        request_kwargs: dict[str, Any],
-        request_options: RequestOptions | None,
-        *,
-        params: dict[str, Any] | None = None,
-        headers: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        merged_params = dict(params or {})
-        merged_headers = cls._stringify_headers(headers)
-
-        if request_options is not None:
-            if "params" in request_options:
-                merged_params.update(request_options["params"])
-            if "headers" in request_options:
-                merged_headers.update(cls._stringify_headers(request_options["headers"]))
-            if "cookies" in request_options:
-                request_kwargs["cookies"] = dict(request_options["cookies"])
-            if "auth" in request_options:
-                request_kwargs["auth"] = request_options["auth"]
-            if "timeout" in request_options:
-                request_kwargs["timeout"] = request_options["timeout"]
-            if "follow_redirects" in request_options:
-                request_kwargs["follow_redirects"] = request_options["follow_redirects"]
-            if "extensions" in request_options:
-                request_kwargs["extensions"] = dict(request_options["extensions"])
-            if "extra" in request_options:
-                request_kwargs.update(request_options["extra"])
-
-        if merged_params:
-            request_kwargs["params"] = merged_params
-        if merged_headers:
-            request_kwargs["headers"] = merged_headers
-
-        return request_kwargs
-
-    def _handle_error(
-        self,
-        response: httpx.Response,
-        request_options: RequestOptions | None,
-    ) -> None:
-        if not response.is_error:
-            return
-        on_error = self._on_error
-        if request_options is not None and "on_error" in request_options:
-            on_error = request_options["on_error"]
-        on_error(response)
 
 {% set groups = [] -%}
 {%- set flat_ops = operations -%}

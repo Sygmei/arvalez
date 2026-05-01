@@ -98,12 +98,18 @@ fn renders_basic_go_package() {
         .iter()
         .find(|file| file.path.ends_with("client.go"))
         .expect("client.go");
+    let utils = files
+        .iter()
+        .find(|file| file.path.ends_with("utils.go"))
+        .expect("utils.go");
 
     assert!(go_mod.contents.contains("module github.com/demo/client"));
     assert!(models.contents.contains("type Widget struct"));
     assert!(models.contents.contains("Count *int64 `json:\"count,omitempty\"`"));
     assert!(client.contents.contains("type ErrorHandler func(*http.Response) error"));
     assert!(client.contents.contains("type RequestOptions struct"));
+    assert!(utils.contents.contains("func defaultOnError(response *http.Response) error {"));
+    assert!(utils.contents.contains("func (c *Client) encodeMultipartBody(payload any) (io.Reader, string, error) {"));
     assert!(client.contents.contains("func (c *Client) GetWidgetRaw("));
     assert!(client.contents.contains("func (c *Client) GetWidget("));
     assert!(client.contents.contains("GetWidget parameter widgetId: Unique widget identifier."));

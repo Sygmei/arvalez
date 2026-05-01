@@ -52,6 +52,10 @@ pub const TEMPLATES: &[(&str, &str)] = &[
         include_str!("../templates/root/src/{package_name}/client.py.tera"),
     ),
     (
+        "root/src/{package_name}/utils.py.tera",
+        include_str!("../templates/root/src/{package_name}/utils.py.tera"),
+    ),
+    (
         "root/src/{package_name}/py.typed.tera",
         include_str!("../templates/root/src/{package_name}/py.typed.tera"),
     ),

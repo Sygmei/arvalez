@@ -141,6 +141,10 @@ fn renders_basic_python_package() {
         .iter()
         .find(|file| file.path.ends_with("client.py"))
         .expect("client.py");
+    let utils = files
+        .iter()
+        .find(|file| file.path.ends_with("utils.py"))
+        .expect("utils.py");
     let models = files
         .iter()
         .find(|file| file.path.ends_with("models.py"))
@@ -178,9 +182,10 @@ fn renders_basic_python_package() {
     assert!(
         client
             .contents
-            .contains("class RequestOptions(TypedDict, total=False):")
+            .contains("from demo_client.utils import (")
     );
-    assert!(client.contents.contains("on_error: ErrorHandler"));
+    assert!(utils.contents.contains("class RequestOptions(TypedDict, total=False):"));
+    assert!(utils.contents.contains("on_error: ErrorHandler"));
     assert!(
         client
             .contents
@@ -206,22 +211,22 @@ fn renders_basic_python_package() {
     assert!(
         client
             .contents
-            .contains("request_kwargs = self._apply_request_options(request_kwargs, request_options, params=None, headers=None)")
+            .contains("request_kwargs = apply_request_options(request_kwargs, request_options, params=None, headers=None)")
     );
     assert!(
-        client
+        utils
             .contents
             .contains("return body.model_dump(mode=\"json\", by_alias=True, exclude_unset=True)")
     );
     assert!(
-        client
+        utils
             .contents
             .contains("return body.model_dump(by_alias=True, exclude_unset=True)")
     );
     assert!(
         client
             .contents
-            .contains("self._handle_error(response, request_options)")
+            .contains("handle_error(response, self._on_error, request_options)")
     );
     assert!(
         client
@@ -364,6 +369,7 @@ fn erases_default_template_with_tilde_prefix() {
     assert!(files.iter().any(|f| f.path.ends_with("README.md")));
     assert!(files.iter().any(|f| f.path.ends_with("client.py")));
     assert!(files.iter().any(|f| f.path.ends_with("models.py")));
+    assert!(files.iter().any(|f| f.path.ends_with("utils.py")));
 }
 
 #[test]
@@ -515,24 +521,24 @@ fn stringifies_header_values_before_passing_them_to_httpx() {
 
     let files = make_package_from_ir(ir, "demo_client", None, TargetConfig::default())
         .expect("package should render");
-    let client = files
+    let utils = files
         .iter()
-        .find(|file| file.path.ends_with("client.py"))
-        .expect("client.py");
+        .find(|file| file.path.ends_with("utils.py"))
+        .expect("utils.py");
 
     assert!(
-        client
+        utils
             .contents
-            .contains("def _stringify_header_value(value: Any) -> str:")
+            .contains("def stringify_header_value(value: Any) -> str:")
     );
     assert!(
-        client
+        utils
             .contents
-            .contains("merged_headers = cls._stringify_headers(headers)")
+            .contains("merged_headers = stringify_headers(headers)")
     );
     assert!(
-        client
+        utils
             .contents
-            .contains("merged_headers.update(cls._stringify_headers(request_options[\"headers\"]))")
+            .contains("merged_headers.update(stringify_headers(request_options[\"headers\"]))")
     );
 }

@@ -27,16 +27,16 @@
   async {{ raw_method_name }}({{ args_sig }}): Promise<Response> {
     const path = {{ operation.path | ts_path }};
 {%- for param in path_params %}{%- if param.attributes.content_encoding %}
-    this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "path parameter `{{ param.name }}`", requestOptions);
+    validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "path parameter `{{ param.name }}`", this.validateContentEncodings, requestOptions);
 {%- endif %}{%- endfor %}
 {%- for param in query_params %}{%- if param.required and param.attributes.content_encoding %}
-    this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "query parameter `{{ param.name }}`", requestOptions);
+    validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "query parameter `{{ param.name }}`", this.validateContentEncodings, requestOptions);
 {%- endif %}{%- endfor %}
 {%- for param in header_params %}{%- if param.required and param.attributes.content_encoding %}
-    this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "header `{{ param.name }}`", requestOptions);
+    validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "header `{{ param.name }}`", this.validateContentEncodings, requestOptions);
 {%- endif %}{%- endfor %}
 {%- if operation.request_body and operation.request_body.required and operation.request_body.attributes.content_encoding %}
-    this.validateStringEncoding(body, "{{ operation.request_body.attributes.content_encoding }}", "request body", requestOptions);
+    validateStringEncoding(body, "{{ operation.request_body.attributes.content_encoding }}", "request body", this.validateContentEncodings, requestOptions);
 {%- endif %}
 {%- if query_params | length > 0 %}
     const baseQuery = new URLSearchParams();
@@ -46,25 +46,25 @@
 {%- else %}
     if ({{ param.name | ts_id }} !== undefined) {
 {%- if param.attributes.content_encoding %}
-      this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "query parameter `{{ param.name }}`", requestOptions);
+      validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "query parameter `{{ param.name }}`", this.validateContentEncodings, requestOptions);
 {%- endif %}
       baseQuery.set("{{ param.name }}", String({{ param.name | ts_id }}));
     }
 {%- endif %}
 {%- endfor %}
-    const query = this.mergeQuery(baseQuery, requestOptions);
+    const query = mergeQuery(baseQuery, requestOptions);
 {%- else %}
-    const query = this.mergeQuery(undefined, requestOptions);
+    const query = mergeQuery(undefined, requestOptions);
 {%- endif %}
 {%- if has_headers %}
-    const headers = this.createHeaders();
+    const headers = new globalThis.Headers();
 {%- for param in header_params %}
 {%- if param.required %}
     headers.set("{{ param.name }}", String({{ param.name | ts_id }}));
 {%- else %}
     if ({{ param.name | ts_id }} !== undefined) {
 {%- if param.attributes.content_encoding %}
-      this.validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "header `{{ param.name }}`", requestOptions);
+      validateStringEncoding({{ param.name | ts_id }}, "{{ param.attributes.content_encoding }}", "header `{{ param.name }}`", this.validateContentEncodings, requestOptions);
 {%- endif %}
       headers.set("{{ param.name }}", String({{ param.name | ts_id }}));
     }
@@ -73,11 +73,11 @@
 {%- if has_json_body %}
     headers.set("Content-Type", "application/json");
 {%- endif %}
-    const mergedHeaders = this.mergeHeaders(headers, requestOptions);
+    const mergedHeaders = mergeHeaders(this.defaultHeaders, headers, requestOptions);
 {%- else %}
-    const mergedHeaders = this.mergeHeaders(undefined, requestOptions);
+    const mergedHeaders = mergeHeaders(this.defaultHeaders, undefined, requestOptions);
 {%- endif %}
-    const requestInit = this.createRequestInit(requestOptions);
+    const requestInit = createRequestInit(requestOptions);
     requestInit.method = "{{ operation.method | upper }}";
     if (mergedHeaders) { requestInit.headers = mergedHeaders; }
 {%- if operation.request_body %}
@@ -86,26 +86,26 @@
 {%- if body_kind == "json" %}
     requestInit.body = JSON.stringify(body);
 {%- elif body_kind == "form" %}
-    requestInit.body = this.toFormData(body as unknown as Record<string, unknown>);
+    requestInit.body = toFormData(body as unknown as Record<string, unknown>);
 {%- else %}
     requestInit.body = body as BodyInit;
 {%- endif %}
 {%- else %}
     if (body !== undefined) {
 {%- if operation.request_body.attributes.content_encoding %}
-      this.validateStringEncoding(body, "{{ operation.request_body.attributes.content_encoding }}", "request body", requestOptions);
+      validateStringEncoding(body, "{{ operation.request_body.attributes.content_encoding }}", "request body", this.validateContentEncodings, requestOptions);
 {%- endif %}
 {%- if body_kind == "json" %}
       requestInit.body = JSON.stringify(body);
 {%- elif body_kind == "form" %}
-      requestInit.body = this.toFormData(body as unknown as Record<string, unknown>);
+      requestInit.body = toFormData(body as unknown as Record<string, unknown>);
 {%- else %}
       requestInit.body = body as BodyInit;
 {%- endif %}
     }
 {%- endif %}
 {%- endif %}
-    const response = await this.fetchFn(this.buildUrl(path, query), requestInit);
+    const response = await this.fetchFn(buildUrl(this.baseUrl, path, query), requestInit);
     return response;
   }
 {%- if has_doc %}
@@ -121,6 +121,6 @@
 {%- endif %}
   async {{ method_name }}({{ args_sig }}): Promise<{{ return_type }}> {
     const response = await this.{{ raw_method_name }}({{ fwd_args }});
-    await this.handleError(response, requestOptions);
-    return await this.parseResponse<{{ return_type }}>(response, {% if response_encoding %}"{{ response_encoding }}"{% else %}undefined{% endif %}, requestOptions);
+    await handleError(response, this.onError, requestOptions);
+    return await parseResponse<{{ return_type }}>(response, this.validateContentEncodings, {% if response_encoding %}"{{ response_encoding }}"{% else %}undefined{% endif %}, requestOptions);
   }

@@ -18,19 +18,19 @@
         """
         url = f"{{ op.path | py_fstring }}"
 {%- for p in path_params %}{% if p.attributes.content_encoding %}
-        self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "path parameter `{{ p.name }}`", request_options)
+        validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "path parameter `{{ p.name }}`", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}{% endfor %}
 {% if query_params %}
         params: dict[str, Any] = {}
 {%- for p in query_params %}
 {%- if p.required %}{% if p.attributes.content_encoding %}
-        self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", request_options)
+        validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
         params["{{ p.name }}"] = {{ p.name | py_id }}
 {%- else %}
         if {{ p.name | py_id }} is not None:
 {%- if p.attributes.content_encoding %}
-            self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", request_options)
+            validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
             params["{{ p.name }}"] = {{ p.name | py_id }}
 {%- endif %}
@@ -40,13 +40,13 @@
         headers: dict[str, Any] = {}
 {%- for p in header_params %}
 {%- if p.required %}{% if p.attributes.content_encoding %}
-        self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", request_options)
+        validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
         headers["{{ p.name }}"] = {{ p.name | py_id }}
 {%- else %}
         if {{ p.name | py_id }} is not None:
 {%- if p.attributes.content_encoding %}
-            self._validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", request_options)
+            validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
             headers["{{ p.name }}"] = {{ p.name | py_id }}
 {%- endif %}
@@ -55,18 +55,18 @@
         request_kwargs: dict[str, Any] = {}
 {%- if op.request_body %}
 {%- if op.request_body.required %}{% if op.request_body.attributes.content_encoding %}
-        self._validate_string_encoding(body, "{{ op.request_body.attributes.content_encoding }}", "request body", request_options)
+        validate_string_encoding(body, "{{ op.request_body.attributes.content_encoding }}", "request body", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
-        request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = self._serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %})
+        request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %})
 {%- else %}
         if body is not None:
 {%- if op.request_body.attributes.content_encoding %}
-            self._validate_string_encoding(body, "{{ op.request_body.attributes.content_encoding }}", "request body", request_options)
+            validate_string_encoding(body, "{{ op.request_body.attributes.content_encoding }}", "request body", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
-            request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = self._serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %})
+            request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %})
 {%- endif %}
 {%- endif %}
-        request_kwargs = self._apply_request_options(request_kwargs, request_options, params={% if query_params %}params{% else %}None{% endif %}, headers={% if header_params %}headers{% else %}None{% endif %})
+        request_kwargs = apply_request_options(request_kwargs, request_options, params={% if query_params %}params{% else %}None{% endif %}, headers={% if header_params %}headers{% else %}None{% endif %})
         {% if is_async %}response = await self._client.request("{{ op.method | upper }}", url, **request_kwargs){% else %}response = self._client.request("{{ op.method | upper }}", url, **request_kwargs){% endif %}
         return response
 
@@ -87,9 +87,9 @@
         """
 {%- endif %}
         {% if is_async %}response = await self.{{ raw_name }}({% for p in required_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and op.request_body.required %}body=body, {% endif %}{% for p in optional_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and not op.request_body.required %}body=body, {% endif %}request_options=request_options){% else %}response = self.{{ raw_name }}({% for p in required_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and op.request_body.required %}body=body, {% endif %}{% for p in optional_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and not op.request_body.required %}body=body, {% endif %}request_options=request_options){% endif %}
-        self._handle_error(response, request_options)
+        handle_error(response, self._on_error, request_options)
 {%- if ret.has_result %}
-        return self._parse_response(response, {{ ret.parse_expression }}, response_encoding={% if ret.content_encoding %}"{{ ret.content_encoding }}"{% else %}None{% endif %}, request_options=request_options)
+        return parse_response(response, {{ ret.parse_expression }}, response_encoding={% if ret.content_encoding %}"{{ ret.content_encoding }}"{% else %}None{% endif %}, default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- else %}
-        return self._parse_response(response, response_encoding={% if ret.content_encoding %}"{{ ret.content_encoding }}"{% else %}None{% endif %}, request_options=request_options)
+        return parse_response(response, response_encoding={% if ret.content_encoding %}"{{ ret.content_encoding }}"{% else %}None{% endif %}, default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}

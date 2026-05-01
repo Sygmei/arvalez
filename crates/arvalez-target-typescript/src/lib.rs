@@ -36,6 +36,7 @@ pub const TEMPLATES: &[(&str, &str)] = &[
     ("root/README.md.tera",          include_str!("../templates/root/README.md.tera")),
     ("root/src/models.ts.tera",      include_str!("../templates/root/src/models.ts.tera")),
     ("root/src/client.ts.tera",      include_str!("../templates/root/src/client.ts.tera")),
+    ("root/src/utils.ts.tera",       include_str!("../templates/root/src/utils.ts.tera")),
     ("root/src/index.ts.tera",       include_str!("../templates/root/src/index.ts.tera")),
     ("partials/model_interface.ts.tera", include_str!("../templates/partials/model_interface.ts.tera")),
     ("partials/client_method.ts.tera",   include_str!("../templates/partials/client_method.ts.tera")),

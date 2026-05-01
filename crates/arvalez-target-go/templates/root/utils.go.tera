@@ -1,0 +1,275 @@
+package {{ package_name }}
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/url"
+	"reflect"
+	"strings"
+)
+
+func defaultOnError(response *http.Response) error {
+	return fmt.Errorf("request failed with status %d: %s", response.StatusCode, response.Status)
+}
+
+func cloneHeaders(headers http.Header) http.Header {
+	cloned := http.Header{}
+	if headers == nil {
+		return cloned
+	}
+	for key, values := range headers {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		cloned[key] = copied
+	}
+	return cloned
+}
+
+func cloneQuery(query url.Values) url.Values {
+	cloned := url.Values{}
+	if query == nil {
+		return cloned
+	}
+	for key, values := range query {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		cloned[key] = copied
+	}
+	return cloned
+}
+
+func cloneCookies(cookies []*http.Cookie) []*http.Cookie {
+	if len(cookies) == 0 {
+		return nil
+	}
+	cloned := make([]*http.Cookie, 0, len(cookies))
+	for _, cookie := range cookies {
+		if cookie == nil {
+			continue
+		}
+		copied := *cookie
+		cloned = append(cloned, &copied)
+	}
+	return cloned
+}
+
+func (c *Client) resolveContext(ctx context.Context, requestOptions *RequestOptions) context.Context {
+	if requestOptions != nil && requestOptions.Context != nil {
+		return requestOptions.Context
+	}
+	if ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
+
+func (c *Client) mergeHeaders(base http.Header, requestOptions *RequestOptions) http.Header {
+	merged := cloneHeaders(c.headers)
+	for key, values := range cloneHeaders(base) {
+		for _, value := range values {
+			merged.Add(key, value)
+		}
+	}
+	if requestOptions != nil && requestOptions.Headers != nil {
+		for key, values := range requestOptions.Headers {
+			copied := make([]string, len(values))
+			copy(copied, values)
+			merged[key] = copied
+		}
+	}
+	return merged
+}
+
+func (c *Client) mergeQuery(base url.Values, requestOptions *RequestOptions) url.Values {
+	merged := cloneQuery(base)
+	if requestOptions != nil && requestOptions.Query != nil {
+		for key, values := range requestOptions.Query {
+			copied := make([]string, len(values))
+			copy(copied, values)
+			merged[key] = copied
+		}
+	}
+	return merged
+}
+
+func (c *Client) mergeCookies(base []*http.Cookie, requestOptions *RequestOptions) []*http.Cookie {
+	merged := cloneCookies(base)
+	if requestOptions != nil {
+		merged = append(merged, cloneCookies(requestOptions.Cookies)...)
+	}
+	return merged
+}
+
+func (c *Client) buildURL(path string, query url.Values) string {
+	if len(query) == 0 {
+		return c.baseURL + path
+	}
+	return c.baseURL + path + "?" + query.Encode()
+}
+
+func (c *Client) shouldValidateContentEncodings(requestOptions *RequestOptions) bool {
+	if requestOptions != nil && requestOptions.ValidateContentEncodings != nil {
+		return *requestOptions.ValidateContentEncodings
+	}
+	return c.validateContentEncodings
+}
+
+func (c *Client) validateStringEncoding(value any, encoding string, context string, requestOptions *RequestOptions) error {
+	if !c.shouldValidateContentEncodings(requestOptions) || value == nil {
+		return nil
+	}
+	if encoding != "base64" {
+		return nil
+	}
+
+	var candidate string
+	switch typed := value.(type) {
+	case string:
+		candidate = typed
+	case *string:
+		if typed == nil {
+			return nil
+		}
+		candidate = *typed
+	case []byte:
+		candidate = string(typed)
+	default:
+		return fmt.Errorf("%s must be a base64 string", context)
+	}
+
+	if _, err := base64.StdEncoding.DecodeString(candidate); err != nil {
+		return fmt.Errorf("%s must be valid base64: %w", context, err)
+	}
+	return nil
+}
+
+func (c *Client) encodeJSONBody(payload any) (io.Reader, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(encoded), nil
+}
+
+func (c *Client) encodeMultipartBody(payload any) (io.Reader, string, error) {
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+
+	if err := writeMultipartFields(writer, reflect.ValueOf(payload)); err != nil {
+		return nil, "", err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+
+	return &buffer, writer.FormDataContentType(), nil
+}
+
+func writeMultipartFields(writer *multipart.Writer, value reflect.Value) error {
+	for value.IsValid() && value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return nil
+		}
+		value = value.Elem()
+	}
+
+	switch value.Kind() {
+	case reflect.Struct:
+		valueType := value.Type()
+		for index := 0; index < value.NumField(); index++ {
+			fieldType := valueType.Field(index)
+			if !fieldType.IsExported() {
+				continue
+			}
+			name := fieldType.Name
+			if tag, ok := fieldType.Tag.Lookup("json"); ok {
+				tagName := strings.Split(tag, ",")[0]
+				if tagName == "-" {
+					continue
+				}
+				if tagName != "" {
+					name = tagName
+				}
+			}
+			if err := appendMultipartValue(writer, name, value.Field(index)); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		iterator := value.MapRange()
+		for iterator.Next() {
+			key := fmt.Sprint(iterator.Key().Interface())
+			if err := appendMultipartValue(writer, key, iterator.Value()); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("multipart payload must be a struct or map, got %s", value.Kind())
+	}
+
+	return nil
+}
+
+func appendMultipartValue(writer *multipart.Writer, name string, value reflect.Value) error {
+	for value.IsValid() && value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return nil
+		}
+		value = value.Elem()
+	}
+
+	if !value.IsValid() {
+		return nil
+	}
+
+	if value.Kind() == reflect.Slice && value.Type().Elem().Kind() != reflect.Uint8 {
+		for index := 0; index < value.Len(); index++ {
+			if err := appendMultipartValue(writer, name, value.Index(index)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if value.Kind() == reflect.Slice && value.Type().Elem().Kind() == reflect.Uint8 {
+		part, err := writer.CreateFormFile(name, name)
+		if err != nil {
+			return err
+		}
+		_, err = part.Write(value.Bytes())
+		return err
+	}
+
+	return writer.WriteField(name, fmt.Sprint(value.Interface()))
+}
+
+func (c *Client) handleError(response *http.Response, requestOptions *RequestOptions) error {
+	if response.StatusCode < 400 {
+		return nil
+	}
+	handler := c.onError
+	if requestOptions != nil && requestOptions.OnError != nil {
+		handler = requestOptions.OnError
+	}
+	return handler(response)
+}
+
+func (c *Client) decodeJSONResponse(response *http.Response, target any) error {
+	if response.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	decoder := json.NewDecoder(response.Body)
+	if err := decoder.Decode(target); err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
