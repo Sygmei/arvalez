@@ -251,6 +251,9 @@ pub(crate) fn is_generic_object_placeholder(schema: &Schema) -> bool {
 
 pub(crate) fn schema_runtime_attributes(schema: &Schema) -> Attributes {
     let mut attributes = Attributes::default();
+    if let Some(default) = schema.extra_keywords.get("default") {
+        attributes.insert("default".into(), default.clone());
+    }
     if let Some(description) = schema
         .extra_keywords
         .get("description")

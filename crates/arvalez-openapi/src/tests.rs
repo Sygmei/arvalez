@@ -589,6 +589,53 @@ fn json_test_source(spec: &str) -> OpenApiSource {
     }
 
     #[test]
+    fn preserves_property_defaults_without_marking_fields_nullable() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Widget": {
+        "type": "object",
+        "properties": {
+          "iscool": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("property defaults should be supported");
+        let widget = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "Widget")
+            .expect("Widget model");
+        let iscool = widget
+            .fields
+            .iter()
+            .find(|field| field.name == "iscool")
+            .expect("iscool field");
+
+        assert!(iscool.optional);
+        assert!(!iscool.nullable);
+        assert_eq!(iscool.attributes.get("default"), Some(&json!(false)));
+    }
+
+    #[test]
     fn falls_back_when_operation_id_is_empty() {
         let spec = r##"
 {

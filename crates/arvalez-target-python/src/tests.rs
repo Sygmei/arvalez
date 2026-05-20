@@ -247,6 +247,56 @@ fn renders_basic_python_package() {
 }
 
 #[test]
+fn renders_property_defaults_without_making_fields_nullable() {
+    let ir = CoreIr {
+        models: vec![arvalez_ir::Model {
+            id: "model.my_schema".into(),
+            name: "MySchema".into(),
+            fields: vec![
+                Field {
+                    name: "iscool".into(),
+                    type_ref: TypeRef::primitive("boolean"),
+                    optional: true,
+                    nullable: false,
+                    attributes: Attributes::from([("default".into(), json!(false))]),
+                },
+                Field {
+                    name: "maybe".into(),
+                    type_ref: TypeRef::primitive("boolean"),
+                    optional: false,
+                    nullable: true,
+                    attributes: Attributes::default(),
+                },
+                Field {
+                    name: "wire-name".into(),
+                    type_ref: TypeRef::primitive("boolean"),
+                    optional: true,
+                    nullable: false,
+                    attributes: Attributes::from([("default".into(), json!(true))]),
+                },
+            ],
+            attributes: Attributes::default(),
+            source: None,
+        }],
+        ..Default::default()
+    };
+
+    let files = make_package_from_ir(ir, "demo_client", None, TargetConfig::default())
+        .expect("package should render");
+    let models = files
+        .iter()
+        .find(|file| file.path.ends_with("models.py"))
+        .expect("models.py");
+
+    assert!(models.contents.contains("iscool: bool = False"));
+    assert!(!models.contents.contains("iscool: bool | None"));
+    assert!(models.contents.contains("maybe: bool | None\n"));
+    assert!(models
+        .contents
+        .contains("wire_name: bool = Field(default=True, alias=\"wire-name\")"));
+}
+
+#[test]
 fn supports_selective_template_overrides() {
     let tempdir = tempdir().expect("tempdir");
     let partial_dir = tempdir.path().join("partials");

@@ -20,9 +20,7 @@ class {{ class_name }}(BaseModel):
 {%- if model.fields %}
 {%- for field in model.fields %}
 {%- set py_name = field.name | snake_case | suffix_with_underscore_if_keyword %}
-{%- set needs_alias = field.name != py_name %}
-{%- set is_optional = field.optional or field.nullable %}
-    {{ py_name }}: {{ field.type_ref | py_type }}{% if is_optional %} | None{% endif %}{% if needs_alias %} = Field({% if is_optional %}default=None, {% endif %}alias="{{ field.name }}"){% elif is_optional %} = None{% endif %}
+    {{ py_name }}: {{ field.type_ref | py_type }}{% if field.nullable %} | None{% endif %}{{ field | py_field_assignment(py_name=py_name) }}
 
 {%- endfor %}
 {%- else %}

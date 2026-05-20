@@ -99,6 +99,49 @@ pub fn register_filters(tera: &mut Tera) {
         Ok(Value::String(type_ref_to_py(v, context, format)))
     });
 
+    // {{ field | py_field_assignment(py_name=py_name) }} - field to default/alias suffix
+    tera.register_filter(
+        "py_field_assignment",
+        |v: &Value, args: &HashMap<String, Value>| {
+            let field_name = v.get("name").and_then(Value::as_str).unwrap_or("");
+            let py_name = args
+                .get("py_name")
+                .and_then(Value::as_str)
+                .unwrap_or(field_name);
+            let optional = v.get("optional").and_then(Value::as_bool).unwrap_or(false);
+            let default = v
+                .get("attributes")
+                .and_then(Value::as_object)
+                .and_then(|attributes| attributes.get("default"));
+
+            let default_expr = default
+                .map(py_literal)
+                .or_else(|| optional.then(|| "None".to_owned()));
+            let needs_alias = field_name != py_name;
+
+            if needs_alias {
+                let mut field_args = Vec::new();
+                if let Some(default_expr) = default_expr {
+                    field_args.push(format!("default={default_expr}"));
+                }
+                field_args.push(format!(
+                    "alias={}",
+                    py_literal(&Value::String(field_name.to_owned()))
+                ));
+                return Ok(Value::String(format!(
+                    " = Field({})",
+                    field_args.join(", ")
+                )));
+            }
+
+            Ok(Value::String(
+                default_expr
+                    .map(|expr| format!(" = {expr}"))
+                    .unwrap_or_default(),
+            ))
+        },
+    );
+
     // {{ "someIdentifier" | py_id }} — string → snake_case Python identifier
     tera.register_filter("py_id", |v: &Value, _: &HashMap<String, Value>| {
         Ok(Value::String(sanitize_identifier(v.as_str().unwrap_or(""))))
@@ -238,6 +281,41 @@ pub fn register_filters(tera: &mut Tera) {
         };
         Ok(result)
     });
+}
+
+fn py_literal(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_owned(),
+        Value::Bool(value) => {
+            if *value {
+                "True".to_owned()
+            } else {
+                "False".to_owned()
+            }
+        }
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned()),
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(py_literal)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Object(values) => format!(
+            "{{{}}}",
+            values
+                .iter()
+                .map(|(key, value)| format!(
+                    "{}: {}",
+                    py_literal(&Value::String(key.clone())),
+                    py_literal(value)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 // ── TypeRef → Python type ─────────────────────────────────────────────────────
