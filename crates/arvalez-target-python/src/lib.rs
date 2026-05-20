@@ -18,6 +18,7 @@ mod tests;
 
 pub use arvalez_target_core::{CommonConfig, GeneratedFile};
 use sanitize::is_python_keyword;
+use sanitize::sanitize_subsection_name;
 pub use sanitize::{sanitize_class_name, sanitize_identifier};
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -391,7 +392,7 @@ fn compute_tag_groups(ops: &[Value]) -> Vec<Value> {
         .into_iter()
         .map(|(tag, group_ops)| {
             let class_base_name = sanitize_class_name(&tag);
-            let property_name = sanitize_identifier(&tag);
+            let property_name = sanitize_subsection_name(&tag);
             serde_json::json!({
                 "tag": tag,
                 "property_name": property_name,

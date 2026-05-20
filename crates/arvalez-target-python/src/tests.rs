@@ -3,8 +3,8 @@ use std::fs;
 use serde_json::json;
 use tempfile::tempdir;
 
-use crate::sanitize::{sanitize_class_name, sanitize_identifier};
-use crate::{CommonConfig, GeneratedFile, TargetConfig, generate};
+use crate::sanitize::{sanitize_class_name, sanitize_identifier, sanitize_subsection_name};
+use crate::{generate, CommonConfig, GeneratedFile, TargetConfig};
 use arvalez_ir::{
     Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody,
     Response, TypeRef,
@@ -374,6 +374,86 @@ fn groups_operations_by_tag_when_enabled() {
 }
 
 #[test]
+fn grouped_clients_use_readable_tag_subsection_names() {
+    let ir = CoreIr {
+        operations: vec![
+            Operation {
+                id: "operation.list_dags".into(),
+                name: "list_dags".into(),
+                method: HttpMethod::Get,
+                path: "/dags".into(),
+                params: Vec::new(),
+                request_body: None,
+                responses: vec![Response {
+                    status: "200".into(),
+                    media_type: None,
+                    type_ref: None,
+                    attributes: Attributes::default(),
+                }],
+                attributes: Attributes::from([("tags".into(), json!(["DAGs"]))]),
+                source: None,
+            },
+            Operation {
+                id: "operation.list_apis".into(),
+                name: "list_apis".into(),
+                method: HttpMethod::Get,
+                path: "/apis".into(),
+                params: Vec::new(),
+                request_body: None,
+                responses: vec![Response {
+                    status: "200".into(),
+                    media_type: None,
+                    type_ref: None,
+                    attributes: Attributes::default(),
+                }],
+                attributes: Attributes::from([("tags".into(), json!(["APIs"]))]),
+                source: None,
+            },
+            Operation {
+                id: "operation.list_headers".into(),
+                name: "list_headers".into(),
+                method: HttpMethod::Get,
+                path: "/headers".into(),
+                params: Vec::new(),
+                request_body: None,
+                responses: vec![Response {
+                    status: "200".into(),
+                    media_type: None,
+                    type_ref: None,
+                    attributes: Attributes::default(),
+                }],
+                attributes: Attributes::from([("tags".into(), json!(["HTTP Headers"]))]),
+                source: None,
+            },
+        ],
+        ..Default::default()
+    };
+
+    let files = make_package_from_ir(
+        ir,
+        "demo_client",
+        None,
+        TargetConfig {
+            group_by_tag: true,
+            ..Default::default()
+        },
+    )
+    .expect("package should render");
+    let client = files
+        .iter()
+        .find(|file| file.path.ends_with("client.py"))
+        .expect("client.py");
+
+    assert!(client.contents.contains("self.dags = AsyncDAGsApi(self)"));
+    assert!(client.contents.contains("self.apis = AsyncAPIsApi(self)"));
+    assert!(client
+        .contents
+        .contains("self.http_headers = AsyncHTTPHeadersApi(self)"));
+    assert!(!client.contents.contains("self.da_gs"));
+    assert!(!client.contents.contains("self.ap_is"));
+}
+
+#[test]
 fn preserves_common_acronyms_in_python_names() {
     assert_eq!(sanitize_identifier("CreateAPIKey"), "create_api_key");
     assert_eq!(sanitize_identifier("AssociateWebACL"), "associate_web_acl");
@@ -388,6 +468,43 @@ fn preserves_common_acronyms_in_python_names() {
     assert_eq!(sanitize_class_name("WebACL"), "WebACL");
     assert_eq!(sanitize_class_name("HTTPHeader"), "HTTPHeader");
     assert_eq!(sanitize_class_name("SHA256Checksum"), "SHA256Checksum");
+}
+
+#[test]
+fn sanitizes_tag_subsection_names_for_real_world_tag_shapes() {
+    let cases = [
+        ("DAGs", "dags"),
+        ("APIs", "apis"),
+        ("SDKs", "sdks"),
+        ("ACLs", "acls"),
+        ("IDs", "ids"),
+        ("DAG", "dag"),
+        ("DAG Runs", "dag_runs"),
+        ("DAGs Enabled", "dags_enabled"),
+        ("DAGStatus", "dag_status"),
+        ("API Keys", "api_keys"),
+        ("CreateAPIKey", "create_api_key"),
+        ("HTTPHeader", "http_header"),
+        ("HTTP Headers", "http_headers"),
+        ("OAuth Apps", "oauth_apps"),
+        ("OAuth2 Clients", "oauth2_clients"),
+        ("GraphQL APIs", "graph_ql_apis"),
+        ("IPv4 Address", "ipv4_address"),
+        ("UTF8String", "utf8_string"),
+        ("SHA256 Checksums", "sha256_checksums"),
+        ("User Management", "user_management"),
+        ("userManagement", "user_management"),
+        ("user-management", "user_management"),
+        ("user_management", "user_management"),
+        ("  Admin API  ", "admin_api"),
+        ("123 Reports", "_123_reports"),
+        ("class", "class_"),
+        ("", "value"),
+    ];
+
+    for (input, expected) in cases {
+        assert_eq!(sanitize_subsection_name(input), expected, "{input}");
+    }
 }
 
 #[test]

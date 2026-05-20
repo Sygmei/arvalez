@@ -27,6 +27,15 @@ pub fn sanitize_class_name(name: &str) -> String {
 
 pub fn sanitize_identifier(name: &str) -> String {
     let words = split_words(name);
+    sanitize_words_as_identifier(words)
+}
+
+pub fn sanitize_subsection_name(name: &str) -> String {
+    let words = merge_subsection_words(split_words(name));
+    sanitize_words_as_identifier(words)
+}
+
+fn sanitize_words_as_identifier(words: Vec<String>) -> String {
     let mut candidate = if words.is_empty() {
         "value".into()
     } else {
@@ -47,6 +56,48 @@ pub fn sanitize_identifier(name: &str) -> String {
         candidate.push('_');
     }
     candidate
+}
+
+fn merge_subsection_words(words: Vec<String>) -> Vec<String> {
+    let mut merged = Vec::new();
+    let mut index = 0;
+
+    while index < words.len() {
+        if let Some(next) = words.get(index + 1) {
+            let current = &words[index];
+            if is_split_acronym_plural(current, next) || is_oauth_pair(current, next) {
+                merged.push(format!("{current}{next}"));
+                index += 2;
+                continue;
+            }
+        }
+
+        merged.push(words[index].clone());
+        index += 1;
+    }
+
+    merged
+}
+
+fn is_split_acronym_plural(left: &str, right: &str) -> bool {
+    left.len() > 1
+        && left
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+        && {
+            let mut chars = right.chars();
+            matches!(
+                (chars.next(), chars.next(), chars.next()),
+                (Some(first), Some('s'), None) if first.is_ascii_uppercase()
+            )
+        }
+}
+
+fn is_oauth_pair(left: &str, right: &str) -> bool {
+    left == "O"
+        && right
+            .strip_prefix("Auth")
+            .is_some_and(|suffix| suffix.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 pub(crate) use arvalez_target_core::split_words;
