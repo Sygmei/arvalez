@@ -235,6 +235,98 @@ fn json_test_source(spec: &str) -> OpenApiSource {
     }
 
     #[test]
+    fn skips_operations_with_codegen_disabled() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {
+    "/widgets": {
+      "get": {
+        "operationId": "list_widgets",
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      },
+      "post": {
+        "operationId": "create_widget",
+        "x-codegen": false,
+        "parameters": [
+          {
+            "name": "",
+            "in": "query",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("disabled operation should not be imported");
+
+        assert_eq!(result.ir.operations.len(), 1);
+        assert_eq!(result.ir.operations[0].name, "list_widgets");
+    }
+
+    #[test]
+    fn skips_path_items_with_codegen_disabled() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {
+    "/internal": {
+      "x-codegen": false,
+      "get": {
+        "operationId": "get_internal",
+        "parameters": [
+          {
+            "name": "",
+            "in": "query",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    },
+    "/public": {
+      "get": {
+        "operationId": "get_public",
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid spec");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("disabled path item should not be imported");
+
+        assert_eq!(result.ir.operations.len(), 1);
+        assert_eq!(result.ir.operations[0].name, "get_public");
+    }
+
+    #[test]
     fn supports_references_into_parameter_schemas() {
         let spec = r##"
 {

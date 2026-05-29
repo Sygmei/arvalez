@@ -143,6 +143,9 @@ pub(crate) struct Components {
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub(crate) struct PathItem {
+    #[serde(rename = "x-codegen")]
+    #[serde(default)]
+    pub(crate) codegen: Option<bool>,
     #[serde(default)]
     pub(crate) parameters: Option<Vec<ParameterOrRef>>,
     #[serde(default)]
@@ -168,6 +171,9 @@ pub(crate) struct OperationSpec {
     pub(crate) tags: Vec<String>,
     #[serde(default)]
     pub(crate) deprecated: bool,
+    #[serde(rename = "x-codegen")]
+    #[serde(default)]
+    pub(crate) codegen: Option<bool>,
     #[serde(default)]
     pub(crate) parameters: Vec<ParameterOrRef>,
     #[serde(default)]

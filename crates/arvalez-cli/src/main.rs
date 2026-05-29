@@ -32,8 +32,8 @@ use config::{
 };
 use corpus::{CorpusTestOptions, run_apis_guru_corpus_test, run_corpus_spec_inline};
 use generate::{
-    TimingCollector, load_input_ir, load_ir, openapi_options, print_openapi_warnings,
-    run_with_large_stack,
+    TimingCollector, filter_deprecated_operations, load_input_ir, load_ir, openapi_options,
+    print_openapi_warnings, run_with_large_stack,
 };
 
 /// A target to dump templates or erasers for.
@@ -363,8 +363,22 @@ fn main() -> Result<()> {
                     false,
                     output_version.clone(),
                 );
-                let files = timing_collector
-                    .measure_result("go_generate", || generate_go_package(&ir, go_config.2.as_deref(), &go_config.0, &go_config.1))?;
+                let target_ir = filter_deprecated_operations(
+                    &ir,
+                    config_file
+                        .target
+                        .go
+                        .base
+                        .resolve_skip_deprecated_operations(&config_file.common.output),
+                );
+                let files = timing_collector.measure_result("go_generate", || {
+                    generate_go_package(
+                        &target_ir,
+                        go_config.2.as_deref(),
+                        &go_config.0,
+                        &go_config.1,
+                    )
+                })?;
                 let output = config_file
                     .target
                     .go
@@ -381,8 +395,20 @@ fn main() -> Result<()> {
             if python_enabled {
                 let (python_common, python_target, python_tpl) =
                     resolve_python_config(&config_file, None, None, false, output_version.clone());
+                let target_ir = filter_deprecated_operations(
+                    &ir,
+                    config_file
+                        .target
+                        .python
+                        .resolve_skip_deprecated_operations(&config_file.common.output),
+                );
                 let files = timing_collector.measure_result("python_generate", || {
-                    generate(&ir, python_tpl.as_deref(), &python_common, &python_target)
+                    generate(
+                        &target_ir,
+                        python_tpl.as_deref(),
+                        &python_common,
+                        &python_target,
+                    )
                 })?;
                 let output = config_file
                     .target
@@ -404,8 +430,20 @@ fn main() -> Result<()> {
                     false,
                     output_version.clone(),
                 );
+                let target_ir = filter_deprecated_operations(
+                    &ir,
+                    config_file
+                        .target
+                        .typescript
+                        .resolve_skip_deprecated_operations(&config_file.common.output),
+                );
                 let files = timing_collector.measure_result("typescript_generate", || {
-                    generate_typescript(&ir, ts_template_dir.as_deref(), &ts_common, &ts_config)
+                    generate_typescript(
+                        &target_ir,
+                        ts_template_dir.as_deref(),
+                        &ts_common,
+                        &ts_config,
+                    )
                 })?;
                 let output = config_file
                     .target
@@ -429,8 +467,21 @@ fn main() -> Result<()> {
                     false,
                     output_version.clone(),
                 );
+                let target_ir = filter_deprecated_operations(
+                    &ir,
+                    config_file
+                        .target
+                        .nushell
+                        .base
+                        .resolve_skip_deprecated_operations(&config_file.common.output),
+                );
                 let files = timing_collector.measure_result("nushell_generate", || {
-                    generate_nushell_package(&ir, template_dir.as_deref(), &common, &nushell_config)
+                    generate_nushell_package(
+                        &target_ir,
+                        template_dir.as_deref(),
+                        &common,
+                        &nushell_config,
+                    )
                 })?;
                 let output = config_file
                     .target
@@ -479,8 +530,22 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
-            let files = timing_collector
-                .measure_result("go_generate", || generate_go_package(&ir, go_config.2.as_deref(), &go_config.0, &go_config.1))?;
+            let target_ir = filter_deprecated_operations(
+                &ir,
+                config_file
+                    .target
+                    .go
+                    .base
+                    .resolve_skip_deprecated_operations(&config_file.common.output),
+            );
+            let files = timing_collector.measure_result("go_generate", || {
+                generate_go_package(
+                    &target_ir,
+                    go_config.2.as_deref(),
+                    &go_config.0,
+                    &go_config.1,
+                )
+            })?;
             timing_collector.measure_result("go_write", || write_go_package(&output, &files))?;
             eprintln!("generated {} files into {}", files.len(), output.display());
             timing_collector.print();
@@ -516,8 +581,20 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
+            let target_ir = filter_deprecated_operations(
+                &ir,
+                config_file
+                    .target
+                    .python
+                    .resolve_skip_deprecated_operations(&config_file.common.output),
+            );
             let files = timing_collector.measure_result("python_generate", || {
-                generate(&ir, python_tpl.as_deref(), &python_common, &python_target)
+                generate(
+                    &target_ir,
+                    python_tpl.as_deref(),
+                    &python_common,
+                    &python_target,
+                )
             })?;
             timing_collector
                 .measure_result("python_write", || write_python_package(&output, &files))?;
@@ -555,8 +632,20 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
+            let target_ir = filter_deprecated_operations(
+                &ir,
+                config_file
+                    .target
+                    .typescript
+                    .resolve_skip_deprecated_operations(&config_file.common.output),
+            );
             let files = timing_collector.measure_result("typescript_generate", || {
-                generate_typescript(&ir, ts_template_dir.as_deref(), &ts_common, &ts_config)
+                generate_typescript(
+                    &target_ir,
+                    ts_template_dir.as_deref(),
+                    &ts_common,
+                    &ts_config,
+                )
             })?;
             timing_collector.measure_result("typescript_write", || {
                 write_typescript_package(&output, &files)
@@ -597,8 +686,21 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
+            let target_ir = filter_deprecated_operations(
+                &ir,
+                config_file
+                    .target
+                    .nushell
+                    .base
+                    .resolve_skip_deprecated_operations(&config_file.common.output),
+            );
             let files = timing_collector.measure_result("nushell_generate", || {
-                generate_nushell_package(&ir, tpl_dir.as_deref(), &common, &nushell_config)
+                generate_nushell_package(
+                    &target_ir,
+                    tpl_dir.as_deref(),
+                    &common,
+                    &nushell_config,
+                )
             })?;
             timing_collector
                 .measure_result("nushell_write", || write_nushell_package(&output, &files))?;

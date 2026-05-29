@@ -3,6 +3,9 @@ use crate::config::{
     resolve_python_config,
 };
 use crate::corpus::classify_failure;
+use crate::generate::filter_deprecated_operations;
+use arvalez_ir::{Attributes, CoreIr, Operation};
+use serde_json::json;
 
 #[test]
 fn normalize_python_package_name_replaces_hyphens() {
@@ -41,6 +44,59 @@ fn resolve_go_config_normalizes_explicit_package_name() {
     );
 
     assert_eq!(common.package.name, "arvalezclient");
+}
+
+#[test]
+fn target_output_overrides_common_skip_deprecated_operations() {
+    let config: AppConfig = toml::from_str(
+        r#"
+[common.output]
+skip_deprecated_operations = true
+
+[target.python.output]
+skip_deprecated_operations = false
+"#,
+    )
+    .expect("config should parse");
+
+    assert!(
+        config
+            .target
+            .go
+            .base
+            .resolve_skip_deprecated_operations(&config.common.output)
+    );
+    assert!(
+        !config
+            .target
+            .python
+            .resolve_skip_deprecated_operations(&config.common.output)
+    );
+}
+
+#[test]
+fn filters_deprecated_operations_when_enabled() {
+    let ir = CoreIr {
+        operations: vec![
+            Operation {
+                name: "active".into(),
+                ..Default::default()
+            },
+            Operation {
+                name: "old".into(),
+                attributes: Attributes::from([("deprecated".into(), json!(true))]),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let filtered = filter_deprecated_operations(&ir, true);
+    assert_eq!(filtered.operations.len(), 1);
+    assert_eq!(filtered.operations[0].name, "active");
+
+    let unfiltered = filter_deprecated_operations(&ir, false);
+    assert_eq!(unfiltered.operations.len(), 2);
 }
 
 #[test]

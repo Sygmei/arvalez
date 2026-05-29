@@ -119,6 +119,22 @@ pub(crate) fn load_input_ir(
     }
 }
 
+pub(crate) fn filter_deprecated_operations(ir: &CoreIr, skip_deprecated: bool) -> CoreIr {
+    if !skip_deprecated {
+        return ir.clone();
+    }
+
+    let mut filtered = ir.clone();
+    filtered.operations.retain(|operation| {
+        operation
+            .attributes
+            .get("deprecated")
+            .and_then(|value| value.as_bool())
+            != Some(true)
+    });
+    filtered
+}
+
 pub(crate) fn openapi_options(ignore_unhandled: bool, emit_timings: bool) -> LoadOpenApiOptions {
     LoadOpenApiOptions {
         ignore_unhandled,

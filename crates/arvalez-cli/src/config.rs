@@ -37,6 +37,8 @@ pub(crate) struct CommonOutputConfig {
     pub(crate) directory: Option<PathBuf>,
     #[serde(default)]
     pub(crate) group_by_tag: bool,
+    #[serde(default)]
+    pub(crate) skip_deprecated_operations: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -54,6 +56,7 @@ pub(crate) struct CommonPackageConfig {
 pub(crate) struct TargetOutputConfig {
     pub(crate) directory: Option<PathBuf>,
     pub(crate) group_by_tag: Option<bool>,
+    pub(crate) skip_deprecated_operations: Option<bool>,
 }
 
 /// Package metadata that can appear under `[target.<name>.package]`.
@@ -96,6 +99,14 @@ impl TargetConfig {
     /// Precedence: CLI flag > target.output.group_by_tag > common.output.group_by_tag.
     pub(crate) fn resolve_group_by_tag(&self, cli_flag: bool, common: &CommonOutputConfig) -> bool {
         cli_flag || self.output.group_by_tag.unwrap_or(common.group_by_tag)
+    }
+
+    /// Resolve whether deprecated operations should be omitted from generated output.
+    /// Precedence: target.output.skip_deprecated_operations > common.output.skip_deprecated_operations.
+    pub(crate) fn resolve_skip_deprecated_operations(&self, common: &CommonOutputConfig) -> bool {
+        self.output
+            .skip_deprecated_operations
+            .unwrap_or(common.skip_deprecated_operations)
     }
 
     /// Resolve the effective package version.

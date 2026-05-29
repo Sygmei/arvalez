@@ -147,6 +147,10 @@ impl OpenApiImporter {
 
     fn import_path_item(&mut self, path: &str, item: &PathItem) -> Result<Vec<Operation>> {
         let mut operations = Vec::new();
+        if item.codegen == Some(false) {
+            return Ok(operations);
+        }
+
         let shared_parameters = item.parameters.clone().unwrap_or_default();
         let candidates = [
             (HttpMethod::Get, item.get.as_ref()),
@@ -160,6 +164,9 @@ impl OpenApiImporter {
             let Some(spec) = spec else {
                 continue;
             };
+            if spec.codegen == Some(false) {
+                continue;
+            }
 
             let operation_name = self.reserve_operation_name(
                 spec.operation_id

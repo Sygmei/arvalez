@@ -57,25 +57,38 @@ cargo run -p arvalez-cli -- generate-go --openapi openapi.json --output-director
 The generators also read optional settings from `arvalez.toml`:
 
 ```toml
-[output]
+[common.output]
 directory = "generated"
 group_by_tag = true
+skip_deprecated_operations = false
+
+[common.package]
+name = "arvalez-client"
 version = "1.0.0"
 
-[output.go]
+[target.go]
 module_path = "github.com/acme/client"
-package_name = "client"
+
+[target.go.package]
+name = "client"
 version = "1.0.0"
 
-[output.python]
-package_name = "arvalez_client"
-version = "1.0.1"
+[target.python]
 template_dir = "./templates/python"
 
-[output.typescript]
-package_name = "@arvalez/client"
-version = "1.0.2"
+[target.python.package]
+name = "arvalez_client"
+version = "1.0.1"
+
+[target.python.output]
+skip_deprecated_operations = true
+
+[target.typescript]
 template_dir = "./templates/typescript"
+
+[target.typescript.package]
+name = "@arvalez/client"
+version = "1.0.2"
 ```
 
 Override the configured output version from the CLI:
@@ -119,9 +132,11 @@ cargo run -p arvalez-cli -- generate --openapi openapi.json --output-directory g
 Disable a backend from config:
 
 ```toml
-[output.typescript]
+[target.typescript]
 disabled = true
-package_name = "@arvalez/client"
+
+[target.typescript.package]
+name = "@arvalez/client"
 ```
 
 The Go backend also supports bundled default Tera templates with selective overrides:
@@ -142,7 +157,7 @@ Supported override names are:
 
 When `group_by_tag = true`, tagged operations are grouped under subclients. For example, Python becomes `client.ingredients.create_ingredient(...)` and TypeScript becomes `client.ingredients.createIngredient(...)`. Operations without tags stay on the root client, and multi-tag operations use the first tag.
 
-Shared settings in `[output]` act as defaults, and `[output.python]` / `[output.typescript]` / `[output.go]` can override them per target. That includes `group_by_tag`, `version`, and similar cross-target options. CLI flags like `--output-version` override both.
+Shared settings in `[common.output]` and `[common.package]` act as defaults, and `[target.python.output]` / `[target.typescript.output]` / `[target.go.output]` can override output settings per target. That includes `group_by_tag`, `skip_deprecated_operations`, output directories, and package metadata such as `version`. CLI flags like `--output-version` override config values.
 
 Override only selected Python templates:
 
