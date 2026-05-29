@@ -71,7 +71,10 @@ fn sample_ir() -> CoreIr {
                 type_ref: Some(TypeRef::named("Widget")),
                 attributes: Attributes::default(),
             }],
-            attributes: Attributes::from([("tags".into(), json!(["widgets"]))]),
+            attributes: Attributes::from([
+                ("tags".into(), json!(["widgets"])),
+                ("deprecated".into(), json!(true)),
+            ]),
             source: None,
         }],
         ..Default::default()
@@ -143,6 +146,7 @@ fn renders_basic_typescript_package() {
             .contents
             .contains("@param widgetId Unique widget identifier.")
     );
+    assert!(client.contents.contains("@deprecated This operation is deprecated."));
     assert!(client.contents.contains("requestOptions?: RequestOptions"));
     assert!(utils.contents.contains("onError?: ErrorHandler;"));
     assert!(

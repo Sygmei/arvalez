@@ -167,6 +167,8 @@ pub(crate) struct OperationSpec {
     #[serde(default)]
     pub(crate) tags: Vec<String>,
     #[serde(default)]
+    pub(crate) deprecated: bool,
+    #[serde(default)]
     pub(crate) parameters: Vec<ParameterOrRef>,
     #[serde(default)]
     pub(crate) consumes: Vec<String>,

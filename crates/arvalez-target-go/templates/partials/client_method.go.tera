@@ -10,6 +10,9 @@
 // {{ raw_method_name }} {{ op.attributes.summary | go_comment }}
 {% endif -%}
 // {{ raw_method_name }} returns the raw HTTP response without decoding it or converting HTTP errors.
+{% if op.attributes.deprecated -%}
+// Deprecated: This operation is deprecated.
+{% endif -%}
 {%- for p in op.params %}
 {%- if p.attributes.description %}
 // {{ raw_method_name }} parameter {{ p.name | go_id }}: {{ p.attributes.description | go_comment }}
@@ -147,6 +150,9 @@ return client.httpClient.Do(request)
 
 {% if op.attributes.summary -%}
 // {{ method_name }} {{ op.attributes.summary | go_comment }}
+{% endif -%}
+{% if op.attributes.deprecated -%}
+// Deprecated: This operation is deprecated.
 {% endif -%}
 {%- for p in op.params %}
 {%- if p.attributes.description %}

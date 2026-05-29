@@ -6,7 +6,8 @@
 {%- set response_encoding = operation | ts_response_encoding -%}
 {%- set summary = operation.attributes.summary | default(value="") | trim -%}
 {%- set doc_params = operation.params | ts_doc_params -%}
-{%- set has_doc = summary or doc_params | length > 0 -%}
+{%- set deprecated = operation.attributes.deprecated | default(value=false) -%}
+{%- set has_doc = summary or doc_params | length > 0 or deprecated -%}
 {%- set path_params = operation.params | filter(attribute="location", value="path") -%}
 {%- set query_params = operation.params | filter(attribute="location", value="query") -%}
 {%- set header_params = operation.params | filter(attribute="location", value="header") -%}
@@ -22,6 +23,9 @@
 {%- for p in doc_params %}
    * @param {{ p.name }} {{ p.description }}
 {%- endfor %}
+{%- if deprecated %}
+   * @deprecated This operation is deprecated.
+{%- endif %}
    */
 {%- endif %}
   async {{ raw_method_name }}({{ args_sig }}): Promise<Response> {
@@ -117,6 +121,9 @@
 {%- for p in doc_params %}
    * @param {{ p.name }} {{ p.description }}
 {%- endfor %}
+{%- if deprecated %}
+   * @deprecated This operation is deprecated.
+{%- endif %}
    */
 {%- endif %}
   async {{ method_name }}({{ args_sig }}): Promise<{{ return_type }}> {

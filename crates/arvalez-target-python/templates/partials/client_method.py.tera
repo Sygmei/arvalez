@@ -7,7 +7,8 @@
 {%- set header_params = op.params | filter(attribute="location", value="header") -%}
 {%- set doc_params = op | py_doc_params -%}
 {%- set ret = op | py_return_type %}
-    {% if is_async %}async def{% else %}def{% endif %} {{ raw_name }}(self{%- for p in required_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }}{% endfor %}{% if op.request_body and op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }}{% endif %}{% for p in optional_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }} | None = None{% endfor %}{% if op.request_body and not op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }} | None = None{% endif %}, request_options: RequestOptions | None = None) -> httpx.Response:
+{%- set deprecated_message = "Endpoint `" ~ op.name ~ "` is deprecated." -%}
+    {% if is_async %}async def{% else %}def{% endif %} {{ raw_name }}(self{%- for p in required_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }}{% endfor %}{% if op.request_body and op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }}{% endif %}{% for p in optional_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }} | None = None{% endfor %}{% if op.request_body and not op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }} | None = None{% endif %}, request_options: RequestOptions | None = None{% if op.attributes.deprecated %}, _suppress_deprecation_warning: bool = False{% endif %}) -> httpx.Response:
         """Returns the raw HTTP response without parsing it or raising for HTTP errors.{% if op.attributes.summary %}
 
         {{ op.attributes.summary }}{% endif %}{% if doc_params %}
@@ -16,6 +17,10 @@
             {{ p.name | py_id }}: {{ p.attributes.description }}{% endfor %}{% endif %}
 
         """
+{%- if op.attributes.deprecated %}
+        if not _suppress_deprecation_warning:
+            warnings.warn({{ deprecated_message | json_encode }}, DeprecationWarning, stacklevel=2)
+{%- endif %}
         url = f"{{ op.path | py_fstring }}"
 {%- for p in path_params %}{% if p.attributes.content_encoding %}
         validate_string_encoding({{ p.name | py_id }}, "{{ p.attributes.content_encoding }}", "path parameter `{{ p.name }}`", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
@@ -86,7 +91,10 @@
 
         """
 {%- endif %}
-        {% if is_async %}response = await self.{{ raw_name }}({% for p in required_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and op.request_body.required %}body=body, {% endif %}{% for p in optional_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and not op.request_body.required %}body=body, {% endif %}request_options=request_options){% else %}response = self.{{ raw_name }}({% for p in required_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and op.request_body.required %}body=body, {% endif %}{% for p in optional_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and not op.request_body.required %}body=body, {% endif %}request_options=request_options){% endif %}
+{%- if op.attributes.deprecated %}
+        warnings.warn({{ deprecated_message | json_encode }}, DeprecationWarning, stacklevel=2)
+{%- endif %}
+        {% if is_async %}response = await self.{{ raw_name }}({% for p in required_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and op.request_body.required %}body=body, {% endif %}{% for p in optional_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and not op.request_body.required %}body=body, {% endif %}request_options=request_options{% if op.attributes.deprecated %}, _suppress_deprecation_warning=True{% endif %}){% else %}response = self.{{ raw_name }}({% for p in required_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and op.request_body.required %}body=body, {% endif %}{% for p in optional_params %}{{ p.name | py_id }}={{ p.name | py_id }}, {% endfor %}{% if op.request_body and not op.request_body.required %}body=body, {% endif %}request_options=request_options{% if op.attributes.deprecated %}, _suppress_deprecation_warning=True{% endif %}){% endif %}
         handle_error(response, self._on_error, request_options)
 {%- if ret.has_result %}
         return parse_response(response, {{ ret.parse_expression }}, response_encoding={% if ret.content_encoding %}"{{ ret.content_encoding }}"{% else %}None{% endif %}, default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)

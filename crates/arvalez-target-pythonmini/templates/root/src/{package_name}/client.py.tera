@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import httpx
@@ -39,6 +40,7 @@ class ApiClient:
 {% for op in operations %}
 {%- set query_params = op.params | filter(attribute="location", value="query") %}
 {%- set header_params = op.params | filter(attribute="location", value="header") %}
+{%- set deprecated_message = "Endpoint `" ~ op.name ~ "` is deprecated." %}
     def {{ op.name | py_id }}(
         self,
 {%- for p in op.params %}{% if p.required %}
@@ -54,6 +56,9 @@ class ApiClient:
         body: Any = None,
 {%- endif %}
     ) -> Any:
+{%- if op.attributes.deprecated %}
+        warnings.warn({{ deprecated_message | json_encode }}, DeprecationWarning, stacklevel=2)
+{%- endif %}
         url = f"{{ op.path | py_fstring }}"
 {%- if query_params %}
         params: dict[str, Any] = {}

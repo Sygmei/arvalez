@@ -207,6 +207,9 @@ Generate a Python SDK from inside the container:
 docker run --rm -v "$PWD:/work" -w /work arvalez generate-python --openapi openapi.json --output-directory generated/python-client
 ```
 
+`Dockerfile.apiclient` validates `OPENAPI_DOCUMENT` with Redocly CLI's `spec`
+ruleset before any SDK generation stage runs.
+
 ## Releases
 
 Publishing a GitHub release triggers `.github/workflows/release.yml`, which:

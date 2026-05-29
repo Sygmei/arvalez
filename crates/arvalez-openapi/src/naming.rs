@@ -24,6 +24,9 @@ pub(crate) fn operation_attributes(spec: &OperationSpec) -> Attributes {
     if !spec.tags.is_empty() {
         attributes.insert("tags".into(), json!(spec.tags));
     }
+    if spec.deprecated {
+        attributes.insert("deprecated".into(), json!(true));
+    }
     attributes
 }
 

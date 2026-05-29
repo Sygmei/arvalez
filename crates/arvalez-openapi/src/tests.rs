@@ -22,6 +22,7 @@ fn json_test_source(spec: &str) -> OpenApiSource {
     "/widgets/{widget_id}": {
       "get": {
         "operationId": "get_widget",
+        "deprecated": true,
         "parameters": [
           {
             "name": "widget_id",
@@ -86,6 +87,7 @@ fn json_test_source(spec: &str) -> OpenApiSource {
         assert_eq!(ir.models.len(), 2);
         assert_eq!(ir.operations.len(), 1);
         assert_eq!(ir.operations[0].name, "get_widget");
+        assert_eq!(ir.operations[0].attributes.get("deprecated"), Some(&json!(true)));
         assert!(ir.models.iter().any(|model| model.name == "Widget"));
         assert!(ir.models.iter().any(|model| model.name == "WidgetStatus"));
         let widget = ir

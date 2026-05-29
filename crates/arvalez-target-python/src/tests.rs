@@ -105,7 +105,10 @@ fn sample_ir() -> arvalez_ir::CoreIr {
                     type_ref: Some(TypeRef::named("Widget")),
                     attributes: Attributes::default(),
                 }],
-                attributes: Attributes::from([("tags".into(), json!(["widgets"]))]),
+                attributes: Attributes::from([
+                    ("tags".into(), json!(["widgets"])),
+                    ("deprecated".into(), json!(true)),
+                ]),
                 source: None,
             },
             Operation {
@@ -179,6 +182,7 @@ fn renders_basic_python_package() {
             .contains("class SyncApiClient(_BaseApiClient):")
     );
     assert!(client.contents.contains("ApiClient = AsyncApiClient"));
+    assert!(client.contents.contains("import warnings"));
     assert!(
         client
             .contents
@@ -195,6 +199,16 @@ fn renders_basic_python_package() {
     assert!(client.contents.contains("async def _get_widget_raw"));
     assert!(client.contents.contains("def get_widget"));
     assert!(client.contents.contains("def _get_widget_raw"));
+    assert!(
+        client
+            .contents
+            .contains("warnings.warn(\"Endpoint `get_widget` is deprecated.\", DeprecationWarning, stacklevel=2)")
+    );
+    assert!(
+        client
+            .contents
+            .contains("_suppress_deprecation_warning=True")
+    );
     assert!(client.contents.contains("Args:"));
     assert!(
         client

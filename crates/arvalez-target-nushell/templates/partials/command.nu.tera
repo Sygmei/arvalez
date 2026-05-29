@@ -24,6 +24,7 @@
 {%- endif -%}
 {%- endfor -%}
 {% if op.attributes.summary %}# {{ op.attributes.summary | trim }}
+{% endif %}{% if op.attributes.deprecated %}# Deprecated: This operation is deprecated.
 {% endif %}export def "{{ _cmd }}" [
 {% for p in path_params %}    {{ p.name | nu_var }}: {{ p.type_ref | nu_type }}{% if p.attributes.description %}  # {{ p.attributes.description | trim }}{% endif %}
 
@@ -45,4 +46,3 @@
 {% else %}    http {{ op.method }} $full_url (if ($body | is-not-empty) { $body }){% if header_params | length > 0 %} --headers $headers{% endif %}
 {% endif %}{% else %}    http {{ op.method }} $full_url{% if header_params | length > 0 %} --headers $headers{% endif %}
 {% endif %}}
-

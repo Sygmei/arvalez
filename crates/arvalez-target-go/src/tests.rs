@@ -65,7 +65,10 @@ fn sample_ir() -> CoreIr {
                 type_ref: Some(TypeRef::named("Widget")),
                 attributes: Attributes::default(),
             }],
-            attributes: Attributes::from([("tags".into(), json!(["widgets"]))]),
+            attributes: Attributes::from([
+                ("tags".into(), json!(["widgets"])),
+                ("deprecated".into(), json!(true)),
+            ]),
             source: None,
         }],
         ..Default::default()
@@ -112,6 +115,7 @@ fn renders_basic_go_package() {
     assert!(utils.contents.contains("func (c *Client) encodeMultipartBody(payload any) (io.Reader, string, error) {"));
     assert!(client.contents.contains("func (c *Client) GetWidgetRaw("));
     assert!(client.contents.contains("func (c *Client) GetWidget("));
+    assert!(client.contents.contains("// Deprecated: This operation is deprecated."));
     assert!(client.contents.contains("GetWidget parameter widgetId: Unique widget identifier."));
     assert!(client.contents.contains("requestOptions *RequestOptions"));
     assert!(client.contents.contains("if err := client.handleError(response, requestOptions); err != nil {"));

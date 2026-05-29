@@ -87,7 +87,7 @@ fn stringifies_header_values_before_passing_them_to_httpx() {
                 type_ref: Some(TypeRef::primitive("string")),
                 attributes: Attributes::default(),
             }],
-            attributes: Attributes::default(),
+            attributes: Attributes::from([("deprecated".into(), json!(true))]),
             source: None,
         }],
         ..Default::default()
@@ -103,6 +103,12 @@ fn stringifies_header_values_before_passing_them_to_httpx() {
         client
             .contents
             .contains("def _stringify_header_value(value: Any) -> str:")
+    );
+    assert!(client.contents.contains("import warnings"));
+    assert!(
+        client
+            .contents
+            .contains("warnings.warn(\"Endpoint `list_widgets` is deprecated.\", DeprecationWarning, stacklevel=2)")
     );
     assert!(
         client
