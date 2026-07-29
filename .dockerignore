@@ -1,8 +1,12 @@
 .git
 .gitignore
+.arvalez
+.venv
 target
 generated
 fixtures
+node_modules
+reports
 openapi.json
 *.pyc
 __pycache__

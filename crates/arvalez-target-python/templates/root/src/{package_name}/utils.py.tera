@@ -70,7 +70,7 @@ def validate_string_encoding(
     if isinstance(candidate, bytes):
         candidate = candidate.decode("ascii")
     if not isinstance(candidate, str):
-        raise ValueError(f"{context} must be a base64 string")
+        raise TypeError(f"{context} must be a base64 string")
 
     try:
         base64.b64decode(candidate, validate=True)

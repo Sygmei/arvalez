@@ -1,4 +1,4 @@
-ARG ARVALEZ_CLI_IMAGE=arvalez/cli:1.0.0
+ARG ARVALEZ_CLI_IMAGE=arvalez/cli:1.10.0
 ARG ARVALEZ_CONFIG=arvalez.example.toml
 ARG OPENAPI_DOCUMENT=openapi.json
 ARG REDOCLY_CLI_VERSION=2.31.5
@@ -62,7 +62,7 @@ RUN set -eu; \
 ########################################################################
 FROM python:3.12-slim AS python-cleaning
 
-RUN python -m pip install --no-cache-dir pyupgrade ruff
+RUN python -m pip install --no-cache-dir pyupgrade "ruff==0.16.0"
 
 COPY --from=python-generation /out/python-client /out/python-client
 

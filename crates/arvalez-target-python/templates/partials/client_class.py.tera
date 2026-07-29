@@ -19,20 +19,30 @@ class {{ class_name }}(_BaseApiClient):
         if self._owns_client:
             await self._client.aclose()
 
-    async def __aenter__(self) -> {{ class_name }}:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         await self.aclose()
 {% else %}
     def close(self) -> None:
         if self._owns_client:
             self._client.close()
 
-    def __enter__(self) -> {{ class_name }}:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         self.close()
 {% endif %}
 

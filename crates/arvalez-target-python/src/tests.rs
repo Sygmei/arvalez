@@ -183,6 +183,21 @@ fn renders_basic_python_package() {
     );
     assert!(client.contents.contains("ApiClient = AsyncApiClient"));
     assert!(client.contents.contains("import warnings"));
+    assert!(client.contents.contains("from types import TracebackType"));
+    assert!(client.contents.contains("from typing import Any, Self"));
+    assert!(
+        client
+            .contents
+            .contains("async def __aenter__(self) -> Self:")
+    );
+    assert!(client.contents.contains("def __enter__(self) -> Self:"));
+    assert!(
+        client
+            .contents
+            .contains("exc_type: type[BaseException] | None")
+    );
+    assert!(client.contents.contains("exc: BaseException | None"));
+    assert!(client.contents.contains("tb: TracebackType | None"));
     assert!(
         client
             .contents
@@ -190,6 +205,11 @@ fn renders_basic_python_package() {
     );
     assert!(utils.contents.contains("class RequestOptions(TypedDict, total=False):"));
     assert!(utils.contents.contains("on_error: ErrorHandler"));
+    assert!(
+        utils
+            .contents
+            .contains("raise TypeError(f\"{context} must be a base64 string\")")
+    );
     assert!(
         client
             .contents
@@ -383,6 +403,12 @@ fn groups_operations_by_tag_when_enabled() {
     );
     assert!(client.contents.contains("async def get_widget"));
     assert!(client.contents.contains("def get_widget"));
+    assert!(
+        client
+            .contents
+            .contains("\n    async def _get_widget_raw")
+    );
+    assert!(client.contents.contains("\n    def _get_widget_raw"));
     assert!(client.contents.contains("async def healthcheck"));
     assert!(client.contents.contains("def healthcheck"));
 }
