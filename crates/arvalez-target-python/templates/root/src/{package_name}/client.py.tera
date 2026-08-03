@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 from types import TracebackType
 from typing import Any, Self
+from urllib.parse import quote
 from uuid import UUID
 
 import httpx
@@ -16,6 +17,7 @@ from {{ package_name }}.utils import (
     handle_error,
     parse_response,
     serialize_body,
+    serialize_multipart_body,
     validate_string_encoding,
 )
 

@@ -24,7 +24,7 @@ class {{ class_name }}(BaseModel):
 {%- if model.fields %}
 {%- for field in model.fields %}
 {%- set py_name = field.name | py_id %}
-    {{ py_name }}: {{ field.type_ref | py_type(attributes=field.attributes) }}{% if field.nullable %} | None{% endif %}{{ field | py_field_assignment(py_name=py_name) }}
+    {{ py_name }}: {{ field.type_ref | py_type(attributes=field.attributes) }}{% if field | py_field_allows_none %} | None{% endif %}{{ field | py_field_assignment(py_name=py_name) }}
 
 {%- endfor %}
 {%- else %}

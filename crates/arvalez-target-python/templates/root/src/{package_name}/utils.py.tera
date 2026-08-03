@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 from typing import Any, Callable, TypedDict
 
 import httpx
@@ -86,6 +87,28 @@ def serialize_body(body: Any, *, json_mode: bool) -> Any:
             return body.model_dump(mode="json", by_alias=True, exclude_unset=True)
         return body.model_dump(by_alias=True, exclude_unset=True)
     return body
+
+
+def serialize_multipart_body(body: Any) -> dict[str, Any]:
+    payload = serialize_body(body, json_mode=False)
+    if not isinstance(payload, dict):
+        raise TypeError("multipart request body must serialize to a dictionary")
+
+    parts: dict[str, Any] = {}
+    for name, value in payload.items():
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            parts[name] = (
+                name,
+                bytes(value),
+                "application/octet-stream",
+            )
+        elif hasattr(value, "read"):
+            parts[name] = (getattr(value, "name", name), value)
+        elif isinstance(value, str):
+            parts[name] = (None, value)
+        else:
+            parts[name] = (None, json.dumps(value, separators=(",", ":")))
+    return parts
 
 
 def parse_response(

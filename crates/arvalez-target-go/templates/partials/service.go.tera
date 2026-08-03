@@ -1,3 +1,4 @@
+// {{ service.struct_name }} provides operations for the {{ service.tag }} API.
 type {{ service.struct_name }} struct {
 	client *Client
 }

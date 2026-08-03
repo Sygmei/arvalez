@@ -15,11 +15,7 @@ pub(crate) fn sanitize_package_name(name: &str) -> String {
 pub(crate) fn sanitize_exported_identifier(name: &str) -> String {
     let mut out = String::new();
     for word in split_words(name) {
-        let mut chars = word.chars();
-        if let Some(first) = chars.next() {
-            out.extend(first.to_uppercase());
-            out.push_str(chars.as_str());
-        }
+        out.push_str(&exported_word(&word));
     }
     if out.is_empty() {
         out = "Generated".into();
@@ -41,11 +37,7 @@ pub(crate) fn sanitize_identifier(name: &str) -> String {
         let mut iter = words.into_iter();
         let mut result = iter.next().unwrap_or_else(|| "value".into());
         for word in iter {
-            let mut chars = word.chars();
-            if let Some(first) = chars.next() {
-                result.extend(first.to_uppercase());
-                result.push_str(chars.as_str());
-            }
+            result.push_str(&exported_word(&word));
         }
         result
     };
@@ -57,6 +49,58 @@ pub(crate) fn sanitize_identifier(name: &str) -> String {
         out.push('_');
     }
     out
+}
+
+fn exported_word(word: &str) -> String {
+    if is_initialism(word) {
+        return word.to_ascii_uppercase();
+    }
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn is_initialism(word: &str) -> bool {
+    matches!(
+        word,
+        "api"
+            | "ascii"
+            | "cpu"
+            | "css"
+            | "dns"
+            | "eof"
+            | "guid"
+            | "html"
+            | "http"
+            | "https"
+            | "id"
+            | "ip"
+            | "json"
+            | "qps"
+            | "ram"
+            | "rpc"
+            | "sla"
+            | "smtp"
+            | "sql"
+            | "ssh"
+            | "tcp"
+            | "tls"
+            | "ttl"
+            | "udp"
+            | "ui"
+            | "uid"
+            | "uri"
+            | "url"
+            | "utf8"
+            | "uuid"
+            | "vm"
+            | "xml"
+            | "xmpp"
+            | "xsrf"
+            | "xss"
+    )
 }
 
 pub(crate) fn split_words(input: &str) -> Vec<String> {

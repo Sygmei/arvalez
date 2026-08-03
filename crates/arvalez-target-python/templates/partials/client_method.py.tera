@@ -8,7 +8,7 @@
 {%- set doc_params = op | py_doc_params -%}
 {%- set ret = op | py_return_type %}
 {%- set deprecated_message = "Endpoint `" ~ op.name ~ "` is deprecated." %}
-    {% if is_async %}async def{% else %}def{% endif %} {{ raw_name }}(self{%- for p in required_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }}{% endfor %}{% if op.request_body and op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }}{% endif %}{% for p in optional_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }} | None = None{% endfor %}{% if op.request_body and not op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }} | None = None{% endif %}, request_options: RequestOptions | None = None{% if op.attributes.deprecated %}, _suppress_deprecation_warning: bool = False{% endif %}) -> httpx.Response:
+    {% if is_async %}async def{% else %}def{% endif %} {{ raw_name }}(self, *{%- for p in required_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }}{% endfor %}{% if op.request_body and op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }}{% endif %}{% for p in optional_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }} | None = None{% endfor %}{% if op.request_body and not op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }} | None = None{% endif %}, request_options: RequestOptions | None = None{% if op.attributes.deprecated %}, _suppress_deprecation_warning: bool = False{% endif %}) -> httpx.Response:
         """Returns the raw HTTP response without parsing it or raising for HTTP errors.{% if op.attributes.summary %}
 
         {{ op.attributes.summary }}{% endif %}{% if doc_params %}
@@ -62,20 +62,20 @@
 {%- if op.request_body.required %}{% if op.request_body.attributes.content_encoding %}
         validate_string_encoding(body, "{{ op.request_body.attributes.content_encoding }}", "request body", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
-        request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %})
+        {% if op.request_body.media_type == "multipart/form-data" %}request_kwargs["files"] = serialize_multipart_body(body){% else %}request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %}){% endif %}
 {%- else %}
         if body is not None:
 {%- if op.request_body.attributes.content_encoding %}
             validate_string_encoding(body, "{{ op.request_body.attributes.content_encoding }}", "request body", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
-            request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %})
+            {% if op.request_body.media_type == "multipart/form-data" %}request_kwargs["files"] = serialize_multipart_body(body){% else %}request_kwargs["{% if op.request_body.media_type == "application/json" %}json{% else %}data{% endif %}"] = serialize_body(body, json_mode={% if op.request_body.media_type == "application/json" %}True{% else %}False{% endif %}){% endif %}
 {%- endif %}
 {%- endif %}
         request_kwargs = apply_request_options(request_kwargs, request_options, params={% if query_params %}params{% else %}None{% endif %}, headers={% if header_params %}headers{% else %}None{% endif %})
         {% if is_async %}response = await self._client.request("{{ op.method | upper }}", url, **request_kwargs){% else %}response = self._client.request("{{ op.method | upper }}", url, **request_kwargs){% endif %}
         return response
 
-    {% if is_async %}async def{% else %}def{% endif %} {{ py_name }}(self{%- for p in required_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }}{% endfor %}{% if op.request_body and op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }}{% endif %}{% for p in optional_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }} | None = None{% endfor %}{% if op.request_body and not op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }} | None = None{% endif %}, request_options: RequestOptions | None = None) -> {{ ret.annotation }}:
+    {% if is_async %}async def{% else %}def{% endif %} {{ py_name }}(self, *{%- for p in required_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }}{% endfor %}{% if op.request_body and op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }}{% endif %}{% for p in optional_params %}, {{ p.name | py_id }}: {{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }} | None = None{% endfor %}{% if op.request_body and not op.request_body.required %}, body: {{ op.request_body.type_ref | py_type(context="client_input", attributes=op.request_body.attributes) }} | None = None{% endif %}, request_options: RequestOptions | None = None) -> {{ ret.annotation }}:
 {%- if op.attributes.summary or doc_params %}
         """
 {%- if op.attributes.summary %}

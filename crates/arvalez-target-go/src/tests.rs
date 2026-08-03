@@ -25,6 +25,13 @@ fn sample_ir() -> CoreIr {
                     nullable: false,
                     attributes: Attributes::default(),
                 },
+                Field {
+                    name: "picture_url".into(),
+                    type_ref: TypeRef::primitive("string"),
+                    optional: true,
+                    nullable: true,
+                    attributes: Attributes::default(),
+                },
             ],
             attributes: Attributes::default(),
             source: None,
@@ -109,17 +116,53 @@ fn renders_basic_go_package() {
     assert!(go_mod.contents.contains("module github.com/demo/client"));
     assert!(models.contents.contains("type Widget struct"));
     assert!(models.contents.contains("Count *int64 `json:\"count,omitempty\"`"));
+    assert!(models.contents.contains("PictureURL *Nullable[string] `json:\"picture_url,omitempty\"`"));
+    assert!(models.contents.contains("type Nullable[T any] struct"));
+    assert!(models.contents.contains("func Null[T any]() *Nullable[T]"));
     assert!(client.contents.contains("type ErrorHandler func(*http.Response) error"));
     assert!(client.contents.contains("type RequestOptions struct"));
-    assert!(utils.contents.contains("func defaultOnError(response *http.Response) error {"));
+    assert!(!client.contents.contains("Context                  context.Context"));
+    assert!(utils.contents.contains("type APIError struct"));
+    assert!(utils.contents.contains("Body       []byte"));
+    assert!(!utils.contents.contains("func (c *Client) resolveContext("));
     assert!(utils.contents.contains("func (c *Client) encodeMultipartBody(payload any) (io.Reader, string, error) {"));
     assert!(client.contents.contains("func (c *Client) GetWidgetRaw("));
     assert!(client.contents.contains("func (c *Client) GetWidget("));
+    assert!(client.contents.contains("body *Widget"));
     assert!(client.contents.contains("// Deprecated: This operation is deprecated."));
-    assert!(client.contents.contains("GetWidget parameter widgetId: Unique widget identifier."));
+    assert!(client.contents.contains("GetWidget parameter widgetID: Unique widget identifier."));
     assert!(client.contents.contains("requestOptions *RequestOptions"));
     assert!(client.contents.contains("if err := client.handleError(response, requestOptions); err != nil {"));
     assert!(client.contents.contains("response, err := c.GetWidgetRaw("));
+}
+
+#[test]
+fn required_named_request_bodies_are_values() {
+    let mut ir = sample_ir();
+    ir.operations[0].request_body.as_mut().expect("request body").required = true;
+
+    let files = generate_go_package(
+        &ir,
+        None,
+        &default_common(),
+        &TargetConfig::default(),
+    )
+    .expect("package should render");
+    let client = files
+        .iter()
+        .find(|file| file.path.ends_with("client.go"))
+        .expect("client.go");
+
+    assert!(client.contents.contains("body Widget"));
+    assert!(!client.contents.contains("body *Widget"));
+}
+
+#[test]
+fn preserves_common_go_initialisms() {
+    assert_eq!(crate::sanitize::sanitize_exported_identifier("picture_url"), "PictureURL");
+    assert_eq!(crate::sanitize::sanitize_exported_identifier("get_item_by_id"), "GetItemByID");
+    assert_eq!(crate::sanitize::sanitize_identifier("item_id"), "itemID");
+    assert_eq!(crate::sanitize::sanitize_identifier("x_admin_token"), "xAdminToken");
 }
 
 #[test]

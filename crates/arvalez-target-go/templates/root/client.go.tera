@@ -11,8 +11,10 @@ import (
 
 const SDKVersion = "{{ version }}"
 
+// ErrorHandler converts a non-successful HTTP response into an error.
 type ErrorHandler func(*http.Response) error
 
+// ClientOptions configures a Client.
 type ClientOptions struct {
 	HTTPClient               *http.Client
 	Headers                  http.Header
@@ -20,8 +22,8 @@ type ClientOptions struct {
 	ValidateContentEncodings *bool
 }
 
+// RequestOptions configures a single API request.
 type RequestOptions struct {
-	Context                  context.Context
 	Headers                  http.Header
 	Query                    url.Values
 	Cookies                  []*http.Cookie
@@ -29,6 +31,7 @@ type RequestOptions struct {
 	ValidateContentEncodings *bool
 }
 
+// Client is a client for the generated API.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -42,6 +45,7 @@ type Client struct {
 {% endif %}
 }
 
+// NewClient creates a client using baseURL as the API root.
 func NewClient(baseURL string, options *ClientOptions) *Client {
 	client := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),

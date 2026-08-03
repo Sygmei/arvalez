@@ -179,7 +179,11 @@ fn go_type_from_value(v: &Value) -> String {
 }
 
 fn go_field_type_from_value(type_ref: &Value, optional: bool, nullable: bool) -> String {
-    if optional || nullable {
+    if nullable {
+        let nullable_type = format!("Nullable[{}]", go_type_from_value(type_ref));
+        return if optional { format!("*{nullable_type}") } else { nullable_type };
+    }
+    if optional {
         match type_ref.get("kind").and_then(Value::as_str) {
             Some("primitive") => match type_ref["name"].as_str().unwrap_or("") {
                 "string"  => return "*string".into(),
@@ -225,7 +229,8 @@ fn go_body_type_from_value(body: &Value, required: bool) -> String {
     let type_ref = body.get("type_ref").filter(|v| !v.is_null());
     match type_ref {
         Some(v) if v.get("kind").and_then(Value::as_str) == Some("named") => {
-            format!("*{}", sanitize_exported_identifier(v["name"].as_str().unwrap_or("")))
+            let name = sanitize_exported_identifier(v["name"].as_str().unwrap_or(""));
+            if required { name } else { format!("*{name}") }
         }
         Some(v) => {
             if required { go_required_type_from_value(v) } else { go_optional_type_from_value(v) }

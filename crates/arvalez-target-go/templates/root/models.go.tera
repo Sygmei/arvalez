@@ -1,4 +1,49 @@
 package {{ package_name }}
-{% for model in models %}
-{% include "partials/model_struct.go.tera" %}
-{% endfor %}
+
+import (
+	"bytes"
+	"encoding/json"
+)
+
+// Nullable represents a JSON value that may explicitly be null.
+// A nil *Nullable field represents an omitted optional property.
+type Nullable[T any] struct {
+	Value T
+	Valid bool
+}
+
+// NewNullable returns a nullable value containing value.
+func NewNullable[T any](value T) *Nullable[T] {
+	return &Nullable[T]{Value: value, Valid: true}
+}
+
+// Null returns an explicit JSON null value.
+func Null[T any]() *Nullable[T] {
+	return &Nullable[T]{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (value Nullable[T]) MarshalJSON() ([]byte, error) {
+	if !value.Valid {
+		return []byte("null"), nil
+	}
+	return json.Marshal(value.Value)
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (value *Nullable[T]) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		var zero T
+		value.Value = zero
+		value.Valid = false
+		return nil
+	}
+	if err := json.Unmarshal(data, &value.Value); err != nil {
+		return err
+	}
+	value.Valid = true
+	return nil
+}
+{% for model in models -%}
+{% include "partials/model_struct.go.tera" -%}
+{% endfor -%}

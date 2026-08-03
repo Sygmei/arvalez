@@ -97,8 +97,31 @@ pub fn register_filters(tera: &mut Tera) {
                     .and_then(|attributes| attributes.get("format"))
                     .and_then(Value::as_str)
             });
-        Ok(Value::String(type_ref_to_py(v, context, format)))
+        let content_media_type = args
+            .get("attributes")
+            .and_then(|attributes| attributes.get("content_media_type"))
+            .and_then(Value::as_str);
+        Ok(Value::String(type_ref_to_py(
+            v,
+            context,
+            format,
+            content_media_type,
+        )))
     });
+
+    // {{ field | py_field_allows_none }} - whether the generated default can be None
+    tera.register_filter(
+        "py_field_allows_none",
+        |v: &Value, _: &HashMap<String, Value>| {
+            let nullable = v.get("nullable").and_then(Value::as_bool).unwrap_or(false);
+            let optional = v.get("optional").and_then(Value::as_bool).unwrap_or(false);
+            let has_default = v
+                .get("attributes")
+                .and_then(Value::as_object)
+                .is_some_and(|attributes| attributes.contains_key("default"));
+            Ok(Value::Bool(nullable || (optional && !has_default)))
+        },
+    );
 
     // {{ field | py_field_assignment(py_name=py_name) }} - field to default/alias suffix
     tera.register_filter(
@@ -153,7 +176,7 @@ pub fn register_filters(tera: &mut Tera) {
         Ok(Value::String(sanitize_class_name(v.as_str().unwrap_or(""))))
     });
 
-    // {{ "/users/{userId}" | py_fstring }} → "/users/{user_id}"
+    // {{ "/users/{userId}" | py_fstring }} → "/users/{quote(str(user_id), safe='')}"
     tera.register_filter("py_fstring", |v: &Value, _: &HashMap<String, Value>| {
         let path = v.as_str().unwrap_or("");
         let mut out = String::with_capacity(path.len());
@@ -168,7 +191,9 @@ pub fn register_filters(tera: &mut Tera) {
                     name.push(nc);
                 }
                 out.push('{');
+                out.push_str("quote(str(");
                 out.push_str(&sanitize_identifier(&name));
+                out.push_str("), safe='')");
                 out.push('}');
             } else if ch == '"' {
                 out.push_str("\\\"");
@@ -253,7 +278,7 @@ pub fn register_filters(tera: &mut Tera) {
                         .get("attributes")
                         .and_then(|a| a.get("format"))
                         .and_then(Value::as_str);
-                    let annotation = type_ref_to_py(type_ref, "client_output", format);
+                    let annotation = type_ref_to_py(type_ref, "client_output", format, None);
                     let content_encoding = r
                         .get("attributes")
                         .and_then(|a| a.get("content_encoding"))
@@ -321,10 +346,16 @@ fn py_literal(value: &Value) -> String {
 
 // ── TypeRef → Python type ─────────────────────────────────────────────────────
 
-fn type_ref_to_py(v: &Value, context: &str, format: Option<&str>) -> String {
+fn type_ref_to_py(
+    v: &Value,
+    context: &str,
+    format: Option<&str>,
+    content_media_type: Option<&str>,
+) -> String {
     let client_context = matches!(context, "client" | "client_input" | "client_output");
     match v.get("kind").and_then(Value::as_str) {
         Some("primitive") => match v["name"].as_str().unwrap_or("any") {
+            "string" if content_media_type == Some("application/octet-stream") => "bytes",
             "string" => match format {
                 Some("uuid4") => match context {
                     "client" | "client_input" => "UUID | str",
@@ -352,13 +383,19 @@ fn type_ref_to_py(v: &Value, context: &str, format: Option<&str>) -> String {
                 name
             }
         }
-        Some("array") => format!("list[{}]", type_ref_to_py(&v["item"], context, None)),
-        Some("map") => format!("dict[str, {}]", type_ref_to_py(&v["value"], context, None)),
+        Some("array") => format!(
+            "list[{}]",
+            type_ref_to_py(&v["item"], context, None, None)
+        ),
+        Some("map") => format!(
+            "dict[str, {}]",
+            type_ref_to_py(&v["value"], context, None, None)
+        ),
         Some("union") => v["variants"]
             .as_array()
             .map(|vs| {
                 vs.iter()
-                    .map(|v| type_ref_to_py(v, context, None))
+                    .map(|v| type_ref_to_py(v, context, None, None))
                     .collect::<Vec<_>>()
                     .join(" | ")
             })

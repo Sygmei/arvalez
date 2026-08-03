@@ -215,10 +215,15 @@ fn renders_basic_python_package() {
             .contents
             .contains("on_error: ErrorHandler | None = None")
     );
-    assert!(client.contents.contains("async def get_widget"));
-    assert!(client.contents.contains("async def _get_widget_raw"));
-    assert!(client.contents.contains("def get_widget"));
-    assert!(client.contents.contains("def _get_widget_raw"));
+    assert!(client.contents.contains("async def get_widget(self, *,"));
+    assert!(client.contents.contains("async def _get_widget_raw(self, *,"));
+    assert!(client.contents.contains("def get_widget(self, *,"));
+    assert!(client.contents.contains("def _get_widget_raw(self, *,"));
+    assert!(
+        client
+            .contents
+            .contains("url = f\"/widgets/{quote(str(widget_id), safe='')}\"")
+    );
     assert!(
         client
             .contents
@@ -308,6 +313,13 @@ fn renders_property_defaults_without_making_fields_nullable() {
                     nullable: false,
                     attributes: Attributes::from([("default".into(), json!(true))]),
                 },
+                Field {
+                    name: "missing".into(),
+                    type_ref: TypeRef::primitive("boolean"),
+                    optional: true,
+                    nullable: false,
+                    attributes: Attributes::default(),
+                },
             ],
             attributes: Attributes::default(),
             source: None,
@@ -328,6 +340,76 @@ fn renders_property_defaults_without_making_fields_nullable() {
     assert!(models
         .contents
         .contains("wire_name: bool = Field(default=True, alias=\"wire-name\")"));
+    assert!(models.contents.contains("missing: bool | None = None"));
+}
+
+#[test]
+fn renders_multipart_file_requests() {
+    let ir = CoreIr {
+        models: vec![arvalez_ir::Model {
+            id: "model.upload_body".into(),
+            name: "UploadBody".into(),
+            fields: vec![Field {
+                name: "file".into(),
+                type_ref: TypeRef::primitive("string"),
+                optional: false,
+                nullable: false,
+                attributes: Attributes::from([(
+                    "content_media_type".into(),
+                    json!("application/octet-stream"),
+                )]),
+            }],
+            attributes: Attributes::default(),
+            source: None,
+        }],
+        operations: vec![Operation {
+            id: "operation.upload_file".into(),
+            name: "upload_file".into(),
+            method: HttpMethod::Post,
+            path: "/files".into(),
+            params: Vec::new(),
+            request_body: Some(RequestBody {
+                required: true,
+                media_type: "multipart/form-data".into(),
+                type_ref: Some(TypeRef::named("UploadBody")),
+                attributes: Attributes::default(),
+            }),
+            responses: vec![Response {
+                status: "204".into(),
+                media_type: None,
+                type_ref: None,
+                attributes: Attributes::default(),
+            }],
+            attributes: Attributes::default(),
+            source: None,
+        }],
+        ..Default::default()
+    };
+
+    let files = make_package_from_ir(ir, "demo_client", None, TargetConfig::default())
+        .expect("package should render");
+    let client = files
+        .iter()
+        .find(|file| file.path.ends_with("client.py"))
+        .expect("client.py");
+    let models = files
+        .iter()
+        .find(|file| file.path.ends_with("models.py"))
+        .expect("models.py");
+    let utils = files
+        .iter()
+        .find(|file| file.path.ends_with("utils.py"))
+        .expect("utils.py");
+
+    assert!(models.contents.contains("file: bytes"));
+    assert!(
+        client
+            .contents
+            .contains("request_kwargs[\"files\"] = serialize_multipart_body(body)")
+    );
+    assert!(client.contents.contains("def upload_file(self, *, body: models.UploadBody"));
+    assert!(utils.contents.contains("def serialize_multipart_body(body: Any) -> dict[str, Any]:"));
+    assert!(utils.contents.contains("\"application/octet-stream\""));
 }
 
 #[test]
@@ -685,8 +767,8 @@ fn renders_uuid_annotations_for_models_and_client_inputs() {
 
     assert!(client.contents.contains("from uuid import UUID"));
     assert!(client.contents.contains("widget_id: UUID | str"));
-    assert!(client.contents.contains("def get_widget(self, widget_id: UUID | str, request_options: RequestOptions | None = None) -> UUID4:"));
-    assert!(client.contents.contains("def create_widget(self, body: UUID | str, request_options: RequestOptions | None = None) -> models.Widget:"));
+    assert!(client.contents.contains("def get_widget(self, *, widget_id: UUID | str, request_options: RequestOptions | None = None) -> UUID4:"));
+    assert!(client.contents.contains("def create_widget(self, *, body: UUID | str, request_options: RequestOptions | None = None) -> models.Widget:"));
 }
 
 #[test]

@@ -2,7 +2,6 @@ package {{ package_name }}
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,8 +13,42 @@ import (
 	"strings"
 )
 
+const maxErrorBodyBytes = 1 << 20
+
+// APIError describes a non-successful HTTP response.
+type APIError struct {
+	StatusCode int
+	Status     string
+	Header     http.Header
+	Body       []byte
+	Truncated  bool
+	ReadError  error
+}
+
+// Error implements error.
+func (e *APIError) Error() string {
+	return fmt.Sprintf("request failed with status %d: %s", e.StatusCode, e.Status)
+}
+
+// Unwrap exposes an error encountered while reading the response body.
+func (e *APIError) Unwrap() error {
+	return e.ReadError
+}
+
 func defaultOnError(response *http.Response) error {
-	return fmt.Errorf("request failed with status %d: %s", response.StatusCode, response.Status)
+	body, readError := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyBytes+1))
+	truncated := len(body) > maxErrorBodyBytes
+	if truncated {
+		body = body[:maxErrorBodyBytes]
+	}
+	return &APIError{
+		StatusCode: response.StatusCode,
+		Status:     response.Status,
+		Header:     cloneHeaders(response.Header),
+		Body:       body,
+		Truncated:  truncated,
+		ReadError:  readError,
+	}
 }
 
 func cloneHeaders(headers http.Header) http.Header {
@@ -57,16 +90,6 @@ func cloneCookies(cookies []*http.Cookie) []*http.Cookie {
 		cloned = append(cloned, &copied)
 	}
 	return cloned
-}
-
-func (c *Client) resolveContext(ctx context.Context, requestOptions *RequestOptions) context.Context {
-	if requestOptions != nil && requestOptions.Context != nil {
-		return requestOptions.Context
-	}
-	if ctx != nil {
-		return ctx
-	}
-	return context.Background()
 }
 
 func (c *Client) mergeHeaders(base http.Header, requestOptions *RequestOptions) http.Header {
