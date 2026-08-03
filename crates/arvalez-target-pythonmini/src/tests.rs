@@ -23,6 +23,7 @@ fn renders_property_defaults_without_making_fields_nullable() {
         models: vec![arvalez_ir::Model {
             id: "model.my_schema".into(),
             name: "MySchema".into(),
+            kind: arvalez_ir::ModelKind::Object,
             fields: vec![
                 Field {
                     name: "iscool".into(),

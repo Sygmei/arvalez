@@ -1,5 +1,9 @@
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+{% for inline_enum in ir | ts_inline_enums %}
+export const {{ inline_enum.name | ts_type_name }}Values = {{ inline_enum.values | json_encode }} as const;
+export type {{ inline_enum.name | ts_type_name }} = (typeof {{ inline_enum.name | ts_type_name }}Values)[number];
+{% endfor %}
 {% for model in models %}
 {% include "partials/model_interface.ts.tera" %}
 {% endfor %}

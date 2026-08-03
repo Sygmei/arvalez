@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const CURRENT_IR_VERSION: u32 = 1;
+pub const CURRENT_IR_VERSION: u32 = 2;
 
 pub type Attributes = BTreeMap<String, Value>;
 
@@ -31,6 +31,8 @@ impl Default for CoreIr {
 pub struct Model {
     pub id: String,
     pub name: String,
+    #[serde(flatten)]
+    pub kind: ModelKind,
     #[serde(default)]
     pub fields: Vec<Field>,
     #[serde(default)]
@@ -44,9 +46,34 @@ impl Model {
         Self {
             id: id.into(),
             name: name.into(),
+            kind: ModelKind::Object,
             fields: Vec::new(),
             attributes: Attributes::default(),
             source: None,
+        }
+    }
+
+    pub fn enum_values(&self) -> Option<&[Value]> {
+        self.kind.enum_values()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ModelKind {
+    #[default]
+    Object,
+    Enum {
+        base: TypeRef,
+        values: Vec<Value>,
+    },
+}
+
+impl ModelKind {
+    pub fn enum_values(&self) -> Option<&[Value]> {
+        match self {
+            Self::Enum { values, .. } => Some(values),
+            Self::Object => None,
         }
     }
 }
@@ -166,6 +193,11 @@ pub enum ParameterLocation {
 pub enum TypeRef {
     Primitive { name: String },
     Named { name: String },
+    Enum {
+        name: String,
+        base: Box<TypeRef>,
+        values: Vec<Value>,
+    },
     Array { item: Box<TypeRef> },
     Map { value: Box<TypeRef> },
     Union { variants: Vec<TypeRef> },
@@ -178,6 +210,21 @@ impl TypeRef {
 
     pub fn named(name: impl Into<String>) -> Self {
         Self::Named { name: name.into() }
+    }
+
+    pub fn enumeration(name: impl Into<String>, base: TypeRef, values: Vec<Value>) -> Self {
+        Self::Enum {
+            name: name.into(),
+            base: Box::new(base),
+            values,
+        }
+    }
+
+    pub fn enum_values(&self) -> Option<&[Value]> {
+        match self {
+            Self::Enum { values, .. } => Some(values),
+            _ => None,
+        }
     }
 
     pub fn array(item: TypeRef) -> Self {

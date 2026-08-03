@@ -1,10 +1,10 @@
-{% if model.attributes.enum_values %}# Enum: {{ model.name | nu_cmd }}
-# Valid values: {% for v in model.attributes.enum_values %}{{ v | json_encode }}{% if not loop.last %}, {% endif %}{% endfor %}
+{% if model.kind == "enum" %}# Enum: {{ model.name | nu_cmd }}
+# Valid values: {% for v in model.values %}{{ v | json_encode }}{% if not loop.last %}, {% endif %}{% endfor %}
 
 export def "make-{{ model.name | nu_cmd }}" [
     value: string  # Must be one of the valid enum values
 ]: nothing -> string {
-    let valid = [{% for v in model.attributes.enum_values %}{{ v | json_encode }}{% if not loop.last %}, {% endif %}{% endfor %}]
+    let valid = [{% for v in model.values %}{{ v | json_encode }}{% if not loop.last %}, {% endif %}{% endfor %}]
     if ($value not-in $valid) {
         error make { msg: $"Invalid {{ model.name | nu_cmd }} value: ($value). Expected one of: ($valid | str join ', ')" }
     }

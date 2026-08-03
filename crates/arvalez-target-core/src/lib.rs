@@ -240,6 +240,7 @@ pub fn render_root_templates(
     config_val: &Value,
     erased: &[String],
 ) -> Result<Vec<GeneratedFile>> {
+    ctx.insert("ir", ir);
     ctx.insert("models", &serde_json::to_value(sorted_models(ir))?);
     ctx.insert("operations", &serde_json::to_value(sorted_operations(ir))?);
     // Common fields go in first, then target config fields override them.

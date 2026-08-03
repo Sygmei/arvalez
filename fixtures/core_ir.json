@@ -1,9 +1,10 @@
 {
-  "ir_version": 1,
+  "ir_version": 2,
   "models": [
     {
       "id": "model.invoice",
       "name": "Invoice",
+      "kind": "object",
       "fields": [
         {
           "name": "id",

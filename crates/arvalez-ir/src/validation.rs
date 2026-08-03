@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::{CURRENT_IR_VERSION, CoreIr, TypeRef};
+use crate::{CURRENT_IR_VERSION, CoreIr, ModelKind, TypeRef};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationIssue {
@@ -50,6 +50,22 @@ pub fn validate_ir(ir: &CoreIr) -> Result<(), ValidationErrors> {
                 &format!("{path}.name"),
                 format!("duplicate model name `{}`", model.name),
             ));
+        }
+
+        if let ModelKind::Enum { base, values } = &model.kind {
+            validate_type_ref(base, &format!("{path}.base"), &mut issues);
+            if values.is_empty() {
+                issues.push(issue(
+                    &format!("{path}.values"),
+                    "enum values must not be empty",
+                ));
+            }
+            if !model.fields.is_empty() {
+                issues.push(issue(
+                    &format!("{path}.fields"),
+                    "enum models must not define fields",
+                ));
+            }
         }
 
         let mut field_names = BTreeSet::new();
@@ -144,6 +160,18 @@ fn validate_type_ref(type_ref: &TypeRef, path: &str, issues: &mut Vec<Validation
         TypeRef::Primitive { name } | TypeRef::Named { name } => {
             if name.trim().is_empty() {
                 issues.push(issue(path, "type name must not be empty"));
+            }
+        }
+        TypeRef::Enum { name, base, values } => {
+            if name.trim().is_empty() {
+                issues.push(issue(&format!("{path}.name"), "enum name must not be empty"));
+            }
+            validate_type_ref(base, &format!("{path}.base"), issues);
+            if values.is_empty() {
+                issues.push(issue(
+                    &format!("{path}.values"),
+                    "enum values must not be empty",
+                ));
             }
         }
         TypeRef::Array { item } => validate_type_ref(item, &format!("{path}.item"), issues),

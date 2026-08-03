@@ -41,6 +41,7 @@ fn sample_ir() -> arvalez_ir::CoreIr {
             arvalez_ir::Model {
                 id: "model.widget_path".into(),
                 name: "WidgetPath".into(),
+                kind: arvalez_ir::ModelKind::Object,
                 fields: Vec::new(),
                 attributes: Attributes::from([
                     ("alias_type_ref".into(), json!(TypeRef::primitive("string"))),
@@ -51,16 +52,18 @@ fn sample_ir() -> arvalez_ir::CoreIr {
             arvalez_ir::Model {
                 id: "model.widget_status".into(),
                 name: "WidgetStatus".into(),
+                kind: arvalez_ir::ModelKind::Enum {
+                    base: TypeRef::primitive("string"),
+                    values: vec![json!("READY"), json!("PAUSED")],
+                },
                 fields: Vec::new(),
-                attributes: Attributes::from([
-                    ("enum_base_type".into(), json!("string")),
-                    ("enum_values".into(), json!(["READY", "PAUSED"])),
-                ]),
+                attributes: Attributes::default(),
                 source: None,
             },
             arvalez_ir::Model {
                 id: "model.widget".into(),
                 name: "Widget".into(),
+                kind: arvalez_ir::ModelKind::Object,
                 fields: vec![
                     Field::new("id", TypeRef::primitive("string")),
                     Field::new("path", TypeRef::named("WidgetPath")),
@@ -291,6 +294,7 @@ fn renders_property_defaults_without_making_fields_nullable() {
         models: vec![arvalez_ir::Model {
             id: "model.my_schema".into(),
             name: "MySchema".into(),
+            kind: arvalez_ir::ModelKind::Object,
             fields: vec![
                 Field {
                     name: "iscool".into(),
@@ -349,6 +353,7 @@ fn renders_multipart_file_requests() {
         models: vec![arvalez_ir::Model {
             id: "model.upload_body".into(),
             name: "UploadBody".into(),
+            kind: arvalez_ir::ModelKind::Object,
             fields: vec![Field {
                 name: "file".into(),
                 type_ref: TypeRef::primitive("string"),
@@ -667,6 +672,7 @@ fn renders_uuid_annotations_for_models_and_client_inputs() {
         models: vec![arvalez_ir::Model {
             id: "model.widget".into(),
             name: "Widget".into(),
+            kind: arvalez_ir::ModelKind::Object,
             fields: vec![
                 Field {
                     name: "id".into(),

@@ -1,4 +1,4 @@
-import type { {{ models | ts_client_imports }} } from "./models";
+import type { {{ ir | ts_client_imports }} } from "./models";
 import {
   buildUrl,
   createRequestInit,

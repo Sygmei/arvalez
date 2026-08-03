@@ -1,6 +1,7 @@
 {%- set type_name = model.name | ts_type_name -%}
-{%- if model.attributes.enum_values -%}
-export type {{ type_name }} = {{ model.attributes.enum_values | ts_enum_expression }};
+{%- if model.kind == "enum" -%}
+export const {{ type_name }}Values = {{ model.values | json_encode }} as const;
+export type {{ type_name }} = (typeof {{ type_name }}Values)[number];
 {%- elif model.attributes.alias_type_ref -%}
 export type {{ type_name }} = {{ model.attributes.alias_type_ref | ts_type }}{% if model.attributes.alias_nullable %} | null{% endif %};
 {%- else -%}

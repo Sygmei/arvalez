@@ -1,6 +1,10 @@
 // {{ model.name | go_exported }} is the generated representation of {{ model.name }}.
+{% if model.kind == "enum" -%}
+type {{ model.name | go_exported }} {{ model.base | go_type }}
+{% else -%}
 type {{ model.name | go_exported }} struct {
 {%- for field in model.fields %}
 	{{ field.name | go_exported }} {{ field | go_field_type }} {{ field | go_json_tag }}
 {%- endfor %}
 }
+{% endif -%}

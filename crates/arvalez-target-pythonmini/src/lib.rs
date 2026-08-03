@@ -191,6 +191,7 @@ fn type_ref_to_py(v: &Value) -> String {
         }
         .into(),
         Some("named") => to_pascal_case(v["name"].as_str().unwrap_or("Any")),
+        Some("enum") => type_ref_to_py(&v["base"]),
         Some("array") => format!("list[{}]", type_ref_to_py(&v["item"])),
         Some("map") => format!("dict[str, {}]", type_ref_to_py(&v["value"])),
         Some("union") => v["variants"]

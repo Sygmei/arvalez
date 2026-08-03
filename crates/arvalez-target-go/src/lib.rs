@@ -172,6 +172,7 @@ fn go_type_from_value(v: &Value) -> String {
             _         => "any",
         }.into(),
         Some("named") => sanitize_exported_identifier(v["name"].as_str().unwrap_or("")),
+        Some("enum")  => go_type_from_value(&v["base"]),
         Some("array") => format!("[]{}", go_type_from_value(&v["item"])),
         Some("map")   => format!("map[string]{}", go_type_from_value(&v["value"])),
         _             => "any".into(),
@@ -193,6 +194,7 @@ fn go_field_type_from_value(type_ref: &Value, optional: bool, nullable: bool) ->
                 _ => {}
             },
             Some("named") => return format!("*{}", go_type_from_value(type_ref)),
+            Some("enum") => return go_optional_type_from_value(&type_ref["base"]),
             _ => {}
         }
     }
@@ -221,6 +223,7 @@ fn go_optional_type_from_value(type_ref: &Value) -> String {
             _         => go_type_from_value(type_ref),
         },
         Some("named") => format!("*{}", go_type_from_value(type_ref)),
+        Some("enum") => go_optional_type_from_value(&type_ref["base"]),
         _             => go_type_from_value(type_ref),
     }
 }
@@ -377,6 +380,7 @@ fn returns_pointer_from_value(tr: &Value) -> bool {
 fn returns_nil_from_value(tr: &Value) -> bool {
     match tr.get("kind").and_then(Value::as_str) {
         Some("named") | Some("array") | Some("map") => true,
+        Some("enum") => returns_nil_from_value(&tr["base"]),
         Some("primitive") => tr["name"].as_str() == Some("binary"),
         _ => false,
     }

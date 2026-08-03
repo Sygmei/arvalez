@@ -16,6 +16,7 @@ fn sample_ir() -> CoreIr {
         models: vec![arvalez_ir::Model {
             id: "model.widget".into(),
             name: "Widget".into(),
+            kind: arvalez_ir::ModelKind::Object,
             fields: vec![
                 Field::new("id", TypeRef::primitive("string")),
                 Field {

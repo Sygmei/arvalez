@@ -383,6 +383,7 @@ fn type_ref_to_py(
                 name
             }
         }
+        Some("enum") => type_ref_to_py(&v["base"], context, format, content_media_type),
         Some("array") => format!(
             "list[{}]",
             type_ref_to_py(&v["item"], context, None, None)

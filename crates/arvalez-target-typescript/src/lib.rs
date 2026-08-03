@@ -100,16 +100,27 @@ pub fn register_filters(tera: &mut Tera) {
             .unwrap_or_default();
         Ok(Value::String(expr))
     });
-    // {{ models | ts_client_imports }} — models array → sorted import name list
+    // {{ ir | ts_inline_enums }} — IR → sorted inline enum declarations
+    tera.register_filter("ts_inline_enums", |v: &Value, _: &HashMap<String, Value>| {
+        Ok(Value::Array(collect_inline_enums(v)))
+    });
+    // {{ ir | ts_client_imports }} — IR → sorted client type import name list
     tera.register_filter("ts_client_imports", |v: &Value, _: &HashMap<String, Value>| {
         let mut names: Vec<String> = v
-            .as_array()
+            .get("models")
+            .and_then(Value::as_array)
             .map(|arr| {
                 arr.iter()
                     .map(|m| sanitize_type_name(m.get("name").and_then(Value::as_str).unwrap_or("")))
                     .collect()
             })
             .unwrap_or_default();
+        names.extend(
+            collect_operation_inline_enums(v)
+                .iter()
+                .filter_map(|enumeration| enumeration.get("name").and_then(Value::as_str))
+                .map(sanitize_type_name),
+        );
         names.push("JsonValue".to_owned());
         names.sort();
         names.dedup();
@@ -221,6 +232,22 @@ fn type_ref_to_ts(v: &Value) -> String {
         }
         .into(),
         Some("named") => sanitize_type_name(v["name"].as_str().unwrap_or("")),
+        Some("enum") => v["name"]
+            .as_str()
+            .filter(|name| !name.is_empty())
+            .map(sanitize_type_name)
+            .unwrap_or_else(|| {
+                v["values"]
+                    .as_array()
+                    .map(|values| {
+                        values
+                            .iter()
+                            .map(render_enum_variant)
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    })
+                    .unwrap_or_else(|| "unknown".into())
+            }),
         Some("array") => format!("{}[]", type_ref_to_ts(&v["item"])),
         Some("map") => format!("Record<string, {}>", type_ref_to_ts(&v["value"])),
         Some("union") => v["variants"]
@@ -228,6 +255,102 @@ fn type_ref_to_ts(v: &Value) -> String {
             .map(|vs| vs.iter().map(type_ref_to_ts).collect::<Vec<_>>().join(" | "))
             .unwrap_or_else(|| "unknown".into()),
         _ => "unknown".into(),
+    }
+}
+
+fn collect_inline_enums(ir: &Value) -> Vec<Value> {
+    let mut enumerations = std::collections::BTreeMap::<String, Value>::new();
+
+    if let Some(models) = ir.get("models").and_then(Value::as_array) {
+        for model in models {
+            if let Some(fields) = model.get("fields").and_then(Value::as_array) {
+                for field in fields {
+                    if let Some(type_ref) = field.get("type_ref") {
+                        collect_type_ref_enums(type_ref, &mut enumerations);
+                    }
+                }
+            }
+        }
+    }
+
+    collect_operation_type_ref_enums(ir, &mut enumerations);
+    enumerations.into_values().collect()
+}
+
+fn collect_operation_inline_enums(ir: &Value) -> Vec<Value> {
+    let mut enumerations = std::collections::BTreeMap::<String, Value>::new();
+    collect_operation_type_ref_enums(ir, &mut enumerations);
+    enumerations.into_values().collect()
+}
+
+fn collect_operation_type_ref_enums(
+    ir: &Value,
+    enumerations: &mut std::collections::BTreeMap<String, Value>,
+) {
+    if let Some(operations) = ir.get("operations").and_then(Value::as_array) {
+        for operation in operations {
+            if let Some(params) = operation.get("params").and_then(Value::as_array) {
+                for param in params {
+                    if let Some(type_ref) = param.get("type_ref") {
+                        collect_type_ref_enums(type_ref, enumerations);
+                    }
+                }
+            }
+            if let Some(type_ref) = operation
+                .get("request_body")
+                .and_then(|body| body.get("type_ref"))
+                .filter(|type_ref| !type_ref.is_null())
+            {
+                collect_type_ref_enums(type_ref, enumerations);
+            }
+            if let Some(responses) = operation.get("responses").and_then(Value::as_array) {
+                for response in responses {
+                    if let Some(type_ref) = response
+                        .get("type_ref")
+                        .filter(|type_ref| !type_ref.is_null())
+                    {
+                        collect_type_ref_enums(type_ref, enumerations);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_type_ref_enums(
+    type_ref: &Value,
+    enumerations: &mut std::collections::BTreeMap<String, Value>,
+) {
+    match type_ref.get("kind").and_then(Value::as_str) {
+        Some("enum") => {
+            let name = type_ref
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !name.is_empty() {
+                enumerations
+                    .entry(name.to_owned())
+                    .or_insert_with(|| type_ref.clone());
+            }
+        }
+        Some("array") => {
+            if let Some(item) = type_ref.get("item") {
+                collect_type_ref_enums(item, enumerations);
+            }
+        }
+        Some("map") => {
+            if let Some(value) = type_ref.get("value") {
+                collect_type_ref_enums(value, enumerations);
+            }
+        }
+        Some("union") => {
+            if let Some(variants) = type_ref.get("variants").and_then(Value::as_array) {
+                for variant in variants {
+                    collect_type_ref_enums(variant, enumerations);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

@@ -1,4 +1,4 @@
-use arvalez_ir::{ParameterLocation, TypeRef};
+use arvalez_ir::{ModelKind, ParameterLocation, TypeRef};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -807,7 +807,14 @@ fn json_test_source(spec: &str) -> OpenApiSource {
             .iter()
             .find(|field| field.name == "status")
             .expect("status field");
-        assert_eq!(status.type_ref, TypeRef::primitive("string"));
+        assert_eq!(
+            status.type_ref,
+            TypeRef::enumeration(
+                "WidgetStatus",
+                TypeRef::primitive("string"),
+                vec![json!("ready"), json!("pending")],
+            )
+        );
 
         let children = widget
             .fields
@@ -825,6 +832,92 @@ fn json_test_source(spec: &str) -> OpenApiSource {
             .find(|field| field.name == "withTrial")
             .expect("withTrial field");
         assert_eq!(with_trial.type_ref, TypeRef::primitive("boolean"));
+    }
+
+    #[test]
+    fn preserves_inline_and_array_item_enums_as_first_class_types() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "EvaluateRequest": {
+        "type": "object",
+        "properties": {
+          "account_category": {
+            "type": ["string", "null"],
+            "enum": ["DMZRC", "MZRC", "ONPREM"]
+          }
+        }
+      },
+      "RuleFilter": {
+        "type": "object",
+        "properties": {
+          "account_category": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "string",
+              "enum": ["DMZRC", "MZRC", "ONPREM"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("inline enum shapes should be preserved");
+        let expected_values = vec![json!("DMZRC"), json!("MZRC"), json!("ONPREM")];
+
+        let evaluate_request = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "EvaluateRequest")
+            .expect("EvaluateRequest model");
+        let evaluate_category = &evaluate_request.fields[0];
+        assert!(evaluate_category.nullable);
+        assert_eq!(
+            evaluate_category.type_ref,
+            TypeRef::enumeration(
+                "EvaluateRequestAccountCategory",
+                TypeRef::primitive("string"),
+                expected_values.clone(),
+            )
+        );
+        assert_eq!(
+            evaluate_category.type_ref.enum_values(),
+            Some(expected_values.as_slice())
+        );
+
+        let rule_filter = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "RuleFilter")
+            .expect("RuleFilter model");
+        let rule_category = &rule_filter.fields[0];
+        assert!(rule_category.nullable);
+        let TypeRef::Array { item } = &rule_category.type_ref else {
+            panic!("expected account_category to be an array");
+        };
+        assert_eq!(
+            item.as_ref(),
+            &TypeRef::enumeration(
+                "RuleFilterAccountCategory",
+                TypeRef::primitive("string"),
+                expected_values,
+            )
+        );
     }
 
     #[test]
@@ -1166,11 +1259,14 @@ fn json_test_source(spec: &str) -> OpenApiSource {
             .find(|model| model.name == "RetryableStatus")
             .expect("RetryableStatus model");
         assert_eq!(
-            retryable_status.attributes.get("enum_values"),
-            Some(&Value::Array(vec![
-                Value::String("pending".into()),
-                Value::String("failed".into())
-            ]))
+            retryable_status.kind,
+            ModelKind::Enum {
+                base: TypeRef::primitive("string"),
+                values: vec![
+                    Value::String("pending".into()),
+                    Value::String("failed".into())
+                ],
+            }
         );
         assert!(
             patch_schema

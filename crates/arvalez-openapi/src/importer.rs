@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow, bail};
 use arvalez_ir::{
-    Attributes, CoreIr, Field, HttpMethod, Model, Operation, Parameter, RequestBody, Response,
-    SourceRef, TypeRef, validate_ir,
+    Attributes, CoreIr, Field, HttpMethod, Model, ModelKind, Operation, Parameter, RequestBody,
+    Response, SourceRef, TypeRef, validate_ir,
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -120,6 +120,8 @@ impl OpenApiImporter {
             let pointer = format!("#/definitions/{name}");
             schemas.push((name, schema, pointer));
         }
+        self.generated_model_names
+            .extend(schemas.iter().map(|(name, _, _)| name.clone()));
         let total = schemas.len();
         for (index, (name, schema, pointer)) in schemas.into_iter().enumerate() {
             if self.options.emit_timings {
@@ -242,7 +244,9 @@ impl OpenApiImporter {
                     continue;
                 }
 
-                operation.params.push(self.import_parameter(&resolved)?);
+                operation
+                    .params
+                    .push(self.import_parameter(&resolved, &operation_name)?);
             }
 
             if !form_data_parameters.is_empty() {
@@ -291,7 +295,11 @@ impl OpenApiImporter {
         Ok(operations)
     }
 
-    fn import_parameter(&mut self, param: &ParameterSpec) -> Result<Parameter> {
+    fn import_parameter(
+        &mut self,
+        param: &ParameterSpec,
+        operation_name: &str,
+    ) -> Result<Parameter> {
         let schema = param.effective_schema().ok_or_else(|| {
             anyhow::Error::new(self.make_diagnostic(
                 &format!("parameter `{}`", param.name),
@@ -303,6 +311,7 @@ impl OpenApiImporter {
         let imported = self.import_schema_type(
             &schema,
             &InlineModelContext::Parameter {
+                operation_name: operation_name.to_owned(),
                 name: param.name.clone(),
             },
         )?;
@@ -761,14 +770,10 @@ impl OpenApiImporter {
                 pointer: pointer.to_owned(),
                 line: None,
             });
-            model
-                .attributes
-                .insert("enum_values".into(), Value::Array(enum_values.clone()));
-            let schema_type = schema.primary_schema_type().unwrap_or("string");
-            model.attributes.insert(
-                "enum_base_type".into(),
-                Value::String(schema_type.to_owned()),
-            );
+            model.kind = ModelKind::Enum {
+                base: infer_enum_base_type(enum_values, schema.format.as_deref()),
+                values: enum_values.clone(),
+            };
             if let Some(title) = &schema.title {
                 model
                     .attributes
@@ -1092,11 +1097,27 @@ impl OpenApiImporter {
             return self.import_any_of(one_of, context);
         }
 
-        if let Some(imported) = self.import_implicit_schema_type(schema, context)? {
-            return Ok(imported);
+        if let Some(enum_values) = &schema.enum_values {
+            let name = self.inline_model_name(schema, context);
+            let nullable = schema
+                .schema_type
+                .as_ref()
+                .is_some_and(|types| types.as_slice().iter().any(|value| value == "null"));
+            return Ok(ImportedType {
+                type_ref: Some(TypeRef::enumeration(
+                    name,
+                    infer_enum_base_type(enum_values, schema.format.as_deref()),
+                    enum_values.clone(),
+                )),
+                nullable,
+            });
         }
 
         if let Some(imported) = self.import_schema_type_from_decl(&schema, context)? {
+            return Ok(imported);
+        }
+
+        if let Some(imported) = self.import_implicit_schema_type(schema, context)? {
             return Ok(imported);
         }
 
@@ -1209,14 +1230,6 @@ impl OpenApiImporter {
         schema: &Schema,
         context: &InlineModelContext,
     ) -> Result<Option<ImportedType>> {
-        if let Some(enum_values) = &schema.enum_values {
-            let inferred = infer_enum_type(enum_values, schema.format.as_deref());
-            return Ok(Some(ImportedType {
-                type_ref: Some(inferred),
-                nullable: false,
-            }));
-        }
-
         if schema.items.is_some() {
             let item_schema = schema.items.as_ref().expect("checked is_some");
             let imported = self.import_schema_type(item_schema, context)?;
@@ -2051,6 +2064,7 @@ pub(crate) enum InlineModelContext {
         pointer: String,
     },
     Parameter {
+        operation_name: String,
         name: String,
     },
 }
@@ -2070,7 +2084,10 @@ impl InlineModelContext {
                 status,
                 ..
             } => format!("{operation_name} {status} response"),
-            Self::Parameter { name } => format!("{name} param"),
+            Self::Parameter {
+                operation_name,
+                name,
+            } => format!("{operation_name} {name} param"),
         }
     }
 
@@ -2080,7 +2097,10 @@ impl InlineModelContext {
             InlineModelContext::Field { pointer, .. } => pointer.clone(),
             InlineModelContext::RequestBody { pointer, .. } => pointer.clone(),
             InlineModelContext::Response { pointer, .. } => pointer.clone(),
-            InlineModelContext::Parameter { name } => format!("parameter `{name}`"),
+            InlineModelContext::Parameter {
+                operation_name,
+                name,
+            } => format!("parameter `{name}` in operation `{operation_name}`"),
         }
     }
 
@@ -2090,7 +2110,23 @@ impl InlineModelContext {
             Self::Field { pointer, .. } => pointer.clone(),
             Self::RequestBody { pointer, .. } => pointer.clone(),
             Self::Response { pointer, .. } => pointer.clone(),
-            Self::Parameter { name } => format!("#/synthetic/parameters/{name}/{model_name}"),
+            Self::Parameter {
+                operation_name,
+                name,
+            } => format!("#/synthetic/operations/{operation_name}/parameters/{name}/{model_name}"),
         }
+    }
+}
+
+fn infer_enum_base_type(enum_values: &[Value], format: Option<&str>) -> TypeRef {
+    let non_null_values = enum_values
+        .iter()
+        .filter(|value| !value.is_null())
+        .cloned()
+        .collect::<Vec<_>>();
+    if non_null_values.is_empty() {
+        TypeRef::primitive("any")
+    } else {
+        infer_enum_type(&non_null_values, format)
     }
 }

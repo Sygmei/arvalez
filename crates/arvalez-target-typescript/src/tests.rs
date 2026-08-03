@@ -22,6 +22,7 @@ fn sample_ir() -> CoreIr {
         models: vec![arvalez_ir::Model {
             id: "model.widget".into(),
             name: "Widget".into(),
+            kind: arvalez_ir::ModelKind::Object,
             fields: vec![
                 Field::new("id", TypeRef::primitive("string")),
                 Field {
@@ -184,6 +185,7 @@ fn renders_aliases_and_enums_as_typescript_types() {
             arvalez_ir::Model {
                 id: "model.widget_path".into(),
                 name: "WidgetPath".into(),
+                kind: arvalez_ir::ModelKind::Object,
                 fields: vec![],
                 attributes: Attributes::from([(
                     "alias_type_ref".into(),
@@ -194,11 +196,12 @@ fn renders_aliases_and_enums_as_typescript_types() {
             arvalez_ir::Model {
                 id: "model.widget_status".into(),
                 name: "WidgetStatus".into(),
+                kind: arvalez_ir::ModelKind::Enum {
+                    base: TypeRef::primitive("string"),
+                    values: vec![json!("READY"), json!("PAUSED")],
+                },
                 fields: vec![],
-                attributes: Attributes::from([(
-                    "enum_values".into(),
-                    json!(["READY", "PAUSED"]),
-                )]),
+                attributes: Attributes::default(),
                 source: None,
             },
         ],
@@ -213,7 +216,74 @@ fn renders_aliases_and_enums_as_typescript_types() {
         .expect("models.ts");
 
     assert!(models.contents.contains("export type WidgetPath = string;"));
-    assert!(models.contents.contains("export type WidgetStatus = \"READY\" | \"PAUSED\";"));
+    assert!(
+        models
+            .contents
+            .contains("export const WidgetStatusValues = [\"READY\",\"PAUSED\"] as const;")
+    );
+    assert!(
+        models
+            .contents
+            .contains("export type WidgetStatus = (typeof WidgetStatusValues)[number];")
+    );
+}
+
+#[test]
+fn renders_inline_enum_values_as_runtime_tuples_and_derived_types() {
+    let values = vec![json!("DMZRC"), json!("MZRC"), json!("ONPREM")];
+    let mut evaluate_request = arvalez_ir::Model::new("model.evaluate_request", "EvaluateRequest");
+    evaluate_request.fields.push(Field {
+        name: "account_category".into(),
+        type_ref: TypeRef::enumeration(
+            "EvaluateRequestAccountCategory",
+            TypeRef::primitive("string"),
+            values.clone(),
+        ),
+        optional: true,
+        nullable: true,
+        attributes: Attributes::default(),
+    });
+    let mut rule_filter = arvalez_ir::Model::new("model.rule_filter", "RuleFilter");
+    rule_filter.fields.push(Field {
+        name: "account_category".into(),
+        type_ref: TypeRef::array(TypeRef::enumeration(
+            "RuleFilterAccountCategory",
+            TypeRef::primitive("string"),
+            values,
+        )),
+        optional: true,
+        nullable: true,
+        attributes: Attributes::default(),
+    });
+    let ir = CoreIr {
+        models: vec![evaluate_request, rule_filter],
+        ..Default::default()
+    };
+
+    let files = generate(&ir, None, &common("@demo/client"), &TargetConfig::default())
+        .expect("package should render");
+    let models = files
+        .iter()
+        .find(|file| file.path.ends_with("models.ts"))
+        .expect("models.ts");
+    let index = files
+        .iter()
+        .find(|file| file.path.ends_with("index.ts"))
+        .expect("index.ts");
+
+    assert!(models.contents.contains(
+        "export const EvaluateRequestAccountCategoryValues = [\"DMZRC\",\"MZRC\",\"ONPREM\"] as const;"
+    ));
+    assert!(models.contents.contains(
+        "export type EvaluateRequestAccountCategory = (typeof EvaluateRequestAccountCategoryValues)[number];"
+    ));
+    assert!(models.contents.contains(
+        "account_category?: EvaluateRequestAccountCategory | null;"
+    ));
+    assert!(models.contents.contains(
+        "account_category?: RuleFilterAccountCategory[] | null;"
+    ));
+    assert!(index.contents.contains("export * from \"./models\";"));
 }
 
 #[test]

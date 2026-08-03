@@ -121,6 +121,7 @@ fn type_ref_to_nu(v: &Value) -> String {
         }
         .into(),
         Some("named") => "record".into(),
+        Some("enum") => type_ref_to_nu(&v["base"]),
         Some("array") => format!("list<{}>", type_ref_to_nu(&v["item"])),
         Some("map") => "record".into(),
         Some("union") => "any".into(),
@@ -202,6 +203,7 @@ mod tests {
             models: vec![arvalez_ir::Model {
                 id: "model.widget".into(),
                 name: "Widget".into(),
+                kind: arvalez_ir::ModelKind::Object,
                 fields: vec![
                     Field::new("id", TypeRef::primitive("string")),
                     Field {
