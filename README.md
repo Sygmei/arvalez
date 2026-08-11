@@ -75,6 +75,8 @@ version = "1.0.0"
 
 [target.python]
 template_dir = "./templates/python"
+# Keep operation parameters positional unless explicitly enabled.
+keyword_only = false
 
 [target.python.package]
 name = "arvalez_client"
@@ -157,7 +159,7 @@ Supported override names are:
 
 When `group_by_tag = true`, tagged operations are grouped under subclients. For example, Python becomes `client.ingredients.create_ingredient(...)` and TypeScript becomes `client.ingredients.createIngredient(...)`. Operations without tags stay on the root client, and multi-tag operations use the first tag.
 
-Shared settings in `[common.output]` and `[common.package]` act as defaults, and `[target.python.output]` / `[target.typescript.output]` / `[target.go.output]` can override output settings per target. That includes `group_by_tag`, `skip_deprecated_operations`, output directories, and package metadata such as `version`. CLI flags like `--output-version` override config values.
+Shared settings in `[common.output]` and `[common.package]` act as defaults, and `[target.python.output]` / `[target.typescript.output]` / `[target.go.output]` can override output settings per target. That includes `group_by_tag`, `skip_deprecated_operations`, output directories, and package metadata such as `version`. Python operation parameters are positional by default; set `[target.python].keyword_only = true` or pass `--keyword-only` to `generate-python` to require keyword arguments. CLI flags like `--output-version` override config values.
 
 Override only selected Python templates:
 

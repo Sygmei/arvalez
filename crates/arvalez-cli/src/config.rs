@@ -73,6 +73,8 @@ pub(crate) struct TargetPackageConfig {
 pub(crate) struct TargetConfig {
     #[serde(default)]
     pub(crate) disabled: bool,
+    #[serde(default)]
+    pub(crate) keyword_only: bool,
     pub(crate) template_dir: Option<PathBuf>,
     #[serde(default)]
     pub(crate) output: TargetOutputConfig,
@@ -365,6 +367,7 @@ pub(crate) fn resolve_python_config(
     package_name: Option<String>,
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
+    keyword_only: bool,
     output_version: Option<String>,
 ) -> (CommonConfig, PythonTargetConfig, Option<PathBuf>) {
     let target = &config_file.target.python;
@@ -380,6 +383,7 @@ pub(crate) fn resolve_python_config(
     let version = target.resolve_version(output_version, &common.package);
     let description = target.resolve_description(&common.package);
     let effective_group_by_tag = target.resolve_group_by_tag(group_by_tag, &common.output);
+    let effective_keyword_only = keyword_only || target.keyword_only;
 
     let common_cfg = CommonConfig {
         package: PackageConfig {
@@ -390,6 +394,7 @@ pub(crate) fn resolve_python_config(
     };
     let target_cfg = PythonTargetConfig {
         group_by_tag: effective_group_by_tag,
+        keyword_only: effective_keyword_only,
     };
     (common_cfg, target_cfg, template_dir)
 }

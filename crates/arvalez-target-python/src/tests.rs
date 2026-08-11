@@ -218,10 +218,11 @@ fn renders_basic_python_package() {
             .contents
             .contains("on_error: ErrorHandler | None = None")
     );
-    assert!(client.contents.contains("async def get_widget(self, *,"));
-    assert!(client.contents.contains("async def _get_widget_raw(self, *,"));
-    assert!(client.contents.contains("def get_widget(self, *,"));
-    assert!(client.contents.contains("def _get_widget_raw(self, *,"));
+    assert!(client.contents.contains("async def get_widget(self, widget_id:"));
+    assert!(client.contents.contains("async def _get_widget_raw(self, widget_id:"));
+    assert!(client.contents.contains("def get_widget(self, widget_id:"));
+    assert!(client.contents.contains("def _get_widget_raw(self, widget_id:"));
+    assert!(!client.contents.contains("def get_widget(self, *,"));
     assert!(
         client
             .contents
@@ -286,6 +287,26 @@ fn renders_basic_python_package() {
             .contains("response = self._client.request(\"GET\", url, **request_kwargs)")
     );
     assert!(client.contents.contains("response = self._get_widget_raw("));
+}
+
+#[test]
+fn renders_keyword_only_operations_when_enabled() {
+    let files = make_package(
+        "demo_client",
+        None,
+        TargetConfig {
+            keyword_only: true,
+            ..Default::default()
+        },
+    )
+    .expect("package should render");
+    let client = files
+        .iter()
+        .find(|file| file.path.ends_with("client.py"))
+        .expect("client.py");
+
+    assert!(client.contents.contains("async def get_widget(self, *,"));
+    assert!(client.contents.contains("def get_widget(self, *,"));
 }
 
 #[test]
@@ -412,7 +433,7 @@ fn renders_multipart_file_requests() {
             .contents
             .contains("request_kwargs[\"files\"] = serialize_multipart_body(body)")
     );
-    assert!(client.contents.contains("def upload_file(self, *, body: models.UploadBody"));
+    assert!(client.contents.contains("def upload_file(self, body: models.UploadBody"));
     assert!(utils.contents.contains("def serialize_multipart_body(body: Any) -> dict[str, Any]:"));
     assert!(utils.contents.contains("\"application/octet-stream\""));
 }
@@ -773,8 +794,8 @@ fn renders_uuid_annotations_for_models_and_client_inputs() {
 
     assert!(client.contents.contains("from uuid import UUID"));
     assert!(client.contents.contains("widget_id: UUID | str"));
-    assert!(client.contents.contains("def get_widget(self, *, widget_id: UUID | str, request_options: RequestOptions | None = None) -> UUID4:"));
-    assert!(client.contents.contains("def create_widget(self, *, body: UUID | str, request_options: RequestOptions | None = None) -> models.Widget:"));
+    assert!(client.contents.contains("def get_widget(self, widget_id: UUID | str, request_options: RequestOptions | None = None) -> UUID4:"));
+    assert!(client.contents.contains("def create_widget(self, body: UUID | str, request_options: RequestOptions | None = None) -> models.Widget:"));
 }
 
 #[test]

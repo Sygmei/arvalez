@@ -139,6 +139,8 @@ enum Command {
         #[arg(long)]
         group_by_tag: bool,
         #[arg(long)]
+        keyword_only: bool,
+        #[arg(long)]
         output_version: Option<String>,
         #[arg(long)]
         timings: bool,
@@ -394,7 +396,14 @@ fn main() -> Result<()> {
 
             if python_enabled {
                 let (python_common, python_target, python_tpl) =
-                    resolve_python_config(&config_file, None, None, false, output_version.clone());
+                    resolve_python_config(
+                        &config_file,
+                        None,
+                        None,
+                        false,
+                        false,
+                        output_version.clone(),
+                    );
                 let target_ir = filter_deprecated_operations(
                     &ir,
                     config_file
@@ -559,6 +568,7 @@ fn main() -> Result<()> {
             package_name,
             template_dir,
             group_by_tag,
+            keyword_only,
             output_version,
             timings,
         } => {
@@ -579,6 +589,7 @@ fn main() -> Result<()> {
                 package_name,
                 template_dir,
                 group_by_tag,
+                keyword_only,
                 output_version,
             );
             let target_ir = filter_deprecated_operations(

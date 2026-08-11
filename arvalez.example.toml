@@ -18,6 +18,7 @@ template_dir = "./templates/go"
 
 [target.python]
 template_dir = "./templates/python"
+keyword_only = false
 [target.python.package]
 version = "0.1.1"
 

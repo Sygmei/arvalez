@@ -142,6 +142,7 @@ fn renders_basic_typescript_package() {
     );
     assert!(client.contents.contains("async _getWidgetRaw("));
     assert!(client.contents.contains("async getWidget("));
+    assert!(client.contents.contains("async _getWidgetRaw(widgetId: string, includeCount?: boolean, body?: Widget, requestOptions?: RequestOptions)"));
     assert!(
         client
             .contents

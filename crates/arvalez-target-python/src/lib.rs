@@ -27,6 +27,8 @@ pub use sanitize::{sanitize_class_name, sanitize_identifier};
 pub struct TargetConfig {
     #[serde(default)]
     pub group_by_tag: bool,
+    #[serde(default)]
+    pub keyword_only: bool,
 }
 
 // ── Templates ─────────────────────────────────────────────────────────────────

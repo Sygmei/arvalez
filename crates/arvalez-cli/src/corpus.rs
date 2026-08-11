@@ -364,6 +364,7 @@ pub(crate) fn run_corpus_spec_inline(
                 None,
                 None,
                 false,
+                false,
                 options.output_version.clone(),
             ),
             config_file

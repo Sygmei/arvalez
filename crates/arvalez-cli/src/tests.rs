@@ -20,10 +20,25 @@ fn resolve_python_config_normalizes_module_name() {
         Some("arvalez-client".into()),
         None,
         false,
+        false,
         Some("0.1.0".into()),
     );
 
     assert_eq!(common.package.name, "arvalez_client");
+}
+
+#[test]
+fn resolves_python_keyword_only_setting_from_config() {
+    let config: AppConfig = toml::from_str(
+        r#"
+[target.python]
+keyword_only = true
+"#,
+    )
+    .expect("config should parse");
+    let (_, target, _) = resolve_python_config(&config, None, None, false, false, None);
+
+    assert!(target.keyword_only);
 }
 
 #[test]
