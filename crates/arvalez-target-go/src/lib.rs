@@ -11,7 +11,7 @@ mod tests;
 
 use std::collections::{BTreeMap, HashMap};
 
-use arvalez_target_core::CommonConfig;
+use arvalez_target_core::{operation_with_locals, CommonConfig};
 pub use arvalez_target_core::GeneratedFile;
 use arvalez_ir::CoreIr;
 use anyhow::Result;
@@ -60,6 +60,26 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ──────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
+    tera.register_filter("go_operation", |v: &Value, _: &HashMap<String, Value>| {
+        Ok(operation_with_locals(v, &[
+            ("ctx_identifier", "ctx"),
+            ("client_identifier", "client"),
+            ("path_identifier", "path"),
+            ("query_identifier", "query"),
+            ("headers_identifier", "headers"),
+            ("cookies_identifier", "cookies"),
+            ("body_reader_identifier", "bodyReader"),
+            ("content_type_identifier", "contentType"),
+            ("request_identifier", "request"),
+            ("cookie_identifier", "cookie"),
+            ("err_identifier", "err"),
+            ("response_identifier", "response"),
+            ("result_identifier", "result"),
+            ("zero_identifier", "zero"),
+            ("body_identifier", "body"),
+            ("request_options_identifier", "requestOptions"),
+        ], sanitize_identifier))
+    });
     // {{ "get_widget" | go_exported }} → "GetWidget"
     tera.register_filter("go_exported", |v: &Value, _: &HashMap<String, Value>| {
         Ok(Value::String(sanitize_exported_identifier(v.as_str().unwrap_or(""))))
@@ -262,12 +282,17 @@ fn build_path_format(path: &str) -> String {
 }
 
 fn build_args_sig(op: &Value) -> String {
-    let mut args = vec!["ctx context.Context".into()];
+    let ctx_name = op.get("ctx_identifier").and_then(Value::as_str).unwrap_or("ctx");
+    let body_name = op.get("body_identifier").and_then(Value::as_str).unwrap_or("body");
+    let request_options_name = op.get("request_options_identifier").and_then(Value::as_str).unwrap_or("requestOptions");
+    let mut args = vec![format!("{ctx_name} context.Context")];
     let params = op.get("params").and_then(Value::as_array);
     // Required params
     if let Some(ps) = params {
         for p in ps.iter().filter(|p| p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-            let name = sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or(""));
+            let name = p.get("identifier")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| p.get("name").and_then(Value::as_str).unwrap_or(""));
             let t = go_required_type_from_value(p.get("type_ref").unwrap_or(&Value::Null));
             args.push(format!("{name} {t}"));
         }
@@ -275,13 +300,15 @@ fn build_args_sig(op: &Value) -> String {
     // Required body
     if let Some(body) = op.get("request_body").filter(|v| !v.is_null()) {
         if body.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push(format!("body {}", go_body_type_from_value(body, true)));
+            args.push(format!("{body_name} {}", go_body_type_from_value(body, true)));
         }
     }
     // Optional params
     if let Some(ps) = params {
         for p in ps.iter().filter(|p| !p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-            let name = sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or(""));
+            let name = p.get("identifier")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| p.get("name").and_then(Value::as_str).unwrap_or(""));
             let t = go_optional_type_from_value(p.get("type_ref").unwrap_or(&Value::Null));
             args.push(format!("{name} {t}"));
         }
@@ -289,37 +316,46 @@ fn build_args_sig(op: &Value) -> String {
     // Optional body
     if let Some(body) = op.get("request_body").filter(|v| !v.is_null()) {
         if !body.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push(format!("body {}", go_body_type_from_value(body, false)));
+            args.push(format!("{body_name} {}", go_body_type_from_value(body, false)));
         }
     }
-    args.push("requestOptions *RequestOptions".into());
+    args.push(format!("{request_options_name} *RequestOptions"));
     args.join(", ")
 }
 
 fn build_forward_args(op: &Value) -> String {
-    let mut args = vec!["ctx".into()];
+    let ctx_name = op.get("ctx_identifier").and_then(Value::as_str).unwrap_or("ctx");
+    let body_name = op.get("body_identifier").and_then(Value::as_str).unwrap_or("body");
+    let request_options_name = op.get("request_options_identifier").and_then(Value::as_str).unwrap_or("requestOptions");
+    let mut args = vec![ctx_name.to_owned()];
     let params = op.get("params").and_then(Value::as_array);
     if let Some(ps) = params {
         for p in ps.iter().filter(|p| p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-            args.push(sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("")));
+            args.push(p.get("identifier")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| p.get("name").and_then(Value::as_str).unwrap_or(""))
+                .to_owned());
         }
     }
     if let Some(body) = op.get("request_body").filter(|v| !v.is_null()) {
         if body.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push("body".into());
+            args.push(body_name.to_owned());
         }
     }
     if let Some(ps) = params {
         for p in ps.iter().filter(|p| !p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-            args.push(sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("")));
+            args.push(p.get("identifier")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| p.get("name").and_then(Value::as_str).unwrap_or(""))
+                .to_owned());
         }
     }
     if let Some(body) = op.get("request_body").filter(|v| !v.is_null()) {
         if !body.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push("body".into());
+            args.push(body_name.to_owned());
         }
     }
-    args.push("requestOptions".into());
+    args.push(request_options_name.to_owned());
     args.join(", ")
 }
 

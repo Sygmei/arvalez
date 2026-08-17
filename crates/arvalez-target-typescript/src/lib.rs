@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use arvalez_target_core::{split_words, to_pascal_case};
+use arvalez_target_core::{operation_with_locals, split_words, to_pascal_case};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tera::Tera;
@@ -46,6 +46,19 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ───────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
+    tera.register_filter("ts_operation", |v: &Value, _: &HashMap<String, Value>| {
+        Ok(operation_with_locals(v, &[
+            ("path_identifier", "path"),
+            ("base_query_identifier", "baseQuery"),
+            ("query_identifier", "query"),
+            ("headers_identifier", "headers"),
+            ("merged_headers_identifier", "mergedHeaders"),
+            ("request_init_identifier", "requestInit"),
+            ("response_identifier", "response"),
+            ("body_identifier", "body"),
+            ("request_options_identifier", "requestOptions"),
+        ], sanitize_identifier))
+    });
     // {{ type_ref | ts_type }} — TypeRef JSON → TypeScript type annotation
     tera.register_filter("ts_type", |v: &Value, _: &HashMap<String, Value>| {
         Ok(Value::String(type_ref_to_ts(v)))
@@ -207,7 +220,12 @@ pub fn register_filters(tera: &mut Tera) {
                             .and_then(Value::as_str)
                             .map(str::trim)
                             .filter(|d| !d.is_empty())?;
-                        let name = sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or(""));
+                        let name = p
+                            .get("identifier")
+                            .and_then(Value::as_str)
+                            .or_else(|| p.get("name").and_then(Value::as_str))
+                            .map(sanitize_identifier)
+                            .unwrap_or_default();
                         Some(json!({ "name": name, "description": desc.replace("*/", "*\\/") }))
                     })
                     .collect()
@@ -464,50 +482,60 @@ fn param_type(param: &Value) -> String {
 fn build_args_sig(op: &Value) -> String {
     let params = op_params(op);
     let body = op.get("request_body");
+    let body_name = op.get("body_identifier").and_then(Value::as_str).unwrap_or("body");
+    let request_options_name = op.get("request_options_identifier").and_then(Value::as_str).unwrap_or("requestOptions");
     let mut args: Vec<String> = Vec::new();
     for p in params.iter().filter(|p| p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-        args.push(format!("{}: {}", sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("")), param_type(p)));
+        let name = p.get("identifier").and_then(Value::as_str)
+            .or_else(|| p.get("name").and_then(Value::as_str)).unwrap_or("");
+        args.push(format!("{name}: {}", param_type(p)));
     }
     if let Some(rb) = body {
         if rb.get("required").and_then(Value::as_bool).unwrap_or(false) {
             let ty = rb.get("type_ref").map(|tr| type_ref_to_ts(tr)).unwrap_or_else(|| "unknown".into());
-            args.push(format!("body: {ty}"));
+            args.push(format!("{body_name}: {ty}"));
         }
     }
     for p in params.iter().filter(|p| !p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-        args.push(format!("{}?: {}", sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("")), param_type(p)));
+        let name = p.get("identifier").and_then(Value::as_str)
+            .or_else(|| p.get("name").and_then(Value::as_str)).unwrap_or("");
+        args.push(format!("{name}?: {}", param_type(p)));
     }
     if let Some(rb) = body {
         if !rb.get("required").and_then(Value::as_bool).unwrap_or(false) {
             let ty = rb.get("type_ref").map(|tr| type_ref_to_ts(tr)).unwrap_or_else(|| "unknown".into());
-            args.push(format!("body?: {ty}"));
+            args.push(format!("{body_name}?: {ty}"));
         }
     }
-    args.push("requestOptions?: RequestOptions".into());
+    args.push(format!("{request_options_name}?: RequestOptions"));
     args.join(", ")
 }
 
 fn build_fwd_args(op: &Value) -> String {
     let params = op_params(op);
     let body = op.get("request_body");
+    let body_name = op.get("body_identifier").and_then(Value::as_str).unwrap_or("body");
+    let request_options_name = op.get("request_options_identifier").and_then(Value::as_str).unwrap_or("requestOptions");
     let mut args: Vec<String> = Vec::new();
     for p in params.iter().filter(|p| p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-        args.push(sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("")));
+        args.push(p.get("identifier").and_then(Value::as_str)
+            .or_else(|| p.get("name").and_then(Value::as_str)).unwrap_or("").to_owned());
     }
     if let Some(rb) = body {
         if rb.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push("body".into());
+            args.push(body_name.into());
         }
     }
     for p in params.iter().filter(|p| !p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-        args.push(sanitize_identifier(p.get("name").and_then(Value::as_str).unwrap_or("")));
+        args.push(p.get("identifier").and_then(Value::as_str)
+            .or_else(|| p.get("name").and_then(Value::as_str)).unwrap_or("").to_owned());
     }
     if let Some(rb) = body {
         if !rb.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push("body".into());
+            args.push(body_name.into());
         }
     }
-    args.push("requestOptions".into());
+    args.push(request_options_name.into());
     args.join(", ")
 }
 

@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use arvalez_target_core::to_pascal_case;
+use arvalez_target_core::{operation_with_identifiers, to_pascal_case, to_snake_identifier};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tera::Tera;
@@ -83,6 +83,19 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ──────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
+    tera.register_filter("py_operation", |v: &Value, _: &HashMap<String, Value>| {
+        Ok(operation_with_identifiers(
+            v,
+            &["self", "body", "request_options", "_suppress_deprecation_warning", "url", "params", "headers", "request_kwargs", "response"],
+            |name| {
+                let mut identifier = to_snake_identifier(name);
+                if is_python_keyword(&identifier) {
+                    identifier.push('_');
+                }
+                identifier
+            },
+        ))
+    });
     // {{ type_ref | py_type }} — TypeRef JSON → Python type annotation (models context)
     // {{ type_ref | py_type(context="client_input") }} — client input annotation
     // {{ type_ref | py_type(context="client_output") }} — client output annotation

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tera::Tera;
+use arvalez_target_core::operation_with_identifiers;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -50,6 +51,13 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ──────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
+    tera.register_filter("nu_operation", |v: &Value, _: &HashMap<String, Value>| {
+        Ok(operation_with_identifiers(
+            v,
+            &["base_url", "path", "full_url", "query_parts", "headers", "body"],
+            sanitize_variable,
+        ))
+    });
     // {{ type_ref | nu_type }} — TypeRef JSON → Nushell type annotation
     tera.register_filter("nu_type", |v: &Value, _: &HashMap<String, Value>| {
         Ok(Value::String(type_ref_to_nu(v)))

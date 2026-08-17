@@ -290,6 +290,28 @@ fn renders_basic_python_package() {
 }
 
 #[test]
+fn avoids_collisions_between_parameters_and_generated_locals() {
+    let mut ir = sample_ir();
+    ir.operations[0].params.push(Parameter {
+        name: "params".into(),
+        location: ParameterLocation::Query,
+        type_ref: TypeRef::primitive("string"),
+        required: false,
+        attributes: Default::default(),
+    });
+
+    let files = make_package_from_ir(ir, "demo_client", None, TargetConfig::default())
+        .expect("package should render");
+    let client = files
+        .iter()
+        .find(|file| file.path.ends_with("client.py"))
+        .expect("client.py");
+
+    assert!(client.contents.contains("params_: str | None = None"));
+    assert!(client.contents.contains("params[\"params\"] = params_"));
+}
+
+#[test]
 fn renders_keyword_only_operations_when_enabled() {
     let files = make_package(
         "demo_client",

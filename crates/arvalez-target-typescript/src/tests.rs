@@ -180,6 +180,23 @@ fn renders_basic_typescript_package() {
 }
 
 #[test]
+fn avoids_collisions_between_parameters_and_generated_locals() {
+    let mut ir = sample_ir();
+    ir.operations[0].params[1].name = "query".into();
+
+    let files = generate(&ir, None, &common("@demo/client"), &TargetConfig::default())
+        .expect("package should render");
+    let client = files
+        .iter()
+        .find(|file| file.path.ends_with("client.ts"))
+        .expect("client.ts");
+
+    assert!(client.contents.contains("query?: boolean"));
+    assert!(client.contents.contains("baseQuery.set(\"query\", String(query));"));
+    assert!(client.contents.contains("const query_ = mergeQuery(baseQuery, requestOptions);"));
+}
+
+#[test]
 fn renders_aliases_and_enums_as_typescript_types() {
     let ir = CoreIr {
         models: vec![

@@ -1,3 +1,4 @@
+{%- set op = op | nu_operation -%}
 {%- set path_params = op.params | filter(attribute="location", value="path") -%}
 {%- set query_params = op.params | filter(attribute="location", value="query") -%}
 {%- set header_params = op.params | filter(attribute="location", value="header") -%}
@@ -26,7 +27,7 @@
 {% if op.attributes.summary %}# {{ op.attributes.summary | trim }}
 {% endif %}{% if op.attributes.deprecated %}# Deprecated: This operation is deprecated.
 {% endif %}export def "{{ _cmd }}" [
-{% for p in path_params %}    {{ p.name | nu_var }}: {{ p.type_ref | nu_type }}{% if p.attributes.description %}  # {{ p.attributes.description | trim }}{% endif %}
+{% for p in path_params %}    {{ p.identifier | default(value=p.name) }}: {{ p.type_ref | nu_type }}{% if p.attributes.description %}  # {{ p.attributes.description | trim }}{% endif %}
 
 {% endfor %}    --base-url: string = "{{ default_base_url }}"
 {% for p in flag_params %}    --{{ p.name | nu_cmd }}: {{ p.type_ref | nu_type }}{% if p.attributes.description %}  # {{ p.attributes.description | trim }}{% endif %}
@@ -36,12 +37,12 @@
     let path = "{{ op.path | nu_path }}"
 {% if query_params | length == 0 %}    let full_url = $base_url ++ $path
 {% else %}    mut query_parts: list<string> = []
-{% for p in query_params %}{% if p.required %}    $query_parts = ($query_parts | append ("{{ p.name }}" ++ "=" ++ (${{ p.name | nu_var }} | into string)))
-{% else %}    if (${{ p.name | nu_var }} | is-not-empty) { $query_parts = ($query_parts | append ("{{ p.name }}" ++ "=" ++ (${{ p.name | nu_var }} | into string))) }
+{% for p in query_params %}{% if p.required %}    $query_parts = ($query_parts | append ("{{ p.name }}" ++ "=" ++ (${{ p.identifier | default(value=p.name) }} | into string)))
+{% else %}    if (${{ p.identifier | default(value=p.name) }} | is-not-empty) { $query_parts = ($query_parts | append ("{{ p.name }}" ++ "=" ++ (${{ p.identifier | default(value=p.name) }} | into string))) }
 {% endif %}{% endfor %}    let full_url = if ($query_parts | is-empty) { $base_url ++ $path } else { $base_url ++ $path ++ "?" ++ ($query_parts | str join "&") }
 {% endif %}{% if header_params | length > 0 %}    mut headers = {}
-{% for p in header_params %}{% if p.required %}    $headers = ($headers | insert "{{ p.name }}" ${{ p.name | nu_var }})
-{% else %}    if (${{ p.name | nu_var }} | is-not-empty) { $headers = ($headers | insert "{{ p.name }}" ${{ p.name | nu_var }}) }
+{% for p in header_params %}{% if p.required %}    $headers = ($headers | insert "{{ p.name }}" ${{ p.identifier | default(value=p.name) }})
+{% else %}    if (${{ p.identifier | default(value=p.name) }} | is-not-empty) { $headers = ($headers | insert "{{ p.name }}" ${{ p.identifier | default(value=p.name) }}) }
 {% endif %}{% endfor %}{% endif %}{% if op.request_body %}{% if op.request_body.required %}    http {{ op.method }} $full_url $body{% if header_params | length > 0 %} --headers $headers{% endif %}
 {% else %}    http {{ op.method }} $full_url (if ($body | is-not-empty) { $body }){% if header_params | length > 0 %} --headers $headers{% endif %}
 {% endif %}{% else %}    http {{ op.method }} $full_url{% if header_params | length > 0 %} --headers $headers{% endif %}

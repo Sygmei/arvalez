@@ -138,6 +138,23 @@ fn renders_basic_go_package() {
 }
 
 #[test]
+fn avoids_collisions_between_parameters_and_generated_locals() {
+    let mut ir = sample_ir();
+    ir.operations[0].params[1].name = "query".into();
+
+    let files = generate_go_package(&ir, None, &default_common(), &TargetConfig::default())
+        .expect("package should render");
+    let client = files
+        .iter()
+        .find(|file| file.path.ends_with("client.go"))
+        .expect("client.go");
+
+    assert!(client.contents.contains("query *bool"));
+    assert!(client.contents.contains("query_.Set(\"query\", fmt.Sprint(*query))"));
+    assert!(client.contents.contains("query_ := url.Values{}"));
+}
+
+#[test]
 fn required_named_request_bodies_are_values() {
     let mut ir = sample_ir();
     ir.operations[0].request_body.as_mut().expect("request body").required = true;

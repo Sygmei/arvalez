@@ -1,3 +1,4 @@
+{%- set op = op | go_operation -%}
 {%- set method_name = op.name | go_exported -%}
 {%- set raw_method_name = method_name ~ "Raw" -%}
 {%- set return_shape = op | go_return_shape -%}
@@ -15,137 +16,137 @@
 {% endif -%}
 {%- for p in op.params %}
 {%- if p.attributes.description %}
-// {{ raw_method_name }} parameter {{ p.name | go_id }}: {{ p.attributes.description | go_comment }}
+// {{ raw_method_name }} parameter {{ p.identifier | default(value=p.name) }}: {{ p.attributes.description | go_comment }}
 {%- endif %}
 {%- endfor -%}
 func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go_args_sig }}) (*http.Response, error) {
-	client := {{ client_expression }}
+	{{ op.client_identifier }} := {{ client_expression }}
 {% if path_params | length > 0 %}
-	path := fmt.Sprintf("{{ op.path | go_path_format }}", {% for p in path_params %}url.PathEscape(fmt.Sprint({{ p.name | go_id }})){% if not loop.last %}, {% endif %}{% endfor %})
+	{{ op.path_identifier }} := fmt.Sprintf("{{ op.path | go_path_format }}", {% for p in path_params %}url.PathEscape(fmt.Sprint({{ p.identifier | default(value=p.name) }})){% if not loop.last %}, {% endif %}{% endfor %})
 {% else %}
-	path := "{{ op.path }}"
+	{{ op.path_identifier }} := "{{ op.path }}"
 {% endif %}
-	query := url.Values{}
+	{{ op.query_identifier }} := url.Values{}
 {% for p in path_params %}{% if p.attributes.content_encoding %}
-	if err := client.validateStringEncoding({{ p.name | go_id }}, "{{ p.attributes.content_encoding }}", "path parameter `{{ p.name }}`", requestOptions); err != nil {
-		return nil, err
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "path parameter `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+		return nil, {{ op.err_identifier }}
 	}
 {% endif %}{% endfor %}
 {% for p in query_params %}{% if p.required %}{% if p.attributes.content_encoding %}
-	if err := client.validateStringEncoding({{ p.name | go_id }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", requestOptions); err != nil {
-		return nil, err
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+		return nil, {{ op.err_identifier }}
 	}
 {% endif %}
-	query.Set("{{ p.name }}", fmt.Sprint({{ p.name | go_id }}))
+	{{ op.query_identifier }}.Set("{{ p.name }}", fmt.Sprint({{ p.identifier | default(value=p.name) }}))
 {% else %}
-	if {{ p.name | go_id }} != nil {
+	if {{ p.identifier | default(value=p.name) }} != nil {
 {% if p.attributes.content_encoding %}
-		if err := client.validateStringEncoding(*{{ p.name | go_id }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", requestOptions); err != nil {
-			return nil, err
+		if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding(*{{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+			return nil, {{ op.err_identifier }}
 		}
 {% endif %}
-		query.Set("{{ p.name }}", fmt.Sprint(*{{ p.name | go_id }}))
+	{{ op.query_identifier }}.Set("{{ p.name }}", fmt.Sprint(*{{ p.identifier | default(value=p.name) }}))
 	}
 {% endif %}{% endfor %}
-	query = client.mergeQuery(query, requestOptions)
-	headers := http.Header{}
+	{{ op.query_identifier }} = {{ op.client_identifier }}.mergeQuery({{ op.query_identifier }}, {{ op.request_options_identifier }})
+	{{ op.headers_identifier }} := http.Header{}
 {% for p in header_params %}{% if p.required %}{% if p.attributes.content_encoding %}
-	if err := client.validateStringEncoding({{ p.name | go_id }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", requestOptions); err != nil {
-		return nil, err
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+		return nil, {{ op.err_identifier }}
 	}
 {% endif %}
-	headers.Set("{{ p.name }}", fmt.Sprint({{ p.name | go_id }}))
+	{{ op.headers_identifier }}.Set("{{ p.name }}", fmt.Sprint({{ p.identifier | default(value=p.name) }}))
 {% else %}
-	if {{ p.name | go_id }} != nil {
+	if {{ p.identifier | default(value=p.name) }} != nil {
 {% if p.attributes.content_encoding %}
-		if err := client.validateStringEncoding(*{{ p.name | go_id }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", requestOptions); err != nil {
-			return nil, err
+		if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding(*{{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+			return nil, {{ op.err_identifier }}
 		}
 {% endif %}
-		headers.Set("{{ p.name }}", fmt.Sprint(*{{ p.name | go_id }}))
+		{{ op.headers_identifier }}.Set("{{ p.name }}", fmt.Sprint(*{{ p.identifier | default(value=p.name) }}))
 	}
 {% endif %}{% endfor %}
-	cookies := []*http.Cookie{}
+	{{ op.cookies_identifier }} := []*http.Cookie{}
 {% for p in cookie_params %}{% if p.required %}{% if p.attributes.content_encoding %}
-	if err := client.validateStringEncoding({{ p.name | go_id }}, "{{ p.attributes.content_encoding }}", "cookie `{{ p.name }}`", requestOptions); err != nil {
-		return nil, err
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "cookie `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+			return nil, {{ op.err_identifier }}
 	}
 {% endif %}
-	cookies = append(cookies, &http.Cookie{Name: "{{ p.name }}", Value: fmt.Sprint({{ p.name | go_id }})})
+	{{ op.cookies_identifier }} = append({{ op.cookies_identifier }}, &http.Cookie{Name: "{{ p.name }}", Value: fmt.Sprint({{ p.identifier | default(value=p.name) }})})
 {% else %}
-	if {{ p.name | go_id }} != nil {
+	if {{ p.identifier | default(value=p.name) }} != nil {
 {% if p.attributes.content_encoding %}
-		if err := client.validateStringEncoding(*{{ p.name | go_id }}, "{{ p.attributes.content_encoding }}", "cookie `{{ p.name }}`", requestOptions); err != nil {
-			return nil, err
+		if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding(*{{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "cookie `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+			return nil, {{ op.err_identifier }}
 		}
 {% endif %}
-		cookies = append(cookies, &http.Cookie{Name: "{{ p.name }}", Value: fmt.Sprint(*{{ p.name | go_id }})})
+		{{ op.cookies_identifier }} = append({{ op.cookies_identifier }}, &http.Cookie{Name: "{{ p.name }}", Value: fmt.Sprint(*{{ p.identifier | default(value=p.name) }})})
 	}
 {% endif %}{% endfor %}
-	cookies = client.mergeCookies(cookies, requestOptions)
-	var bodyReader io.Reader
-	var err error
+	{{ op.cookies_identifier }} = {{ op.client_identifier }}.mergeCookies({{ op.cookies_identifier }}, {{ op.request_options_identifier }})
+	var {{ op.body_reader_identifier }} io.Reader
+	var {{ op.err_identifier }} error
 {% if body %}{% if body.kind == "json" %}
-	headers.Set("Content-Type", "application/json")
+	{{ op.headers_identifier }}.Set("Content-Type", "application/json")
 {% if body.required %}{% if body.content_encoding %}
-	if err := client.validateStringEncoding(body, "{{ body.content_encoding }}", "request body", requestOptions); err != nil {
-		return nil, err
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ op.body_identifier }}, "{{ body.content_encoding }}", "request body", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+		return nil, {{ op.err_identifier }}
 	}
 {% endif %}
-	bodyReader, err = client.encodeJSONBody(body)
-	if err != nil {
-		return nil, err
+	{{ op.body_reader_identifier }}, {{ op.err_identifier }} = {{ op.client_identifier }}.encodeJSONBody({{ op.body_identifier }})
+	if {{ op.err_identifier }} != nil {
+		return nil, {{ op.err_identifier }}
 	}
 {% else %}
-	if body != nil {
+	if {{ op.body_identifier }} != nil {
 {% if body.content_encoding %}
-		if err := client.validateStringEncoding(body, "{{ body.content_encoding }}", "request body", requestOptions); err != nil {
-			return nil, err
+		if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ op.body_identifier }}, "{{ body.content_encoding }}", "request body", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+			return nil, {{ op.err_identifier }}
 		}
 {% endif %}
-		bodyReader, err = client.encodeJSONBody(body)
-		if err != nil {
-			return nil, err
+		{{ op.body_reader_identifier }}, {{ op.err_identifier }} = {{ op.client_identifier }}.encodeJSONBody({{ op.body_identifier }})
+		if {{ op.err_identifier }} != nil {
+			return nil, {{ op.err_identifier }}
 		}
 	}
 {% endif %}{% elif body.kind == "multipart" %}
-	var contentType string
+	var {{ op.content_type_identifier }} string
 {% if body.required %}{% if body.content_encoding %}
-	if err := client.validateStringEncoding(body, "{{ body.content_encoding }}", "request body", requestOptions); err != nil {
-		return nil, err
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ op.body_identifier }}, "{{ body.content_encoding }}", "request body", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+		return nil, {{ op.err_identifier }}
 	}
 {% endif %}
-	bodyReader, contentType, err = client.encodeMultipartBody(body)
-	if err != nil {
-		return nil, err
+	{{ op.body_reader_identifier }}, {{ op.content_type_identifier }}, {{ op.err_identifier }} = {{ op.client_identifier }}.encodeMultipartBody({{ op.body_identifier }})
+	if {{ op.err_identifier }} != nil {
+		return nil, {{ op.err_identifier }}
 	}
-	headers.Set("Content-Type", contentType)
+	{{ op.headers_identifier }}.Set("Content-Type", {{ op.content_type_identifier }})
 {% else %}
-	if body != nil {
+	if {{ op.body_identifier }} != nil {
 {% if body.content_encoding %}
-		if err := client.validateStringEncoding(body, "{{ body.content_encoding }}", "request body", requestOptions); err != nil {
+		if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ op.body_identifier }}, "{{ body.content_encoding }}", "request body", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
 			return nil, err
 		}
 {% endif %}
-		bodyReader, contentType, err = client.encodeMultipartBody(body)
-		if err != nil {
-			return nil, err
+		{{ op.body_reader_identifier }}, {{ op.content_type_identifier }}, {{ op.err_identifier }} = {{ op.client_identifier }}.encodeMultipartBody({{ op.body_identifier }})
+		if {{ op.err_identifier }} != nil {
+			return nil, {{ op.err_identifier }}
 		}
-		headers.Set("Content-Type", contentType)
+		{{ op.headers_identifier }}.Set("Content-Type", {{ op.content_type_identifier }})
 	}
 {% endif %}{% else %}
-	bodyReader = body
+	{{ op.body_reader_identifier }} = {{ op.body_identifier }}
 {% endif %}{% endif %}
-	headers = client.mergeHeaders(headers, requestOptions)
-	request, err := http.NewRequestWithContext(ctx, {{ op.method | go_method }}, client.buildURL(path, query), bodyReader)
-	if err != nil {
-		return nil, err
+	{{ op.headers_identifier }} = {{ op.client_identifier }}.mergeHeaders({{ op.headers_identifier }}, {{ op.request_options_identifier }})
+	{{ op.request_identifier }}, {{ op.err_identifier }} := http.NewRequestWithContext({{ op.ctx_identifier }}, {{ op.method | go_method }}, {{ op.client_identifier }}.buildURL({{ op.path_identifier }}, {{ op.query_identifier }}), {{ op.body_reader_identifier }})
+	if {{ op.err_identifier }} != nil {
+		return nil, {{ op.err_identifier }}
 	}
-	request.Header = headers
-	for _, cookie := range cookies {
-		request.AddCookie(cookie)
+	{{ op.request_identifier }}.Header = {{ op.headers_identifier }}
+	for _, {{ op.cookie_identifier }} := range {{ op.cookies_identifier }} {
+		{{ op.request_identifier }}.AddCookie({{ op.cookie_identifier }})
 	}
-	return client.httpClient.Do(request)
+	return {{ op.client_identifier }}.httpClient.Do({{ op.request_identifier }})
 }
 
 {% if op.attributes.summary -%}
@@ -156,61 +157,61 @@ func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go
 {% endif -%}
 {%- for p in op.params %}
 {%- if p.attributes.description %}
-// {{ method_name }} parameter {{ p.name | go_id }}: {{ p.attributes.description | go_comment }}
+// {{ method_name }} parameter {{ p.identifier | default(value=p.name) }}: {{ p.attributes.description | go_comment }}
 {%- endif %}
 {%- endfor -%}
 func ({{ receiver_name }} *{{ receiver_type }}) {{ method_name }}({{ op | go_args_sig }}) {{ return_shape.signature }} {
-	client := {{ client_expression }}
-	response, err := {{ receiver_name }}.{{ raw_method_name }}({{ op | go_forward_args }})
+	{{ op.client_identifier }} := {{ client_expression }}
+	{{ op.response_identifier }}, {{ op.err_identifier }} := {{ receiver_name }}.{{ raw_method_name }}({{ op | go_forward_args }})
 {% if return_shape.has_result %}
-	if err != nil {
+	if {{ op.err_identifier }} != nil {
 {% if return_shape.returns_nil_on_error %}
-		return nil, err
+		return nil, {{ op.err_identifier }}
 {% else %}
-		var zero {{ return_shape.result_go_type }}
-		return zero, err
+		var {{ op.zero_identifier }} {{ return_shape.result_go_type }}
+		return {{ op.zero_identifier }}, {{ op.err_identifier }}
 {% endif %}
 	}
-	defer response.Body.Close()
-	if err := client.handleError(response, requestOptions); err != nil {
+	defer {{ op.response_identifier }}.Body.Close()
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.handleError({{ op.response_identifier }}, {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
 {% if return_shape.returns_nil_on_error %}
-		return nil, err
+		return nil, {{ op.err_identifier }}
 {% else %}
-		var zero {{ return_shape.result_go_type }}
-		return zero, err
+		var {{ op.zero_identifier }} {{ return_shape.result_go_type }}
+		return {{ op.zero_identifier }}, {{ op.err_identifier }}
 {% endif %}
 	}
-	var result {{ return_shape.decode_go_type }}
-	if err := client.decodeJSONResponse(response, &result); err != nil {
+	var {{ op.result_identifier }} {{ return_shape.decode_go_type }}
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.decodeJSONResponse({{ op.response_identifier }}, &{{ op.result_identifier }}); {{ op.err_identifier }} != nil {
 {% if return_shape.returns_nil_on_error %}
-		return nil, err
+		return nil, {{ op.err_identifier }}
 {% else %}
-		var zero {{ return_shape.result_go_type }}
-		return zero, err
+		var {{ op.zero_identifier }} {{ return_shape.result_go_type }}
+		return {{ op.zero_identifier }}, {{ op.err_identifier }}
 {% endif %}
 	}
 {% if return_shape.content_encoding %}
-	if err := client.validateStringEncoding(result, "{{ return_shape.content_encoding }}", "response body", requestOptions); err != nil {
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ op.result_identifier }}, "{{ return_shape.content_encoding }}", "response body", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
 {% if return_shape.returns_nil_on_error %}
-		return nil, err
+		return nil, {{ op.err_identifier }}
 {% else %}
-		var zero {{ return_shape.result_go_type }}
-		return zero, err
+		var {{ op.zero_identifier }} {{ return_shape.result_go_type }}
+		return {{ op.zero_identifier }}, {{ op.err_identifier }}
 {% endif %}
 	}
 {% endif %}
 {% if return_shape.returns_pointer %}
-	return &result, nil
+	return &{{ op.result_identifier }}, nil
 {% else %}
-	return result, nil
+	return {{ op.result_identifier }}, nil
 {% endif %}
 {% else %}
-	if err != nil {
-		return err
+	if {{ op.err_identifier }} != nil {
+		return {{ op.err_identifier }}
 	}
-	defer response.Body.Close()
-	if err := client.handleError(response, requestOptions); err != nil {
-		return err
+	defer {{ op.response_identifier }}.Body.Close()
+	if {{ op.err_identifier }} := {{ op.client_identifier }}.handleError({{ op.response_identifier }}, {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
+		return {{ op.err_identifier }}
 	}
 	return nil
 {% endif %}

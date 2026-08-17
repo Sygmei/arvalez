@@ -38,19 +38,20 @@ class ApiClient:
     def close(self) -> None:
         self._client.close()
 {% for op in operations %}
+{%- set op = op | pymini_operation %}
 {%- set query_params = op.params | filter(attribute="location", value="query") %}
 {%- set header_params = op.params | filter(attribute="location", value="header") %}
 {%- set deprecated_message = "Endpoint `" ~ op.name ~ "` is deprecated." %}
     def {{ op.name | py_id }}(
         self,
 {%- for p in op.params %}{% if p.required %}
-        {{ p.name | py_id }}: {{ p.type_ref | py_type }},
+        {{ p.identifier | default(value=p.name) }}: {{ p.type_ref | py_type }},
 {%- endif %}{% endfor %}
 {%- if op.request_body and op.request_body.required %}
         body: Any,
 {%- endif %}
 {%- for p in op.params %}{% if not p.required %}
-        {{ p.name | py_id }}: {{ p.type_ref | py_type }} | None = None,
+        {{ p.identifier | default(value=p.name) }}: {{ p.type_ref | py_type }} | None = None,
 {%- endif %}{% endfor %}
 {%- if op.request_body and not op.request_body.required %}
         body: Any = None,
@@ -64,10 +65,10 @@ class ApiClient:
         params: dict[str, Any] = {}
 {%- for p in query_params %}
 {%- if p.required %}
-        params["{{ p.name }}"] = {{ p.name | py_id }}
+        params["{{ p.name }}"] = {{ p.identifier | default(value=p.name) }}
 {%- else %}
-        if {{ p.name | py_id }} is not None:
-            params["{{ p.name }}"] = {{ p.name | py_id }}
+        if {{ p.identifier | default(value=p.name) }} is not None:
+            params["{{ p.name }}"] = {{ p.identifier | default(value=p.name) }}
 {%- endif %}
 {%- endfor %}
 {%- endif %}
@@ -75,10 +76,10 @@ class ApiClient:
         headers: dict[str, Any] = {}
 {%- for p in header_params %}
 {%- if p.required %}
-        headers["{{ p.name }}"] = {{ p.name | py_id }}
+        headers["{{ p.name }}"] = {{ p.identifier | default(value=p.name) }}
 {%- else %}
-        if {{ p.name | py_id }} is not None:
-            headers["{{ p.name }}"] = {{ p.name | py_id }}
+        if {{ p.identifier | default(value=p.name) }} is not None:
+            headers["{{ p.name }}"] = {{ p.identifier | default(value=p.name) }}
 {%- endif %}
 {%- endfor %}
 {%- endif %}

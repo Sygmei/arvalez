@@ -11,7 +11,7 @@
 //! This crate provides the single canonical implementation for all of them.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -285,6 +285,139 @@ pub fn render_root_templates(
             })
         })
         .collect()
+}
+
+/// Adds target-specific, collision-free source identifiers to an operation view.
+///
+/// Parameter names in the IR are wire names.  A target may need to change the
+/// corresponding source identifier when it collides with a generated local
+/// (for example, a query parameter named `query`) or with another sanitised
+/// parameter name.  Keeping this as a view avoids changing the IR or the wire
+/// names used for requests.
+pub fn operation_with_locals(
+    operation: &Value,
+    locals: &[(&str, &str)],
+    sanitize: fn(&str) -> String,
+) -> Value {
+    let mut view = operation.clone();
+    let Some(params) = operation.get("params").and_then(Value::as_array) else {
+        return view;
+    };
+
+    let mut used = HashSet::new();
+    let mut identifiers = HashMap::<String, String>::new();
+    let mut view_params = Vec::with_capacity(params.len());
+
+    for parameter in params {
+        let raw_name = parameter.get("name").and_then(Value::as_str).unwrap_or("");
+        let base = sanitize(raw_name);
+        let mut identifier = base.clone();
+        let mut suffix = 1;
+        while used.contains(&identifier) {
+            identifier = if suffix == 1 {
+                format!("{base}_")
+            } else {
+                format!("{base}_{suffix}")
+            };
+            suffix += 1;
+        }
+        used.insert(identifier.clone());
+        identifiers.entry(raw_name.to_owned()).or_insert_with(|| identifier.clone());
+
+        let mut parameter_view = parameter.clone();
+        if let Some(object) = parameter_view.as_object_mut() {
+            object.insert("identifier".into(), Value::String(identifier));
+        }
+        view_params.push(parameter_view);
+    }
+
+    if let Some(object) = view.as_object_mut() {
+        object.insert("params".into(), Value::Array(view_params));
+        for (field, base) in locals {
+            let identifier = allocate_identifier(base, &mut used, sanitize);
+            object.insert((*field).into(), Value::String(identifier));
+        }
+        if let Some(path) = object.get("path").and_then(Value::as_str) {
+            object.insert(
+                "path".into(),
+                Value::String(rewrite_path_identifiers(path, &identifiers)),
+            );
+        }
+    }
+    view
+}
+
+/// Legacy view that allocates parameter identifiers around a target's reserved
+/// locals. Kept for targets that have not yet switched their generated locals
+/// to operation-scoped names.
+pub fn operation_with_identifiers(
+    operation: &Value,
+    reserved: &[&str],
+    sanitize: fn(&str) -> String,
+) -> Value {
+    let mut view = operation.clone();
+    let Some(params) = operation.get("params").and_then(Value::as_array) else {
+        return view;
+    };
+    let mut used: HashSet<String> = reserved.iter().map(|name| (*name).to_owned()).collect();
+    let mut identifiers = HashMap::<String, String>::new();
+    let mut view_params = Vec::with_capacity(params.len());
+    for parameter in params {
+        let raw_name = parameter.get("name").and_then(Value::as_str).unwrap_or("");
+        let identifier = allocate_identifier(raw_name, &mut used, sanitize);
+        identifiers.entry(raw_name.to_owned()).or_insert_with(|| identifier.clone());
+        let mut parameter_view = parameter.clone();
+        if let Some(object) = parameter_view.as_object_mut() {
+            object.insert("identifier".into(), Value::String(identifier));
+        }
+        view_params.push(parameter_view);
+    }
+    if let Some(object) = view.as_object_mut() {
+        object.insert("params".into(), Value::Array(view_params));
+        if let Some(path) = object.get("path").and_then(Value::as_str) {
+            object.insert("path".into(), Value::String(rewrite_path_identifiers(path, &identifiers)));
+        }
+    }
+    view
+}
+
+fn allocate_identifier(base: &str, used: &mut HashSet<String>, sanitize: fn(&str) -> String) -> String {
+    let base = sanitize(base);
+    let mut identifier = base.clone();
+    let mut suffix = 1;
+    while used.contains(&identifier) {
+        identifier = if suffix == 1 {
+            format!("{base}_")
+        } else {
+            format!("{base}_{suffix}")
+        };
+        suffix += 1;
+    }
+    used.insert(identifier.clone());
+    identifier
+}
+
+fn rewrite_path_identifiers(path: &str, identifiers: &HashMap<String, String>) -> String {
+    let mut output = String::with_capacity(path.len());
+    let mut chars = path.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '{' {
+            output.push(character);
+            continue;
+        }
+
+        let mut name = String::new();
+        for character in chars.by_ref() {
+            if character == '}' {
+                break;
+            }
+            name.push(character);
+        }
+        output.push('{');
+        output.push_str(identifiers.get(&name).map(String::as_str).unwrap_or(&name));
+        output.push('}');
+    }
+    output
 }
 
 /// Declare a minimal SDK generator target.
