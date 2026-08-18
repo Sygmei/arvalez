@@ -5,7 +5,7 @@ use std::time::Instant;
 use anyhow::{Result, anyhow, bail};
 use arvalez_ir::{
     Attributes, CoreIr, Field, HttpMethod, Model, ModelKind, Operation, Parameter, RequestBody,
-    Response, SourceRef, TypeRef, validate_ir,
+    Response, SourceRef, TupleRest, TypeRef, validate_ir,
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -1160,20 +1160,7 @@ impl OpenApiImporter {
                 "integer" => ImportedType::plain(TypeRef::primitive("integer")),
                 "number" => ImportedType::plain(TypeRef::primitive("number")),
                 "boolean" => ImportedType::plain(TypeRef::primitive("boolean")),
-                "array" => {
-                    match schema.items.as_ref() {
-                        Some(item_schema) => {
-                            let imported = self.import_schema_type(item_schema, context)?;
-                            ImportedType::plain(TypeRef::array(
-                                imported
-                                    .type_ref
-                                    .unwrap_or_else(|| TypeRef::primitive("any")),
-                            ))
-                        }
-                        // JSON Schema: array without `items` means array of any.
-                        None => ImportedType::plain(TypeRef::array(TypeRef::primitive("any"))),
-                    }
-                }
+                "array" => ImportedType::plain(self.import_array_type(schema, context)?),
                 "object" => self.import_object_type(schema, context, None)?,
                 "file" => ImportedType::plain(TypeRef::primitive("binary")),
                 "null" => ImportedType {
@@ -1230,14 +1217,10 @@ impl OpenApiImporter {
         schema: &Schema,
         context: &InlineModelContext,
     ) -> Result<Option<ImportedType>> {
-        if schema.items.is_some() {
-            let item_schema = schema.items.as_ref().expect("checked is_some");
-            let imported = self.import_schema_type(item_schema, context)?;
-            return Ok(Some(ImportedType::plain(TypeRef::array(
-                imported
-                    .type_ref
-                    .unwrap_or_else(|| TypeRef::primitive("any")),
-            ))));
+        if schema.items.is_some() || schema.prefix_items.is_some() {
+            return Ok(Some(ImportedType::plain(
+                self.import_array_type(schema, context)?,
+            )));
         }
 
         if schema.schema_type.is_none() {
@@ -1254,6 +1237,144 @@ impl OpenApiImporter {
         }
 
         Ok(None)
+    }
+
+    /// Import a JSON Schema array, preserving tuple positions when
+    /// `prefixItems` is present. Prefix positions are optional unless
+    /// `minItems` requires them, so bounded tuple shapes are represented as a
+    /// union of exact tuple variants.
+    fn import_array_type(
+        &mut self,
+        schema: &Schema,
+        context: &InlineModelContext,
+    ) -> Result<TypeRef> {
+        let prefix_items = schema.prefix_items.as_deref().unwrap_or_default();
+        if prefix_items.is_empty() {
+            return Ok(match schema.items.as_deref() {
+                Some(SchemaOrBool::Schema(item_schema)) => TypeRef::array(
+                    self.import_schema_type(item_schema, context)?
+                        .type_ref
+                        .unwrap_or_else(|| TypeRef::primitive("any")),
+                ),
+                Some(SchemaOrBool::Bool(true)) | None => {
+                    TypeRef::array(TypeRef::primitive("any"))
+                }
+                Some(SchemaOrBool::Bool(false)) => {
+                    TypeRef::tuple(Vec::new(), TupleRest::Forbidden)
+                }
+            });
+        }
+
+        let prefix_types = prefix_items
+            .iter()
+            .map(|item| self.import_schema_or_bool_type(item, context))
+            .collect::<Result<Vec<_>>>()?;
+        let rest = match schema.items.as_deref() {
+            Some(SchemaOrBool::Schema(item_schema)) => TupleRest::Typed {
+                item: Box::new(
+                    self.import_schema_type(item_schema, context)?
+                        .type_ref
+                        .unwrap_or_else(|| TypeRef::primitive("any")),
+                ),
+            },
+            Some(SchemaOrBool::Bool(false)) => TupleRest::Forbidden,
+            Some(SchemaOrBool::Bool(true)) | None => TupleRest::Any,
+        };
+
+        let min_items = schema
+            .min_items
+            .as_ref()
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        let max_items = schema
+            .max_items
+            .as_ref()
+            .and_then(Value::as_u64)
+            .map(|value| value as usize);
+
+        let mut variants = Vec::new();
+        match (&rest, max_items) {
+            (TupleRest::Forbidden, Some(max_items)) => {
+                let max_len = max_items.min(prefix_types.len());
+                for length in min_items..=max_len {
+                    variants.push(TypeRef::tuple(
+                        prefix_types[..length].to_vec(),
+                        TupleRest::Forbidden,
+                    ));
+                }
+            }
+            (TupleRest::Forbidden, None) => {
+                for length in min_items..=prefix_types.len() {
+                    variants.push(TypeRef::tuple(
+                        prefix_types[..length].to_vec(),
+                        TupleRest::Forbidden,
+                    ));
+                }
+            }
+            (_, Some(max_items)) => {
+                if min_items <= max_items {
+                    for length in min_items..=max_items {
+                        let mut items = prefix_types[..length.min(prefix_types.len())].to_vec();
+                        if length > prefix_types.len() {
+                            let rest_item = self.tuple_rest_item(&rest);
+                            items.extend(
+                                std::iter::repeat(rest_item).take(length - prefix_types.len()),
+                            );
+                        }
+                        variants.push(TypeRef::tuple(items, TupleRest::Forbidden));
+                    }
+                }
+            }
+            (_, None) if min_items <= prefix_types.len() => {
+                for length in min_items..prefix_types.len() {
+                    variants.push(TypeRef::tuple(
+                        prefix_types[..length].to_vec(),
+                        TupleRest::Forbidden,
+                    ));
+                }
+                variants.push(TypeRef::tuple(prefix_types, rest));
+            }
+            (_, None) => {
+                let mut items = prefix_types;
+                let rest_item = self.tuple_rest_item(&rest);
+                items.extend(
+                    std::iter::repeat(rest_item).take(min_items.saturating_sub(items.len())),
+                );
+                variants.push(TypeRef::tuple(items, rest));
+            }
+        }
+
+        let variants = dedupe_variants(variants);
+        Ok(match variants.len() {
+            0 => TypeRef::primitive("never"),
+            1 => variants
+                .into_iter()
+                .next()
+                .expect("one tuple variant should exist"),
+            _ => TypeRef::Union { variants },
+        })
+    }
+
+    fn import_schema_or_bool_type(
+        &mut self,
+        schema: &SchemaOrBool,
+        context: &InlineModelContext,
+    ) -> Result<TypeRef> {
+        Ok(match schema {
+            SchemaOrBool::Schema(schema) => self
+                .import_schema_type(schema, context)?
+                .type_ref
+                .unwrap_or_else(|| TypeRef::primitive("any")),
+            SchemaOrBool::Bool(true) => TypeRef::primitive("any"),
+            SchemaOrBool::Bool(false) => TypeRef::primitive("never"),
+        })
+    }
+
+    fn tuple_rest_item(&self, rest: &TupleRest) -> TypeRef {
+        match rest {
+            TupleRest::Typed { item } => item.as_ref().clone(),
+            TupleRest::Any | TupleRest::Forbidden => TypeRef::primitive("any"),
+        }
     }
 
     fn validate_schema_keywords(&mut self, schema: &Schema, context: &str) -> Result<()> {
@@ -1658,10 +1779,36 @@ impl OpenApiImporter {
 
         match (base.items.take(), overlay.items) {
             (Some(left), Some(right)) => {
-                base.items = Some(Box::new(self.merge_schemas(*left, *right, context)?));
+                let merged = match (*left, *right) {
+                    (SchemaOrBool::Schema(left), SchemaOrBool::Schema(right)) => {
+                        SchemaOrBool::Schema(self.merge_schemas(left, right, context)?)
+                    }
+                    (left, _right) => left,
+                };
+                base.items = Some(Box::new(merged));
             }
             (Some(left), None) => base.items = Some(left),
             (None, Some(right)) => base.items = Some(right),
+            (None, None) => {}
+        }
+
+        match (base.prefix_items.take(), overlay.prefix_items) {
+            (Some(left), Some(right)) => {
+                let mut merged = Vec::with_capacity(left.len().max(right.len()));
+                for index in 0..left.len().max(right.len()) {
+                    let value = match (left.get(index).cloned(), right.get(index).cloned()) {
+                        (Some(SchemaOrBool::Schema(left)), Some(SchemaOrBool::Schema(right))) => {
+                            SchemaOrBool::Schema(self.merge_schemas(left, right, context)?)
+                        }
+                        (Some(value), _) | (None, Some(value)) => value,
+                        (None, None) => unreachable!("index is within one prefixItems vector"),
+                    };
+                    merged.push(value);
+                }
+                base.prefix_items = Some(merged);
+            }
+            (Some(left), None) => base.prefix_items = Some(left),
+            (None, Some(right)) => base.prefix_items = Some(right),
             (None, None) => {}
         }
 
@@ -1819,20 +1966,7 @@ impl OpenApiImporter {
                     type_ref: Some(TypeRef::primitive("any")),
                     nullable: true,
                 },
-                "array" => {
-                    match schema.items.as_ref() {
-                        Some(item_schema) => {
-                            let imported = self.import_schema_type(item_schema, context)?;
-                            ImportedType::plain(TypeRef::array(
-                                imported
-                                    .type_ref
-                                    .unwrap_or_else(|| TypeRef::primitive("any")),
-                            ))
-                        }
-                        // JSON Schema: array without `items` means array of any.
-                        None => ImportedType::plain(TypeRef::array(TypeRef::primitive("any"))),
-                    }
-                }
+                "array" => ImportedType::plain(self.import_array_type(schema, context)?),
                 "object" => self.import_object_type(schema, context, None)?,
                 other => {
                     self.handle_unhandled(
@@ -1862,16 +1996,7 @@ impl OpenApiImporter {
                 nullable: true,
             },
             Value::Array(_) => {
-                if let Some(items) = &schema.items {
-                    let imported = self.import_schema_type(items, context)?;
-                    ImportedType::plain(TypeRef::array(
-                        imported
-                            .type_ref
-                            .unwrap_or_else(|| TypeRef::primitive("any")),
-                    ))
-                } else {
-                    ImportedType::plain(TypeRef::array(TypeRef::primitive("any")))
-                }
+                ImportedType::plain(self.import_array_type(schema, context)?)
             }
             Value::Object(_) => self.import_object_type(schema, context, None)?,
         };

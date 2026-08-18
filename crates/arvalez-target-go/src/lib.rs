@@ -194,6 +194,24 @@ fn go_type_from_value(v: &Value) -> String {
         Some("named") => sanitize_exported_identifier(v["name"].as_str().unwrap_or("")),
         Some("enum")  => go_type_from_value(&v["base"]),
         Some("array") => format!("[]{}", go_type_from_value(&v["item"])),
+        // Go has no heterogeneous tuple type; keep the JSON array shape.
+        Some("tuple") => {
+            if v
+                .get("rest")
+                .and_then(|rest| rest.get("kind"))
+                .and_then(Value::as_str)
+                == Some("forbidden")
+            {
+                format!(
+                    "[{}]any",
+                    v.get("items")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len)
+                )
+            } else {
+                "[]any".into()
+            }
+        }
         Some("map")   => format!("map[string]{}", go_type_from_value(&v["value"])),
         _             => "any".into(),
     }
@@ -415,7 +433,7 @@ fn returns_pointer_from_value(tr: &Value) -> bool {
 
 fn returns_nil_from_value(tr: &Value) -> bool {
     match tr.get("kind").and_then(Value::as_str) {
-        Some("named") | Some("array") | Some("map") => true,
+        Some("named") | Some("array") | Some("tuple") | Some("map") => true,
         Some("enum") => returns_nil_from_value(&tr["base"]),
         Some("primitive") => tr["name"].as_str() == Some("binary"),
         _ => false,

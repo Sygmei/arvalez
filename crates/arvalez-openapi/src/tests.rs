@@ -1,4 +1,4 @@
-use arvalez_ir::{ModelKind, ParameterLocation, TypeRef};
+use arvalez_ir::{ModelKind, ParameterLocation, TupleRest, TypeRef};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -832,6 +832,146 @@ fn json_test_source(spec: &str) -> OpenApiSource {
             .find(|field| field.name == "withTrial")
             .expect("withTrial field");
         assert_eq!(with_trial.type_ref, TypeRef::primitive("boolean"));
+    }
+
+    #[test]
+    fn supports_prefix_items_as_array_item_union() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "RetryDemandRequest": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "anyOf": [
+              { "type": "string" },
+              {
+                "type": "array",
+                "maxItems": 1,
+                "prefixItems": [{ "type": "string" }]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("prefixItems should be supported");
+        assert!(result.warnings.is_empty());
+
+        let request = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "RetryDemandRequest")
+            .expect("RetryDemandRequest model");
+        let tasks = request
+            .fields
+            .iter()
+            .find(|field| field.name == "tasks")
+            .expect("tasks field");
+        assert_eq!(
+            tasks.type_ref,
+            TypeRef::Union {
+                variants: vec![
+                    TypeRef::primitive("string"),
+                    TypeRef::Union {
+                        variants: vec![
+                            TypeRef::tuple(Vec::new(), TupleRest::Forbidden),
+                            TypeRef::tuple(
+                                vec![TypeRef::primitive("string")],
+                                TupleRest::Forbidden,
+                            ),
+                        ],
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn supports_typed_tuple_rest_and_length_bounds() {
+        let spec = r##"
+{
+  "openapi": "3.1.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "TupleRequest": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "prefixItems": [
+              { "type": "string" },
+              { "type": "integer" }
+            ],
+            "items": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}
+"##;
+
+        let document: OpenApiDocument = serde_json::from_str(spec).expect("valid test spec");
+        let result = OpenApiImporter::new(
+            document,
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .expect("typed tuple rest should be supported");
+        let request = result
+            .ir
+            .models
+            .iter()
+            .find(|model| model.name == "TupleRequest")
+            .expect("TupleRequest model");
+        let value = request
+            .fields
+            .iter()
+            .find(|field| field.name == "value")
+            .expect("value field");
+        assert_eq!(
+            value.type_ref,
+            TypeRef::Union {
+                variants: vec![
+                    TypeRef::tuple(
+                        vec![TypeRef::primitive("string")],
+                        TupleRest::Forbidden,
+                    ),
+                    TypeRef::tuple(
+                        vec![TypeRef::primitive("string"), TypeRef::primitive("integer")],
+                        TupleRest::Forbidden,
+                    ),
+                    TypeRef::tuple(
+                        vec![
+                            TypeRef::primitive("string"),
+                            TypeRef::primitive("integer"),
+                            TypeRef::primitive("boolean"),
+                        ],
+                        TupleRest::Forbidden,
+                    ),
+                ],
+            }
+        );
     }
 
     #[test]

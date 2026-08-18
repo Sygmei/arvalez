@@ -241,7 +241,7 @@ pub(crate) fn infer_schema_type_for_merge(schema: &Schema) -> Option<SchemaTypeD
     schema.schema_type.clone().or_else(|| {
         if schema.properties.is_some() || schema.additional_properties.is_some() {
             Some(SchemaTypeDecl::Single("object".into()))
-        } else if schema.items.is_some() {
+        } else if schema.items.is_some() || schema.prefix_items.is_some() {
             Some(SchemaTypeDecl::Single("array".into()))
         } else if let Some(enum_values) = &schema.enum_values {
             match infer_enum_type(enum_values, schema.format.as_deref()) {

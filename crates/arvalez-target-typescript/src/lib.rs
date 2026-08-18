@@ -245,6 +245,7 @@ fn type_ref_to_ts(v: &Value) -> String {
             "boolean" => "boolean",
             "binary" => "Blob",
             "null" => "null",
+            "never" => "never",
             "any" | "object" => "JsonValue",
             _ => "unknown",
         }
@@ -267,12 +268,51 @@ fn type_ref_to_ts(v: &Value) -> String {
                     .unwrap_or_else(|| "unknown".into())
             }),
         Some("array") => format!("{}[]", type_ref_to_ts(&v["item"])),
+        Some("tuple") => {
+            let items = v
+                .get("items")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(type_ref_to_ts)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let rest = match v
+                .get("rest")
+                .and_then(|rest| rest.get("kind"))
+                .and_then(Value::as_str)
+            {
+                Some("typed") if items.is_empty() => {
+                    format!("...{}[]", ts_rest_item_type(&v["rest"]["item"]))
+                }
+                Some("typed") => format!(
+                    ", ...{}[]",
+                    ts_rest_item_type(&v["rest"]["item"])
+                ),
+                Some("any") if items.is_empty() => "...unknown[]".into(),
+                Some("any") => ", ...unknown[]".into(),
+                _ => String::new(),
+            };
+            format!("[{items}{rest}]")
+        }
         Some("map") => format!("Record<string, {}>", type_ref_to_ts(&v["value"])),
         Some("union") => v["variants"]
             .as_array()
             .map(|vs| vs.iter().map(type_ref_to_ts).collect::<Vec<_>>().join(" | "))
             .unwrap_or_else(|| "unknown".into()),
         _ => "unknown".into(),
+    }
+}
+
+fn ts_rest_item_type(v: &Value) -> String {
+    let rendered = type_ref_to_ts(v);
+    if v.get("kind").and_then(Value::as_str) == Some("union") {
+        format!("({rendered})")
+    } else {
+        rendered
     }
 }
 
@@ -353,6 +393,20 @@ fn collect_type_ref_enums(
         }
         Some("array") => {
             if let Some(item) = type_ref.get("item") {
+                collect_type_ref_enums(item, enumerations);
+            }
+        }
+        Some("tuple") => {
+            if let Some(items) = type_ref.get("items").and_then(Value::as_array) {
+                for item in items {
+                    collect_type_ref_enums(item, enumerations);
+                }
+            }
+            if let Some(item) = type_ref
+                .get("rest")
+                .filter(|rest| rest.get("kind").and_then(Value::as_str) == Some("typed"))
+                .and_then(|rest| rest.get("item"))
+            {
                 collect_type_ref_enums(item, enumerations);
             }
         }

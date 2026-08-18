@@ -2,7 +2,7 @@ use crate::{TargetConfig, generate};
 use arvalez_target_core::GeneratedFile;
 use arvalez_ir::{
     Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, Response,
-    TypeRef,
+    TupleRest, TypeRef,
 };
 use serde_json::json;
 
@@ -55,6 +55,38 @@ fn renders_property_defaults_without_making_fields_nullable() {
     assert!(models.contents.contains("iscool: bool = False"));
     assert!(!models.contents.contains("iscool: bool | None"));
     assert!(models.contents.contains("maybe: bool | None\n"));
+}
+
+#[test]
+fn renders_tuple_types_with_typed_rest() {
+    let ir = CoreIr {
+        models: vec![arvalez_ir::Model {
+            id: "model.tuple_request".into(),
+            name: "TupleRequest".into(),
+            kind: arvalez_ir::ModelKind::Object,
+            fields: vec![Field::new(
+                "tuple_value",
+                TypeRef::tuple(
+                    vec![TypeRef::primitive("string"), TypeRef::primitive("integer")],
+                    TupleRest::Typed {
+                        item: Box::new(TypeRef::primitive("boolean")),
+                    },
+                ),
+            )],
+            attributes: Attributes::default(),
+            source: None,
+        }],
+        ..Default::default()
+    };
+
+    let files = make_package_from_ir(ir, "demo_client").expect("package should render");
+    let models = files
+        .iter()
+        .find(|file| file.path.ends_with("models.py"))
+        .expect("models.py");
+    assert!(models
+        .contents
+        .contains("tuple_value: tuple[str, int, *tuple[bool, ...]]"));
 }
 
 #[test]

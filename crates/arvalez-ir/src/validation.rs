@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::{CURRENT_IR_VERSION, CoreIr, ModelKind, TypeRef};
+use crate::{CURRENT_IR_VERSION, CoreIr, ModelKind, TupleRest, TypeRef};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationIssue {
@@ -175,6 +175,14 @@ fn validate_type_ref(type_ref: &TypeRef, path: &str, issues: &mut Vec<Validation
             }
         }
         TypeRef::Array { item } => validate_type_ref(item, &format!("{path}.item"), issues),
+        TypeRef::Tuple { items, rest } => {
+            for (index, item) in items.iter().enumerate() {
+                validate_type_ref(item, &format!("{path}.items[{index}]"), issues);
+            }
+            if let TupleRest::Typed { item } = rest {
+                validate_type_ref(item, &format!("{path}.rest.item"), issues);
+            }
+        }
         TypeRef::Map { value } => validate_type_ref(value, &format!("{path}.value"), issues),
         TypeRef::Union { variants } => {
             if variants.is_empty() {

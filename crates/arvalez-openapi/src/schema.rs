@@ -181,7 +181,20 @@ pub(crate) fn resolve_nested_schema_reference(
         [segment, remainder @ ..] if segment == "items" => {
             let item = schema
                 .items
-                .as_deref()
+                .as_ref()
+                .and_then(|item| item.as_ref().as_schema())
+                .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))?;
+            resolve_nested_schema_reference(item, remainder, reference)
+        }
+        [segment, index, remainder @ ..] if segment == "prefixItems" => {
+            let index = index
+                .parse::<usize>()
+                .map_err(|_| anyhow!("unsupported reference `{reference}`"))?;
+            let item = schema
+                .prefix_items
+                .as_ref()
+                .and_then(|items| items.get(index))
+                .and_then(SchemaOrBool::as_schema)
                 .ok_or_else(|| anyhow!("unsupported reference `{reference}`"))?;
             resolve_nested_schema_reference(item, remainder, reference)
         }
@@ -218,6 +231,7 @@ pub(crate) fn is_validation_only_schema_variant(schema: &Schema) -> bool {
         && schema.enum_values.is_none()
         && schema.properties.is_none()
         && schema.items.is_none()
+        && schema.prefix_items.is_none()
         && schema.additional_properties.is_none()
         && schema.any_of.is_none()
         && schema.one_of.is_none()
@@ -241,6 +255,7 @@ pub(crate) fn is_generic_object_placeholder(schema: &Schema) -> bool {
         && schema.additional_properties.is_none()
         && schema.definitions.is_none()
         && schema.items.is_none()
+        && schema.prefix_items.is_none()
         && schema.enum_values.is_none()
         && schema.const_value.is_none()
         && schema.any_of.is_none()
@@ -316,6 +331,7 @@ pub(crate) fn is_unconstrained_schema(schema: &Schema) -> bool {
         && schema.properties.is_none()
         && schema.required.is_none()
         && schema.items.is_none()
+        && schema.prefix_items.is_none()
         && schema.additional_properties.is_none()
         && schema.any_of.is_none()
         && schema.one_of.is_none()
@@ -335,6 +351,7 @@ pub(crate) fn schema_has_non_all_of_shape(schema: &Schema) -> bool {
         || schema.properties.is_some()
         || schema.required.is_some()
         || schema.items.is_some()
+        || schema.prefix_items.is_some()
         || schema.additional_properties.is_some()
         || schema.any_of.is_some()
         || schema.one_of.is_some()
@@ -383,7 +400,6 @@ pub(crate) fn is_known_but_unimplemented_schema_keyword(keyword: &str) -> bool {
         "if" | "then"
             | "else"
             | "contains"
-            | "prefixItems"
             | "patternProperties"
             | "propertyNames"
             | "dependentSchemas"

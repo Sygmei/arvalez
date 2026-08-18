@@ -7,7 +7,7 @@ use crate::sanitize::{sanitize_class_name, sanitize_identifier, sanitize_subsect
 use crate::{generate, CommonConfig, GeneratedFile, TargetConfig};
 use arvalez_ir::{
     Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody,
-    Response, TypeRef,
+    Response, TupleRest, TypeRef,
 };
 use serde_json::Value;
 
@@ -164,7 +164,7 @@ fn renders_basic_python_package() {
     assert!(
         models
             .contents
-            .contains("from typing import Any, TypeAlias")
+            .contains("from typing import Any, Never, TypeAlias")
     );
     assert!(models.contents.contains("WidgetPath: TypeAlias = \"str\""));
     assert!(models.contents.contains("class WidgetStatus(str, Enum):"));
@@ -187,7 +187,7 @@ fn renders_basic_python_package() {
     assert!(client.contents.contains("ApiClient = AsyncApiClient"));
     assert!(client.contents.contains("import warnings"));
     assert!(client.contents.contains("from types import TracebackType"));
-    assert!(client.contents.contains("from typing import Any, Self"));
+    assert!(client.contents.contains("from typing import Any, Never, Self"));
     assert!(
         client
             .contents
@@ -287,6 +287,35 @@ fn renders_basic_python_package() {
             .contains("response = self._client.request(\"GET\", url, **request_kwargs)")
     );
     assert!(client.contents.contains("response = self._get_widget_raw("));
+}
+
+#[test]
+fn renders_tuple_types_with_typed_rest() {
+    let mut ir = sample_ir();
+    let widget = ir
+        .models
+        .iter_mut()
+        .find(|model| model.name == "Widget")
+        .expect("Widget model");
+    widget.fields.push(Field::new(
+        "tuple_value",
+        TypeRef::tuple(
+            vec![TypeRef::primitive("string"), TypeRef::primitive("integer")],
+            TupleRest::Typed {
+                item: Box::new(TypeRef::primitive("boolean")),
+            },
+        ),
+    ));
+
+    let files = make_package_from_ir(ir, "demo_client", None, TargetConfig::default())
+        .expect("package should render");
+    let models = files
+        .iter()
+        .find(|file| file.path.ends_with("models.py"))
+        .expect("models.py");
+    assert!(models
+        .contents
+        .contains("tuple_value: tuple[str, int, *tuple[bool, ...]]"));
 }
 
 #[test]

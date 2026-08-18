@@ -1,6 +1,6 @@
 use std::fs;
 
-use arvalez_ir::{Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody, Response, TypeRef};
+use arvalez_ir::{Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody, Response, TupleRest, TypeRef};
 use arvalez_target_core::{CommonConfig, PackageConfig};
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -15,6 +15,35 @@ fn common(package_name: &str) -> CommonConfig {
             description: None,
         },
     }
+}
+
+#[test]
+fn renders_tuple_types_with_typed_rest() {
+    let mut ir = sample_ir();
+    let widget = ir
+        .models
+        .iter_mut()
+        .find(|model| model.name == "Widget")
+        .expect("Widget model");
+    widget.fields.push(Field::new(
+        "tuple_value",
+        TypeRef::tuple(
+            vec![TypeRef::primitive("string"), TypeRef::primitive("integer")],
+            TupleRest::Typed {
+                item: Box::new(TypeRef::primitive("boolean")),
+            },
+        ),
+    ));
+
+    let files = generate(&ir, None, &common("@demo/client"), &TargetConfig::default())
+        .expect("package should render");
+    let models = files
+        .iter()
+        .find(|file| file.path.ends_with("models.ts"))
+        .expect("models.ts");
+    assert!(models
+        .contents
+        .contains("tuple_value: [string, number, ...boolean[]];"));
 }
 
 fn sample_ir() -> CoreIr {

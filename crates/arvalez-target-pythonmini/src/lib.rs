@@ -200,12 +200,43 @@ fn type_ref_to_py(v: &Value) -> String {
             "boolean" => "bool",
             "binary" => "bytes",
             "null" => "None",
+            "never" => "Never",
             _ => "Any",
         }
         .into(),
         Some("named") => to_pascal_case(v["name"].as_str().unwrap_or("Any")),
         Some("enum") => type_ref_to_py(&v["base"]),
         Some("array") => format!("list[{}]", type_ref_to_py(&v["item"])),
+        Some("tuple") => {
+            let items = v
+                .get("items")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(type_ref_to_py)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            match v
+                .get("rest")
+                .and_then(|rest| rest.get("kind"))
+                .and_then(Value::as_str)
+            {
+                Some("typed") if items.is_empty() => {
+                    format!("tuple[{}, ...]", type_ref_to_py(&v["rest"]["item"]))
+                }
+                Some("typed") => format!(
+                    "tuple[{items}, *tuple[{}, ...]]",
+                    type_ref_to_py(&v["rest"]["item"])
+                ),
+                Some("any") if items.is_empty() => "tuple[Any, ...]".into(),
+                Some("any") => format!("tuple[{items}, *tuple[Any, ...]]"),
+                _ if items.is_empty() => "tuple[()]".into(),
+                _ => format!("tuple[{items}]"),
+            }
+        }
         Some("map") => format!("dict[str, {}]", type_ref_to_py(&v["value"])),
         Some("union") => v["variants"]
             .as_array()

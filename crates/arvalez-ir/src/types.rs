@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const CURRENT_IR_VERSION: u32 = 2;
+pub const CURRENT_IR_VERSION: u32 = 3;
 
 pub type Attributes = BTreeMap<String, Value>;
 
@@ -190,6 +190,17 @@ pub enum ParameterLocation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TupleRest {
+    /// Additional tuple elements are allowed with any type.
+    Any,
+    /// Additional tuple elements use this type.
+    Typed { item: Box<TypeRef> },
+    /// No additional tuple elements are allowed.
+    Forbidden,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TypeRef {
     Primitive { name: String },
     Named { name: String },
@@ -199,6 +210,10 @@ pub enum TypeRef {
         values: Vec<Value>,
     },
     Array { item: Box<TypeRef> },
+    Tuple {
+        items: Vec<TypeRef>,
+        rest: TupleRest,
+    },
     Map { value: Box<TypeRef> },
     Union { variants: Vec<TypeRef> },
 }
@@ -231,6 +246,10 @@ impl TypeRef {
         Self::Array {
             item: Box::new(item),
         }
+    }
+
+    pub fn tuple(items: Vec<TypeRef>, rest: TupleRest) -> Self {
+        Self::Tuple { items, rest }
     }
 
     pub fn map(value: TypeRef) -> Self {

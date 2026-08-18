@@ -219,7 +219,10 @@ impl ParameterSpec {
                 self.parameter_type.clone().map(|schema_type| Schema {
                     schema_type: Some(schema_type),
                     format: self.format.clone(),
-                    items: self.items.clone(),
+                    items: self
+                        .items
+                        .clone()
+                        .map(|items| Box::new(SchemaOrBool::Schema(*items))),
                     ..Schema::default()
                 })
             })
@@ -375,8 +378,14 @@ pub(crate) struct Schema {
     pub(crate) properties: Option<IndexMap<String, SchemaOrBool>>,
     #[serde(default)]
     pub(crate) required: Option<Vec<String>>,
+    /// JSON Schema 2020-12 homogeneous item schema or boolean schema. A
+    /// boolean `false` closes a `prefixItems` tuple; `true` allows any rest.
     #[serde(default)]
-    pub(crate) items: Option<Box<Schema>>,
+    pub(crate) items: Option<Box<SchemaOrBool>>,
+    /// JSON Schema 2020-12 tuple item schemas.
+    #[serde(rename = "prefixItems")]
+    #[serde(default)]
+    pub(crate) prefix_items: Option<Vec<SchemaOrBool>>,
     #[serde(rename = "additionalProperties")]
     #[serde(default)]
     pub(crate) additional_properties: Option<AdditionalProperties>,

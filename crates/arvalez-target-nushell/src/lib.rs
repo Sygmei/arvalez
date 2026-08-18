@@ -131,6 +131,8 @@ fn type_ref_to_nu(v: &Value) -> String {
         Some("named") => "record".into(),
         Some("enum") => type_ref_to_nu(&v["base"]),
         Some("array") => format!("list<{}>", type_ref_to_nu(&v["item"])),
+        // Nushell has homogeneous list types but no heterogeneous tuple type.
+        Some("tuple") => "list<any>".into(),
         Some("map") => "record".into(),
         Some("union") => "any".into(),
         _ => "any".into(),
