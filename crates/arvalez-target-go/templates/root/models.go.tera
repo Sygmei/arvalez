@@ -44,6 +44,8 @@ func (value *Nullable[T]) UnmarshalJSON(data []byte) error {
 	value.Valid = true
 	return nil
 }
-{% for model in models -%}
-{% include "partials/model_struct.go.tera" -%}
-{% endfor -%}
+{% for model in models %}
+{% include "partials/model_struct.go.tera" %}
+{% if not loop.last %}
+{% endif %}
+{% endfor %}

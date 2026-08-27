@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::{fs, process::Command};
 
 use arvalez_ir::{
     Attributes, CoreIr, Field, HttpMethod, Operation, Parameter, ParameterLocation, RequestBody,
@@ -9,7 +9,7 @@ use arvalez_target_core::{CommonConfig, PackageConfig};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-use crate::{TargetConfig, generate_go_package};
+use crate::{TargetConfig, generate_go_package, write_go_package};
 
 fn sample_ir() -> CoreIr {
     CoreIr {
@@ -58,7 +58,10 @@ fn sample_ir() -> CoreIr {
                     location: ParameterLocation::Query,
                     type_ref: TypeRef::primitive("boolean"),
                     required: false,
-                    attributes: BTreeMap::new(),
+                    attributes: BTreeMap::from([(
+                        "description".into(),
+                        Value::String("Whether to include the total count.".into()),
+                    )]),
                 },
             ],
             request_body: Some(RequestBody {
@@ -135,6 +138,48 @@ fn renders_basic_go_package() {
     assert!(client.contents.contains("requestOptions *RequestOptions"));
     assert!(client.contents.contains("if err := client.handleError(response, requestOptions); err != nil {"));
     assert!(client.contents.contains("response, err := c.GetWidgetRaw("));
+    assert!(client.contents.contains(
+        "// GetWidgetRaw parameter widgetID: Unique widget identifier.\n// GetWidgetRaw parameter includeCount: Whether to include the total count.\nfunc (c *Client) GetWidgetRaw("
+    ));
+    assert!(client.contents.contains(
+        "// GetWidget parameter widgetID: Unique widget identifier.\n// GetWidget parameter includeCount: Whether to include the total count.\nfunc (c *Client) GetWidget("
+    ));
+    assert!(client.contents.contains(
+        "if includeCount != nil {\n\t\tquery.Set(\"include_count\", fmt.Sprint(*includeCount))\n\t}"
+    ));
+}
+
+#[test]
+fn generated_package_builds_and_vets_when_go_is_available() {
+    if Command::new("go").arg("version").output().is_err() {
+        return;
+    }
+
+    let output_dir = tempdir().expect("tempdir");
+    let files = generate_go_package(
+        &sample_ir(),
+        None,
+        &default_common(),
+        &TargetConfig { module_path: "github.com/demo/client".into(), ..Default::default() },
+    )
+    .expect("package should render");
+    write_go_package(output_dir.path(), &files).expect("package should be written");
+    let go_cache = output_dir.path().join("go-cache");
+    fs::create_dir_all(&go_cache).expect("Go cache directory should be created");
+
+    for command in ["test", "vet"] {
+        let output = Command::new("go")
+            .args([command, "./..."])
+            .current_dir(output_dir.path())
+            .env("GOCACHE", &go_cache)
+            .output()
+            .expect("go command should run");
+        assert!(
+            output.status.success(),
+            "go {command} failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

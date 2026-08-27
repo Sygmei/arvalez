@@ -15,9 +15,9 @@
 // Deprecated: This operation is deprecated.
 {% endif -%}
 {%- for p in op.params %}
-{%- if p.attributes.description %}
+{%- if p.attributes.description -%}
 // {{ raw_method_name }} parameter {{ p.identifier | default(value=p.name) }}: {{ p.attributes.description | go_comment }}
-{%- endif %}
+{% endif -%}
 {%- endfor -%}
 func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go_args_sig }}) (*http.Response, error) {
 	{{ op.client_identifier }} := {{ client_expression }}
@@ -40,12 +40,12 @@ func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go
 	{{ op.query_identifier }}.Set("{{ p.name }}", fmt.Sprint({{ p.identifier | default(value=p.name) }}))
 {% else %}
 	if {{ p.identifier | default(value=p.name) }} != nil {
-{% if p.attributes.content_encoding %}
+{%- if p.attributes.content_encoding %}
 		if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding(*{{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
 			return nil, {{ op.err_identifier }}
 		}
-{% endif %}
-	{{ op.query_identifier }}.Set("{{ p.name }}", fmt.Sprint(*{{ p.identifier | default(value=p.name) }}))
+{%- endif %}
+		{{ op.query_identifier }}.Set("{{ p.name }}", fmt.Sprint(*{{ p.identifier | default(value=p.name) }}))
 	}
 {% endif %}{% endfor %}
 	{{ op.query_identifier }} = {{ op.client_identifier }}.mergeQuery({{ op.query_identifier }}, {{ op.request_options_identifier }})
@@ -156,9 +156,9 @@ func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go
 // Deprecated: This operation is deprecated.
 {% endif -%}
 {%- for p in op.params %}
-{%- if p.attributes.description %}
+{%- if p.attributes.description -%}
 // {{ method_name }} parameter {{ p.identifier | default(value=p.name) }}: {{ p.attributes.description | go_comment }}
-{%- endif %}
+{% endif -%}
 {%- endfor -%}
 func ({{ receiver_name }} *{{ receiver_type }}) {{ method_name }}({{ op | go_args_sig }}) {{ return_shape.signature }} {
 	{{ op.client_identifier }} := {{ client_expression }}
