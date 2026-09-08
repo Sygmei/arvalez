@@ -2679,3 +2679,39 @@ fn preserves_explicit_string_type_for_uuid4_parameters() {
         Some(&Value::String("uuid4".into()))
     );
 }
+
+#[test]
+fn preserves_array_parameter_serialization_metadata() {
+    for (version, parameter, expected) in [
+        (json!({"openapi": "3.1.0"}), json!({
+            "name": "status", "in": "query", "style": "form", "explode": false,
+            "schema": {"type": ["array", "null"], "items": {"type": "string"}},
+        }), json!({"style": "form", "explode": false})),
+        (json!({"openapi": "3.1.0"}), json!({
+            "name": "status", "in": "query", "explode": true,
+            "schema": {"type": "array", "items": {"type": "string"}},
+        }), json!({"explode": true})),
+        (json!({"openapi": "3.1.0"}), json!({
+            "name": "status", "in": "query",
+            "schema": {"type": "array", "items": {"type": "string"}},
+        }), json!({})),
+        (json!({"swagger": "2.0"}), json!({
+            "name": "status", "in": "query", "type": "array", "items": {"type": "string"},
+        }), json!({"collection_format": "csv"})),
+    ] {
+        let mut spec = version;
+        spec["paths"] = json!({"/workspaces": {"get": {
+            "operationId": "list_workspaces", "parameters": [parameter],
+            "responses": {"204": {"description": "ok"}},
+        }}});
+        let raw = spec.to_string();
+        let result = OpenApiImporter::new(
+            serde_json::from_value(spec).unwrap(), json_test_source(&raw), LoadOpenApiOptions::default(),
+        ).build_ir().unwrap();
+        let parameter = &result.ir.operations[0].params[0];
+        assert_eq!(parameter.type_ref, TypeRef::array(TypeRef::primitive("string")));
+        for key in ["style", "explode", "collection_format"] {
+            assert_eq!(parameter.attributes.get(key), expected.get(key), "{key}: {raw}");
+        }
+    }
+}

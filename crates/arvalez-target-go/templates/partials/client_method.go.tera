@@ -2,7 +2,7 @@
 {%- set method_name = op.name | go_exported -%}
 {%- set raw_method_name = method_name ~ "Raw" -%}
 {%- set return_shape = op | go_return_shape -%}
-{%- set path_params = op.params | filter(attribute="location", value="path") -%}
+{%- set path_params = op | go_path_params -%}
 {%- set query_params = op.params | filter(attribute="location", value="query") -%}
 {%- set header_params = op.params | filter(attribute="location", value="header") -%}
 {%- set cookie_params = op.params | filter(attribute="location", value="cookie") -%}
@@ -32,7 +32,10 @@ func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go
 		return nil, {{ op.err_identifier }}
 	}
 {% endif %}{% endfor %}
-{% for p in query_params %}{% if p.required %}{% if p.attributes.content_encoding %}
+{% for p in query_params %}{% if p.type_ref.kind == "array" %}
+{% set parameter_target = op.query_identifier %}
+{% include "partials/array_parameter.go.tera" %}
+{% elif p.required %}{% if p.attributes.content_encoding %}
 	if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
 		return nil, {{ op.err_identifier }}
 	}
@@ -50,7 +53,10 @@ func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go
 {% endif %}{% endfor %}
 	{{ op.query_identifier }} = {{ op.client_identifier }}.mergeQuery({{ op.query_identifier }}, {{ op.request_options_identifier }})
 	{{ op.headers_identifier }} := http.Header{}
-{% for p in header_params %}{% if p.required %}{% if p.attributes.content_encoding %}
+{% for p in header_params %}{% if p.type_ref.kind == "array" %}
+{% set parameter_target = op.headers_identifier %}
+{% include "partials/array_parameter.go.tera" %}
+{% elif p.required %}{% if p.attributes.content_encoding %}
 	if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
 		return nil, {{ op.err_identifier }}
 	}

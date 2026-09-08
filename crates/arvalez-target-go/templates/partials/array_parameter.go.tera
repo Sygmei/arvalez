@@ -1,0 +1,18 @@
+{% set encoding = p | go_array_encoding %}
+{% if encoding.explode %}
+	for _, {{ op.array_item_identifier }} := range {{ p.identifier | default(value=p.name) }} {
+		{{ parameter_target }}.Add("{{ p.name }}", fmt.Sprint({{ op.array_item_identifier }}))
+	}
+{% else %}
+	if len({{ p.identifier | default(value=p.name) }}) > 0 {
+{% if encoding.string_items %}
+		{{ parameter_target }}.Set("{{ p.name }}", strings.Join({{ p.identifier | default(value=p.name) }}, {{ encoding.delimiter }}))
+{% else %}
+		{{ op.array_values_identifier }} := make([]string, 0, len({{ p.identifier | default(value=p.name) }}))
+		for _, {{ op.array_item_identifier }} := range {{ p.identifier | default(value=p.name) }} {
+			{{ op.array_values_identifier }} = append({{ op.array_values_identifier }}, fmt.Sprint({{ op.array_item_identifier }}))
+		}
+		{{ parameter_target }}.Set("{{ p.name }}", strings.Join({{ op.array_values_identifier }}, {{ encoding.delimiter }}))
+{% endif %}
+	}
+{% endif %}

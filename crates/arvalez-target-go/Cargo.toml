@@ -17,4 +17,5 @@ serde_json.workspace = true
 tera.workspace = true
 
 [dev-dependencies]
+arvalez-openapi.workspace = true
 tempfile.workspace = true

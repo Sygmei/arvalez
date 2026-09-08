@@ -315,6 +315,15 @@ pub(crate) fn parameter_attributes(param: &ParameterSpec, schema: &Schema) -> At
             "collection_format".into(),
             Value::String(collection_format.clone()),
         );
+    } else if param.parameter_type.as_ref().is_some_and(|t| t.as_slice().iter().any(|t| t == "array")) {
+        // Swagger 2 parameters use csv by default, unlike OpenAPI 3 form arrays.
+        attributes.insert("collection_format".into(), Value::String("csv".into()));
+    }
+    if let Some(style) = &param.style {
+        attributes.insert("style".into(), Value::String(style.clone()));
+    }
+    if let Some(explode) = param.explode {
+        attributes.insert("explode".into(), Value::Bool(explode));
     }
     attributes
 }

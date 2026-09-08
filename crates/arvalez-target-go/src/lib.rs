@@ -55,13 +55,14 @@ pub const TEMPLATES: &[(&str, &str)] = &[
     ("partials/model_struct.go.tera",            include_str!("../templates/partials/model_struct.go.tera")),
     ("partials/service.go.tera",                 include_str!("../templates/partials/service.go.tera")),
     ("partials/client_method.go.tera",           include_str!("../templates/partials/client_method.go.tera")),
+    ("partials/array_parameter.go.tera",         include_str!("../templates/partials/array_parameter.go.tera")),
 ];
 
 // ── Tera filters ──────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
     tera.register_filter("go_operation", |v: &Value, _: &HashMap<String, Value>| {
-        Ok(operation_with_locals(v, &[
+        let mut operation = operation_with_locals(v, &[
             ("ctx_identifier", "ctx"),
             ("client_identifier", "client"),
             ("path_identifier", "path"),
@@ -78,7 +79,18 @@ pub fn register_filters(tera: &mut Tera) {
             ("zero_identifier", "zero"),
             ("body_identifier", "body"),
             ("request_options_identifier", "requestOptions"),
-        ], sanitize_identifier))
+            ("array_item_identifier", "item"),
+            ("array_values_identifier", "values"),
+        ], sanitize_identifier);
+        // Go uses Sprintf slots; retain wire names to validate and order them.
+        operation["path"] = v["path"].clone();
+        Ok(operation)
+    });
+    tera.register_filter("go_path_params", |v: &Value, _: &HashMap<String, Value>| {
+        build_path_params(v)
+    });
+    tera.register_filter("go_array_encoding", |v: &Value, _: &HashMap<String, Value>| {
+        build_array_encoding(v)
     });
     // {{ "get_widget" | go_exported }} → "GetWidget"
     tera.register_filter("go_exported", |v: &Value, _: &HashMap<String, Value>| {
@@ -281,6 +293,74 @@ fn go_body_type_from_value(body: &Value, required: bool) -> String {
 }
 
 // ── Operation helpers ─────────────────────────────────────────────────────────
+
+/// Resolve arguments in route order, validating before any source is emitted.
+fn build_path_params(op: &Value) -> tera::Result<Value> {
+    let path = op["path"].as_str().unwrap_or("");
+    let name = op["name"].as_str().unwrap_or("");
+    let params: Vec<_> = op["params"].as_array().into_iter().flatten()
+        .filter(|p| p["location"] == "path").collect();
+    let mut ordered = Vec::new();
+    let mut remaining = path;
+    while let Some(start) = remaining.find('{') {
+        remaining = &remaining[start + 1..];
+        let end = remaining.find('}').ok_or_else(|| tera::Error::msg(
+            format!("operation {name} has an unclosed path placeholder in {path}")
+        ))?;
+        let placeholder = &remaining[..end];
+        let param = params.iter().find(|p| p["name"] == placeholder).ok_or_else(|| {
+            tera::Error::msg(format!(
+                "operation {name} path {{{placeholder}}} not declared as a path parameter"
+            ))
+        })?;
+        if param["required"] != true {
+            return Err(tera::Error::msg(format!(
+                "operation {name} path parameter {placeholder} must be required"
+            )));
+        }
+        ordered.push((*param).clone());
+        remaining = &remaining[end + 1..];
+    }
+    for param in params {
+        if !ordered.iter().any(|p| p["name"] == param["name"]) {
+            return Err(tera::Error::msg(format!(
+                "operation {name} path parameter {} has no matching placeholder in {path}",
+                param["name"].as_str().unwrap_or("")
+            )));
+        }
+    }
+    Ok(Value::Array(ordered))
+}
+
+fn build_array_encoding(param: &Value) -> tera::Result<Value> {
+    let attrs = &param["attributes"];
+    let header = param["location"] == "header";
+    let (explode, delimiter) = if let Some(format) = attrs["collection_format"].as_str() {
+        match format {
+            "csv" => (false, ","),
+            "multi" if !header => (true, ","),
+            "ssv" => (false, " "),
+            "tsv" => (false, "\t"),
+            "pipes" => (false, "|"),
+            _ => return Err(tera::Error::msg(format!("unsupported array collection format {format}"))),
+        }
+    } else {
+        let style = attrs["style"].as_str().unwrap_or(if header { "simple" } else { "form" });
+        match style {
+            // Simple header arrays are comma-separated for either explode value.
+            "simple" if header => (false, ","),
+            "form" if !header => (attrs["explode"].as_bool().unwrap_or(true), ","),
+            "spaceDelimited" if !header => (attrs["explode"].as_bool().unwrap_or(false), " "),
+            "pipeDelimited" if !header => (attrs["explode"].as_bool().unwrap_or(false), "|"),
+            _ => return Err(tera::Error::msg(format!("unsupported array parameter style {style}"))),
+        }
+    };
+    Ok(json!({
+        "explode": explode,
+        "delimiter": serde_json::to_string(delimiter).unwrap(),
+        "string_items": go_type_from_value(&param["type_ref"]["item"]) == "string",
+    }))
+}
 
 fn build_path_format(path: &str) -> String {
     let mut result = String::new();

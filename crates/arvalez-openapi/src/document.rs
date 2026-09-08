@@ -206,6 +206,10 @@ pub(crate) struct ParameterSpec {
     #[serde(rename = "collectionFormat")]
     #[serde(default)]
     pub(crate) collection_format: Option<String>,
+    #[serde(default)]
+    pub(crate) style: Option<String>,
+    #[serde(default)]
+    pub(crate) explode: Option<bool>,
     /// OpenAPI 3 alternative to `schema`: a single-entry media-type map.
     #[serde(default)]
     pub(crate) content: BTreeMap<String, MediaTypeSpec>,

@@ -273,3 +273,199 @@ fn supports_selective_template_overrides() {
 
     assert!(client.contents.contains("type WidgetsService struct { Overridden bool }"));
 }
+
+#[test]
+fn imported_array_parameters_build_and_serialize_on_the_wire() {
+    let output_dir = tempdir().expect("tempdir");
+    let mut paths = serde_json::Map::new();
+    let mut calls = String::new();
+    let mut case = 0;
+    for location in ["query", "header"] {
+        for required in [false, true] {
+            for explode in [None, Some(false), Some(true)] {
+                for (item_type, go_values, expected, param_name) in [
+                    ("string", "[]string{\"active\", \"paused\"}", "active,paused", "item"),
+                    ("integer", "[]int64{2, 7}", "2,7", "values"),
+                    ("number", "[]float64{1.5, 2.5}", "1.5,2.5", "query"),
+                    ("boolean", "[]bool{true, false}", "true,false", "headers"),
+                ] {
+                    let mut parameter = json!({
+                        "name": param_name, "in": location, "required": required,
+                        "schema": {"type": ["array", "null"], "items": {"type": item_type}},
+                    });
+                    if let Some(explode) = explode {
+                        parameter["explode"] = json!(explode);
+                    }
+                    paths.insert(format!("/case-{case}"), json!({"get": {
+                        "operationId": format!("case_{case}"), "tags": ["arrays"],
+                        "parameters": [parameter], "responses": {"204": {"description": "ok"}},
+                    }}));
+                    let repeated = location == "query" && explode.unwrap_or(true);
+                    let expected_values: Vec<_> = if repeated {
+                        expected.split(',').collect()
+                    } else {
+                        vec![expected]
+                    };
+                    let expected_go = expected_values.iter().map(|v| format!("{v:?}"))
+                        .collect::<Vec<_>>().join(", ");
+                    let empty_values = format!("{}{{}}", go_values.split('{').next().unwrap());
+                    for (values, want) in [(go_values, format!("[]string{{{expected_go}}}")),
+                        ("nil", "nil".into()), (empty_values.as_str(), "nil".into())] {
+                        calls.push_str(&format!(r#"
+    response, err = client.Arrays.Case{case}Raw(context.Background(), {values}, nil)
+    if err != nil {{ t.Fatal(err) }}
+    response.Body.Close()
+    check(t, captured, "{location}", "{param_name}", {want})
+"#));
+                    }
+                    case += 1;
+                }
+            }
+        }
+    }
+    for (index, metadata, expected) in [
+        (0, json!({"style": "spaceDelimited", "explode": false}), vec!["a b"]),
+        (1, json!({"style": "pipeDelimited", "explode": false}), vec!["a|b"]),
+        (2, json!({"collectionFormat": "csv"}), vec!["a,b"]),
+        (3, json!({"collectionFormat": "multi"}), vec!["a", "b"]),
+        (4, json!({"collectionFormat": "ssv"}), vec!["a b"]),
+        (5, json!({"collectionFormat": "tsv"}), vec!["a\tb"]),
+        (6, json!({"collectionFormat": "pipes"}), vec!["a|b"]),
+        (7, json!({}), vec!["a,b"]),
+    ] {
+        let mut parameter = json!({
+            "name": "values", "in": "query", "type": "array", "items": {"type": "string"},
+        });
+        if index < 2 {
+            parameter.as_object_mut().unwrap().remove("type");
+            parameter.as_object_mut().unwrap().remove("items");
+            parameter["schema"] = json!({"type": "array", "items": {"type": "string"}});
+        }
+        parameter.as_object_mut().unwrap().extend(metadata.as_object().unwrap().clone());
+        paths.insert(format!("/style-{index}"), json!({"get": {
+            "operationId": format!("style_{index}"), "tags": ["arrays"],
+            "parameters": [parameter], "responses": {"204": {"description": "ok"}},
+        }}));
+        let expected_go = expected.iter().map(|v| format!("{v:?}")).collect::<Vec<_>>().join(", ");
+        calls.push_str(&format!(r#"
+    response, err = client.Arrays.Style{index}Raw(context.Background(), []string{{"a", "b"}}, nil)
+    if err != nil {{ t.Fatal(err) }}
+    response.Body.Close()
+    check(t, captured, "query", "values", []string{{{expected_go}}})
+"#));
+    }
+    // Reproduce the five optional ramen filters together in a single operation.
+    paths.insert("/v1/workspaces".into(), json!({"get": {
+        "operationId": "list_workspaces", "tags": ["workspace"],
+        "parameters": (["status", "namespace", "tofu_version", "action", "wid"].map(|name| json!({
+            "name": name, "in": "query", "required": false, "explode": false,
+            "schema": {"type": ["array", "null"], "items": {"type": "string"}},
+        }))), "responses": {"204": {"description": "ok"}},
+    }}));
+    calls.push_str(r#"
+    response, err = client.Workspace.ListWorkspacesRaw(context.Background(),
+        []string{"active", "paused"}, []string{"a", "b"}, []string{"1", "2"},
+        []string{"plan", "apply"}, []string{"w1", "w2"}, nil)
+    if err != nil { t.Fatal(err) }
+    response.Body.Close()
+    check(t, captured, "query", "status", []string{"active,paused"})
+    check(t, captured, "query", "namespace", []string{"a,b"})
+    check(t, captured, "query", "tofu_version", []string{"1,2"})
+    check(t, captured, "query", "action", []string{"plan,apply"})
+    check(t, captured, "query", "wid", []string{"w1,w2"})
+"#);
+    // Deliberately declare path parameters in the opposite order to the route.
+    paths.insert("/v1/workspaces/{wid}/actions/{jid}".into(), json!({"patch": {
+        "operationId": "update_actions_for_workspace", "tags": ["action"],
+        "parameters": (["jid", "wid"].map(|name| json!({
+            "name": name, "in": "path", "required": true, "schema": {"type": "string"},
+        }))), "responses": {"204": {"description": "ok"}},
+    }}));
+    calls.push_str(r#"
+    response, err = client.Action.UpdateActionsForWorkspaceRaw(context.Background(), "job/1", "workspace/2", nil)
+    if err != nil { t.Fatal(err) }
+    response.Body.Close()
+    if got := captured.URL.EscapedPath(); got != "/v1/workspaces/workspace%2F2/actions/job%2F1" {
+        t.Fatalf("wrong path argument order or escaping: %s", got)
+    }
+"#);
+    let spec_path = output_dir.path().join("openapi.json");
+    fs::write(&spec_path, json!({"openapi": "3.1.0", "paths": paths}).to_string()).unwrap();
+    let ir = arvalez_openapi::load_openapi_to_ir(&spec_path).expect("OpenAPI should import");
+    let files = generate_go_package(&ir, None, &default_common(), &TargetConfig {
+        group_by_tag: true, ..Default::default()
+    }).expect("arrays should render");
+    let source = &files.iter().find(|f| f.path.ends_with("client.go")).unwrap().contents;
+    for name in ["status", "namespace", "tofuVersion", "action", "wid"] {
+        assert!(source.contains(&format!("strings.Join({name}, \",\")")));
+        assert!(!source.contains(&format!("fmt.Sprint(*{name})")));
+    }
+    write_go_package(output_dir.path(), &files).unwrap();
+    fs::write(output_dir.path().join("arrays_test.go"), format!(r#"package client
+import (
+    "context"
+    "io"
+    "net/http"
+    "reflect"
+    "strings"
+    "testing"
+)
+type captureTransport func(*http.Request) (*http.Response, error)
+func (f captureTransport) RoundTrip(r *http.Request) (*http.Response, error) {{ return f(r) }}
+func check(t *testing.T, r *http.Request, location, name string, want []string) {{
+    t.Helper()
+    got := r.URL.Query()[name]
+    if location == "header" {{ got = r.Header.Values(name) }}
+    if !reflect.DeepEqual(got, want) {{ t.Fatalf("%s %s: got %#v, want %#v", r.URL.Path, name, got, want) }}
+}}
+func TestArrayWireEncoding(t *testing.T) {{
+    var captured *http.Request
+    client := NewClient("https://example.test", &ClientOptions{{HTTPClient: &http.Client{{
+        Transport: captureTransport(func(r *http.Request) (*http.Response, error) {{
+            captured = r
+            return &http.Response{{StatusCode: 204, Header: http.Header{{}}, Body: io.NopCloser(strings.NewReader(""))}}, nil
+        }}),
+    }}}})
+    var response *http.Response
+    var err error
+    {calls}
+}}
+"#)).unwrap();
+    if Command::new("go").arg("version").output().is_err() {
+        eprintln!("Go unavailable; generated wire tests were not executed");
+        return;
+    }
+    let go_files: Vec<_> = fs::read_dir(output_dir.path()).unwrap().map(|f| f.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "go")).collect();
+    let formatted = Command::new("gofmt").arg("-w").args(&go_files).output().unwrap();
+    assert!(formatted.status.success(), "{}", String::from_utf8_lossy(&formatted.stderr));
+    let checked = Command::new("gofmt").arg("-l").args(&go_files).output().unwrap();
+    assert!(checked.status.success() && checked.stdout.is_empty());
+    for command in ["build", "test", "vet"] {
+        let output = Command::new("go").args([command, "./..."])
+            .current_dir(output_dir.path()).env("GOCACHE", output_dir.path().join("go-cache"))
+            .output().unwrap();
+        assert!(output.status.success(), "go {command}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
+}
+
+#[test]
+fn rejects_missing_or_extra_path_parameter_declarations() {
+    for (path, expected) in [
+        ("/workspaces/{wid}/widgets/{widget_id}", "path {wid} not declared as a path parameter"),
+        ("/widgets", "path parameter widget_id has no matching placeholder"),
+        ("/widgets/{widget_id", "unclosed path placeholder"),
+    ] {
+        let mut ir = sample_ir();
+        ir.operations[0].path = path.into();
+        let error = generate_go_package(&ir, None, &default_common(), &TargetConfig::default())
+            .expect_err("invalid paths must fail generation");
+        let message = format!("{error:#}");
+        assert!(message.contains("get_widget") && message.contains(expected), "{message}");
+    }
+    let mut ir = sample_ir();
+    ir.operations[0].params.clear();
+    let error = generate_go_package(&ir, None, &default_common(), &TargetConfig::default()).unwrap_err();
+    assert!(format!("{error:#}").contains("path {widget_id} not declared"));
+}
