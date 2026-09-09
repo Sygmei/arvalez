@@ -219,6 +219,74 @@ pub fn collect_erased_root_templates(
         .collect()
 }
 
+/// Resolve arguments in route order, validating before any source is emitted.
+pub fn path_parameters(op: &Value) -> tera::Result<Value> {
+    let path = op["path"].as_str().unwrap_or("");
+    let name = op["name"].as_str().unwrap_or("");
+    let params: Vec<_> = op["params"].as_array().into_iter().flatten()
+        .filter(|p| p["location"] == "path").collect();
+    let mut ordered = Vec::new();
+    let mut remaining = path;
+    while let Some(start) = remaining.find('{') {
+        remaining = &remaining[start + 1..];
+        let end = remaining.find('}').ok_or_else(|| tera::Error::msg(
+            format!("operation {name} has an unclosed path placeholder in {path}")
+        ))?;
+        let placeholder = &remaining[..end];
+        let param = params.iter().find(|p| p["name"] == placeholder).ok_or_else(|| {
+            tera::Error::msg(format!(
+                "operation {name} path {{{placeholder}}} not declared as a path parameter"
+            ))
+        })?;
+        if param["required"] != true {
+            return Err(tera::Error::msg(format!(
+                "operation {name} path parameter {placeholder} must be required"
+            )));
+        }
+        ordered.push((*param).clone());
+        remaining = &remaining[end + 1..];
+    }
+    for param in params {
+        if !ordered.iter().any(|p| p["name"] == param["name"]) {
+            return Err(tera::Error::msg(format!(
+                "operation {name} path parameter {} has no matching placeholder in {path}",
+                param["name"].as_str().unwrap_or("")
+            )));
+        }
+    }
+    Ok(Value::Array(ordered))
+}
+
+/// Resolve query/header array serialization once for all language targets.
+pub fn array_parameter_encoding(param: &Value) -> tera::Result<Value> {
+    let attrs = &param["attributes"];
+    let header = param["location"] == "header";
+    let (explode, delimiter) = if let Some(format) = attrs["collection_format"].as_str() {
+        match format {
+            "csv" => (false, ","),
+            "multi" if !header => (true, ","),
+            "ssv" => (false, " "),
+            "tsv" => (false, "\t"),
+            "pipes" => (false, "|"),
+            _ => return Err(tera::Error::msg(format!("unsupported array collection format {format}"))),
+        }
+    } else {
+        let style = attrs["style"].as_str().unwrap_or(if header { "simple" } else { "form" });
+        match style {
+            // Simple header arrays are comma-separated for either explode value.
+            "simple" if header => (false, ","),
+            "form" if !header => (attrs["explode"].as_bool().unwrap_or(true), ","),
+            "spaceDelimited" if !header => (attrs["explode"].as_bool().unwrap_or(false), " "),
+            "pipeDelimited" if !header => (attrs["explode"].as_bool().unwrap_or(false), "|"),
+            _ => return Err(tera::Error::msg(format!("unsupported array parameter style {style}"))),
+        }
+    };
+    Ok(serde_json::json!({
+        "explode": explode,
+        "delimiter": serde_json::to_string(delimiter).unwrap(),
+    }))
+}
+
 /// Render all `root/`-prefixed entries in `templates` into [`GeneratedFile`]s.
 ///
 /// Core automatically inserts `models`, `operations` (sorted), `config`, and all
@@ -240,6 +308,9 @@ pub fn render_root_templates(
     config_val: &Value,
     erased: &[String],
 ) -> Result<Vec<GeneratedFile>> {
+    for operation in &ir.operations {
+        path_parameters(&serde_json::to_value(operation)?)?;
+    }
     ctx.insert("ir", ir);
     ctx.insert("models", &serde_json::to_value(sorted_models(ir))?);
     ctx.insert("operations", &serde_json::to_value(sorted_operations(ir))?);
@@ -539,6 +610,9 @@ macro_rules! declare_target {
 /// | `pascal_case`          | `str`        | `SomeName`          |
 /// | `screaming_snake_case` | `str` / any  | `SOME_NAME`         |
 pub fn register_casing_filters(tera: &mut Tera) {
+    tera.register_filter("array_encoding", |v: &Value, _: &HashMap<String, Value>| {
+        array_parameter_encoding(v)
+    });
     tera.register_filter("snake_case", |v: &Value, _: &HashMap<String, Value>| {
         Ok(Value::String(to_snake_case(v.as_str().unwrap_or(""))))
     });

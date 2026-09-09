@@ -64,7 +64,11 @@ class ApiClient:
 {%- if query_params %}
         params: dict[str, Any] = {}
 {%- for p in query_params %}
-{%- if p.required %}
+{%- if p.type_ref.kind == "array" %}
+{%- set encoding = p | array_encoding %}
+        if {{ p.identifier | default(value=p.name) }}:
+            params["{{ p.name }}"] = {% if encoding.explode %}[{% else %}{{ encoding.delimiter }}.join({% endif %}str(item).lower() if isinstance(item, bool) else str(item) for item in {{ p.identifier | default(value=p.name) }}{% if encoding.explode %}]{% else %}){% endif %}
+{%- elif p.required %}
         params["{{ p.name }}"] = {{ p.identifier | default(value=p.name) }}
 {%- else %}
         if {{ p.identifier | default(value=p.name) }} is not None:
@@ -75,7 +79,11 @@ class ApiClient:
 {%- if header_params %}
         headers: dict[str, Any] = {}
 {%- for p in header_params %}
-{%- if p.required %}
+{%- if p.type_ref.kind == "array" %}
+{%- set encoding = p | array_encoding %}
+        if {{ p.identifier | default(value=p.name) }}:
+            headers["{{ p.name }}"] = {% if encoding.explode %}[{% else %}{{ encoding.delimiter }}.join({% endif %}str(item).lower() if isinstance(item, bool) else str(item) for item in {{ p.identifier | default(value=p.name) }}{% if encoding.explode %}]{% else %}){% endif %}
+{%- elif p.required %}
         headers["{{ p.name }}"] = {{ p.identifier | default(value=p.name) }}
 {%- else %}
         if {{ p.identifier | default(value=p.name) }} is not None:

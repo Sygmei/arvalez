@@ -29,7 +29,11 @@
 {% if query_params %}
         params: dict[str, Any] = {}
 {%- for p in query_params %}
-{%- if p.required %}{% if p.attributes.content_encoding %}
+{%- if p.type_ref.kind == "array" %}
+{%- set encoding = p | array_encoding %}
+        if {{ p.identifier | default(value=p.name) }}:
+            params["{{ p.name }}"] = {% if encoding.explode %}[{% else %}{{ encoding.delimiter }}.join({% endif %}str(item).lower() if isinstance(item, bool) else str(item) for item in {{ p.identifier | default(value=p.name) }}{% if encoding.explode %}]{% else %}){% endif %}
+{%- elif p.required %}{% if p.attributes.content_encoding %}
         validate_string_encoding({{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "query parameter `{{ p.name }}`", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
         params["{{ p.name }}"] = {{ p.identifier | default(value=p.name) }}
@@ -45,7 +49,11 @@
 {% if header_params %}
         headers: dict[str, Any] = {}
 {%- for p in header_params %}
-{%- if p.required %}{% if p.attributes.content_encoding %}
+{%- if p.type_ref.kind == "array" %}
+{%- set encoding = p | array_encoding %}
+        if {{ p.identifier | default(value=p.name) }}:
+            headers["{{ p.name }}"] = {% if encoding.explode %}[{% else %}{{ encoding.delimiter }}.join({% endif %}str(item).lower() if isinstance(item, bool) else str(item) for item in {{ p.identifier | default(value=p.name) }}{% if encoding.explode %}]{% else %}){% endif %}
+{%- elif p.required %}{% if p.attributes.content_encoding %}
         validate_string_encoding({{ p.identifier | default(value=p.name) }}, "{{ p.attributes.content_encoding }}", "header `{{ p.name }}`", default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
         headers["{{ p.name }}"] = {{ p.identifier | default(value=p.name) }}

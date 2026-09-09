@@ -12,7 +12,7 @@ export def "make-{{ model.name | nu_cmd }}" [
 }
 {% else %}# Record constructor for {{ model.name | nu_cmd }}
 export def "make-{{ model.name | nu_cmd }}" [
-{% for f in model.fields %}    {% if f.optional %}--{% endif %}{{ f.name | nu_var }}: {{ f.type_ref | nu_type }}{% if f.attributes.description %}  # {{ f.attributes.description | trim }}{% endif %}
+{% for f in model.fields %}    {% if f.optional %}--{% endif %}{{ f.name | nu_var }}: {% if f.optional %}{{ f.type_ref | nu_flag_type }}{% else %}{{ f.type_ref | nu_type }}{% endif %}{% if f.attributes.description %}  # {{ f.attributes.description | trim }}{% endif %}
 
 {% endfor %}]: nothing -> {{ model.fields | nu_typed_record }} {
     {

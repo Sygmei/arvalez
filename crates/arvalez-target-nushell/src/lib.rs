@@ -62,6 +62,11 @@ pub fn register_filters(tera: &mut Tera) {
     tera.register_filter("nu_type", |v: &Value, _: &HashMap<String, Value>| {
         Ok(Value::String(type_ref_to_nu(v)))
     });
+    // Boolean-valued flags must remain value options, including explicit false.
+    tera.register_filter("nu_flag_type", |v: &Value, _: &HashMap<String, Value>| {
+        let t = type_ref_to_nu(v);
+        Ok(Value::String(if t == "bool" { "oneof<bool, nothing>".into() } else { t }))
+    });
     // {{ "someIdentifier" | nu_var }} — string → snake_case Nushell variable name (keyword-escaped)
     tera.register_filter("nu_var", |v: &Value, _: &HashMap<String, Value>| {
         Ok(Value::String(sanitize_variable(v.as_str().unwrap_or(""))))

@@ -46,7 +46,16 @@
 {%- if query_params | length > 0 %}
     const {{ operation.base_query_identifier }} = new URLSearchParams();
 {%- for param in query_params %}
-{%- if param.required %}
+{%- if param.type_ref.kind == "array" %}
+{%- set encoding = param | array_encoding %}
+    if ({{ param.identifier | default(value=param.name) }}?.length) {
+{%- if encoding.explode %}
+      {{ param.identifier | default(value=param.name) }}.forEach(value => {{ operation.base_query_identifier }}.append("{{ param.name }}", String(value)));
+{%- else %}
+      {{ operation.base_query_identifier }}.set("{{ param.name }}", {{ param.identifier | default(value=param.name) }}.map(String).join({{ encoding.delimiter }}));
+{%- endif %}
+    }
+{%- elif param.required %}
     {{ operation.base_query_identifier }}.set("{{ param.name }}", String({{ param.identifier | default(value=param.name) }}));
 {%- else %}
     if ({{ param.identifier | default(value=param.name) }} !== undefined) {
@@ -64,7 +73,16 @@
 {%- if has_headers %}
     const {{ operation.headers_identifier }} = new globalThis.Headers();
 {%- for param in header_params %}
-{%- if param.required %}
+{%- if param.type_ref.kind == "array" %}
+{%- set encoding = param | array_encoding %}
+    if ({{ param.identifier | default(value=param.name) }}?.length) {
+{%- if encoding.explode %}
+      {{ param.identifier | default(value=param.name) }}.forEach(value => {{ operation.headers_identifier }}.append("{{ param.name }}", String(value)));
+{%- else %}
+      {{ operation.headers_identifier }}.set("{{ param.name }}", {{ param.identifier | default(value=param.name) }}.map(String).join({{ encoding.delimiter }}));
+{%- endif %}
+    }
+{%- elif param.required %}
     {{ operation.headers_identifier }}.set("{{ param.name }}", String({{ param.identifier | default(value=param.name) }}));
 {%- else %}
     if ({{ param.identifier | default(value=param.name) }} !== undefined) {
