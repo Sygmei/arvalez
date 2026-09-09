@@ -90,7 +90,7 @@ checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
 name = "arvalez-cli"
-version = "1.13.2"
+version = "1.13.3"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-ir"
-version = "1.13.2"
+version = "1.13.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-openapi"
-version = "1.13.2"
+version = "1.13.3"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-core"
-version = "1.13.2"
+version = "1.13.3"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-go"
-version = "1.13.2"
+version = "1.13.3"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-nushell"
-version = "1.13.2"
+version = "1.13.3"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-python"
-version = "1.13.2"
+version = "1.13.3"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-pythonmini"
-version = "1.13.2"
+version = "1.13.3"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-typescript"
-version = "1.13.2"
+version = "1.13.3"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -1894,18 +1894,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.56"
+version = "0.8.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "556764e583adb45a9f8d413c2a147fa7e8d821e48e12b14fd560b607998b75eb"
+checksum = "d35102a9f36d089ccae9e4c6802bc118be4487b80aaffc0ab4e0cf5ce92d2873"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.56"
+version = "0.8.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2ab42fc20575779bd240faa45f94a74256f755c0fa9e89f0ede20d91d0cdfc1"
+checksum = "146c01f5ab44258da43cf276c74a2763db2ff3969c9c652c3f2de07041d0b2bc"
 dependencies = [
  "proc-macro2",
  "quote",
