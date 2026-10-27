@@ -117,6 +117,7 @@ fn renders_basic_go_package() {
         .find(|file| file.path.ends_with("utils.go"))
         .expect("utils.go");
 
+    let params = &files.iter().find(|f| f.path.ends_with("params.go")).unwrap().contents;
     assert!(go_mod.contents.contains("module github.com/demo/client"));
     assert!(models.contents.contains("type Widget struct"));
     assert!(models.contents.contains("Count *int64 `json:\"count,omitempty\"`"));
@@ -132,20 +133,20 @@ fn renders_basic_go_package() {
     assert!(utils.contents.contains("func (c *Client) encodeMultipartBody(payload any) (io.Reader, string, error) {"));
     assert!(client.contents.contains("func (c *Client) GetWidgetRaw("));
     assert!(client.contents.contains("func (c *Client) GetWidget("));
-    assert!(client.contents.contains("body *Widget"));
+    assert!(params.contains("Body *Widget"));
     assert!(client.contents.contains("// Deprecated: This operation is deprecated."));
-    assert!(client.contents.contains("GetWidget parameter widgetID: Unique widget identifier."));
+    assert!(client.contents.contains("GetWidget parameter params.WidgetID: Unique widget identifier."));
     assert!(client.contents.contains("requestOptions *RequestOptions"));
     assert!(client.contents.contains("if err := client.handleError(response, requestOptions); err != nil {"));
-    assert!(client.contents.contains("response, err := c.GetWidgetRaw("));
+    assert!(client.contents.contains("response, err := c.executeGetWidget("));
     assert!(client.contents.contains(
-        "// GetWidgetRaw parameter widgetID: Unique widget identifier.\n// GetWidgetRaw parameter includeCount: Whether to include the total count.\nfunc (c *Client) GetWidgetRaw("
+        "// GetWidgetRaw parameter params.WidgetID: Unique widget identifier.\n// GetWidgetRaw parameter params.IncludeCount: Whether to include the total count.\nfunc (c *Client) GetWidgetRaw("
     ));
     assert!(client.contents.contains(
-        "// GetWidget parameter widgetID: Unique widget identifier.\n// GetWidget parameter includeCount: Whether to include the total count.\nfunc (c *Client) GetWidget("
+        "// GetWidget parameter params.WidgetID: Unique widget identifier.\n// GetWidget parameter params.IncludeCount: Whether to include the total count.\nfunc (c *Client) GetWidget("
     ));
     assert!(client.contents.contains(
-        "if includeCount != nil {\n\t\tquery.Set(\"include_count\", fmt.Sprint(*includeCount))\n\t}"
+        "if params.IncludeCount != nil {\n\t\tquery.Set(\"include_count\", fmt.Sprint(*params.IncludeCount))\n\t}"
     ));
 }
 
@@ -194,8 +195,8 @@ fn avoids_collisions_between_parameters_and_generated_locals() {
         .find(|file| file.path.ends_with("client.go"))
         .expect("client.go");
 
-    assert!(client.contents.contains("query *bool"));
-    assert!(client.contents.contains("query_.Set(\"query\", fmt.Sprint(*query))"));
+    assert!(files.iter().find(|f| f.path.ends_with("params.go")).unwrap().contents.contains("Query *bool"));
+    assert!(client.contents.contains("query_.Set(\"query\", fmt.Sprint(*params.Query))"));
     assert!(client.contents.contains("query_ := url.Values{}"));
 }
 
@@ -216,8 +217,10 @@ fn required_named_request_bodies_are_values() {
         .find(|file| file.path.ends_with("client.go"))
         .expect("client.go");
 
-    assert!(client.contents.contains("body Widget"));
-    assert!(!client.contents.contains("body *Widget"));
+    let params = &files.iter().find(|f| f.path.ends_with("params.go")).unwrap().contents;
+    assert!(params.contains("Body Widget"));
+    assert!(!params.contains("Body *Widget"));
+    assert!(client.contents.contains("params.Body"));
 }
 
 #[test]
@@ -309,10 +312,11 @@ fn imported_array_parameters_build_and_serialize_on_the_wire() {
                     let expected_go = expected_values.iter().map(|v| format!("{v:?}"))
                         .collect::<Vec<_>>().join(", ");
                     let empty_values = format!("{}{{}}", go_values.split('{').next().unwrap());
+                    let field_name = crate::sanitize::sanitize_exported_identifier(param_name);
                     for (values, want) in [(go_values, format!("[]string{{{expected_go}}}")),
                         ("nil", "nil".into()), (empty_values.as_str(), "nil".into())] {
                         calls.push_str(&format!(r#"
-    response, err = client.Arrays.Case{case}Raw(context.Background(), {values}, nil)
+    response, err = client.Arrays.Case{case}Raw(context.Background(), &Case{case}Params{{{field_name}: {values}}})
     if err != nil {{ t.Fatal(err) }}
     response.Body.Close()
     check(t, captured, "{location}", "{param_name}", {want})
@@ -348,7 +352,7 @@ fn imported_array_parameters_build_and_serialize_on_the_wire() {
         }}));
         let expected_go = expected.iter().map(|v| format!("{v:?}")).collect::<Vec<_>>().join(", ");
         calls.push_str(&format!(r#"
-    response, err = client.Arrays.Style{index}Raw(context.Background(), []string{{"a", "b"}}, nil)
+    response, err = client.Arrays.Style{index}Raw(context.Background(), (&Style{index}Params{{}}).WithValues([]string{{"a", "b"}}))
     if err != nil {{ t.Fatal(err) }}
     response.Body.Close()
     check(t, captured, "query", "values", []string{{{expected_go}}})
@@ -364,8 +368,8 @@ fn imported_array_parameters_build_and_serialize_on_the_wire() {
     }}));
     calls.push_str(r#"
     response, err = client.Workspace.ListWorkspacesRaw(context.Background(),
-        []string{"active", "paused"}, []string{"a", "b"}, []string{"1", "2"},
-        []string{"plan", "apply"}, []string{"w1", "w2"}, nil)
+        (&ListWorkspacesParams{}).WithStatus([]string{"active", "paused"}).WithNamespace([]string{"a", "b"}).
+            WithTofuVersion([]string{"1", "2"}).WithAction([]string{"plan", "apply"}).WithWid([]string{"w1", "w2"}))
     if err != nil { t.Fatal(err) }
     response.Body.Close()
     check(t, captured, "query", "status", []string{"active,paused"})
@@ -382,7 +386,7 @@ fn imported_array_parameters_build_and_serialize_on_the_wire() {
         }))), "responses": {"204": {"description": "ok"}},
     }}));
     calls.push_str(r#"
-    response, err = client.Action.UpdateActionsForWorkspaceRaw(context.Background(), "job/1", "workspace/2", nil)
+    response, err = client.Action.UpdateActionsForWorkspaceRaw(context.Background(), &UpdateActionsForWorkspaceParams{Jid: "job/1", Wid: "workspace/2"})
     if err != nil { t.Fatal(err) }
     response.Body.Close()
     if got := captured.URL.EscapedPath(); got != "/v1/workspaces/workspace%2F2/actions/job%2F1" {
@@ -397,7 +401,7 @@ fn imported_array_parameters_build_and_serialize_on_the_wire() {
     }).expect("arrays should render");
     let source = &files.iter().find(|f| f.path.ends_with("client.go")).unwrap().contents;
     for name in ["status", "namespace", "tofuVersion", "action", "wid"] {
-        assert!(source.contains(&format!("strings.Join({name}, \",\")")));
+        assert!(source.contains(&format!("strings.Join(params.{}, \",\")", crate::sanitize::sanitize_exported_identifier(name))));
         assert!(!source.contains(&format!("fmt.Sprint(*{name})")));
     }
     write_go_package(output_dir.path(), &files).unwrap();

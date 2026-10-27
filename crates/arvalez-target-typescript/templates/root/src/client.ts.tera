@@ -1,3 +1,5 @@
+{%- set input_types = ir | ts_input_types -%}
+import type { {% for id, name in input_types %}{{ name }}{% if not loop.last %}, {% endif %}{% endfor %} } from "./params";
 import type { {{ ir | ts_client_imports }} } from "./models";
 import {
   buildUrl,

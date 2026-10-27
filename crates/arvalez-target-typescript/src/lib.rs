@@ -35,6 +35,7 @@ pub const TEMPLATES: &[(&str, &str)] = &[
     ("root/tsconfig.json.tera",      include_str!("../templates/root/tsconfig.json.tera")),
     ("root/README.md.tera",          include_str!("../templates/root/README.md.tera")),
     ("root/src/models.ts.tera",      include_str!("../templates/root/src/models.ts.tera")),
+    ("root/src/params.ts.tera",       include_str!("../templates/root/src/params.ts.tera")),
     ("root/src/client.ts.tera",      include_str!("../templates/root/src/client.ts.tera")),
     ("root/src/utils.ts.tera",       include_str!("../templates/root/src/utils.ts.tera")),
     ("root/src/index.ts.tera",       include_str!("../templates/root/src/index.ts.tera")),
@@ -46,8 +47,12 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ───────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
-    tera.register_filter("ts_operation", |v: &Value, _: &HashMap<String, Value>| {
-        Ok(operation_with_locals(v, &[
+    tera.register_filter("ts_input_types", |v: &Value, _: &HashMap<String, Value>| {
+        Ok(arvalez_target_core::operation_input_type_names(v, sanitize_type_name, &["ApiClient", "ApiClientOptions", "RequestOptions", "ErrorHandler", "JsonValue"]))
+    });
+    tera.register_filter("ts_operation", |v: &Value, args: &HashMap<String, Value>| {
+        let mut operation = operation_with_locals(v, &[
+            ("params_identifier", "params"),
             ("path_identifier", "path"),
             ("base_query_identifier", "baseQuery"),
             ("query_identifier", "query"),
@@ -57,7 +62,21 @@ pub fn register_filters(tera: &mut Tera) {
             ("response_identifier", "response"),
             ("body_identifier", "body"),
             ("request_options_identifier", "requestOptions"),
-        ], sanitize_identifier))
+        ], sanitize_identifier);
+        let names = args.get("types").ok_or_else(|| tera::Error::msg("ts_operation requires types=ir | ts_input_types"))?;
+        operation["params_type"] = names[v["id"].as_str().unwrap_or("")].clone();
+        let mut fields = op_params(&operation).to_vec();
+        for field in &mut fields { field["type"] = Value::String(param_type(field)); }
+        if let Some(body) = operation.get("request_body").filter(|body| !body.is_null()) {
+            fields.push(json!({
+                "identifier": operation["body_identifier"], "required": body["required"],
+                "type": body.get("type_ref").map(type_ref_to_ts).unwrap_or_else(|| "unknown".into()),
+                "attributes": body["attributes"],
+            }));
+        }
+        operation["has_required_inputs"] = Value::Bool(fields.iter().any(|field| field["required"] == true));
+        operation["input_fields"] = Value::Array(fields);
+        Ok(operation)
     });
     // {{ type_ref | ts_type }} — TypeRef JSON → TypeScript type annotation
     tera.register_filter("ts_type", |v: &Value, _: &HashMap<String, Value>| {
@@ -482,7 +501,7 @@ fn render_path_template(path: &str) -> String {
                     name.push(nc);
                 }
                 result.push_str("${");
-                result.push_str(&sanitize_identifier(&name));
+                result.push_str(&name);
                 result.push('}');
             }
             '`' => result.push_str("\\`"),
@@ -534,63 +553,16 @@ fn param_type(param: &Value) -> String {
 }
 
 fn build_args_sig(op: &Value) -> String {
-    let params = op_params(op);
-    let body = op.get("request_body");
-    let body_name = op.get("body_identifier").and_then(Value::as_str).unwrap_or("body");
-    let request_options_name = op.get("request_options_identifier").and_then(Value::as_str).unwrap_or("requestOptions");
-    let mut args: Vec<String> = Vec::new();
-    for p in params.iter().filter(|p| p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-        let name = p.get("identifier").and_then(Value::as_str)
-            .or_else(|| p.get("name").and_then(Value::as_str)).unwrap_or("");
-        args.push(format!("{name}: {}", param_type(p)));
-    }
-    if let Some(rb) = body {
-        if rb.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            let ty = rb.get("type_ref").map(|tr| type_ref_to_ts(tr)).unwrap_or_else(|| "unknown".into());
-            args.push(format!("{body_name}: {ty}"));
-        }
-    }
-    for p in params.iter().filter(|p| !p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-        let name = p.get("identifier").and_then(Value::as_str)
-            .or_else(|| p.get("name").and_then(Value::as_str)).unwrap_or("");
-        args.push(format!("{name}?: {}", param_type(p)));
-    }
-    if let Some(rb) = body {
-        if !rb.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            let ty = rb.get("type_ref").map(|tr| type_ref_to_ts(tr)).unwrap_or_else(|| "unknown".into());
-            args.push(format!("{body_name}?: {ty}"));
-        }
-    }
-    args.push(format!("{request_options_name}?: RequestOptions"));
-    args.join(", ")
+    let params = op["params_identifier"].as_str().unwrap_or("params");
+    let options = op["request_options_identifier"].as_str().unwrap_or("requestOptions");
+    let ty = op["params_type"].as_str().unwrap_or("never");
+    let default = if op["has_required_inputs"] == true { "" } else { " = {}" };
+    format!("{params}: {ty}{default}, {options}?: RequestOptions")
 }
 
 fn build_fwd_args(op: &Value) -> String {
-    let params = op_params(op);
-    let body = op.get("request_body");
-    let body_name = op.get("body_identifier").and_then(Value::as_str).unwrap_or("body");
-    let request_options_name = op.get("request_options_identifier").and_then(Value::as_str).unwrap_or("requestOptions");
-    let mut args: Vec<String> = Vec::new();
-    for p in params.iter().filter(|p| p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-        args.push(p.get("identifier").and_then(Value::as_str)
-            .or_else(|| p.get("name").and_then(Value::as_str)).unwrap_or("").to_owned());
-    }
-    if let Some(rb) = body {
-        if rb.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push(body_name.into());
-        }
-    }
-    for p in params.iter().filter(|p| !p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-        args.push(p.get("identifier").and_then(Value::as_str)
-            .or_else(|| p.get("name").and_then(Value::as_str)).unwrap_or("").to_owned());
-    }
-    if let Some(rb) = body {
-        if !rb.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push(body_name.into());
-        }
-    }
-    args.push(request_options_name.into());
-    args.join(", ")
+    format!("{}, {}", op["params_identifier"].as_str().unwrap_or("params"),
+        op["request_options_identifier"].as_str().unwrap_or("requestOptions"))
 }
 
 fn build_return_type(op: &Value) -> String {

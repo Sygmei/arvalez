@@ -13,6 +13,28 @@ This first implementation slice focuses on the OpenAPI importer and the target b
 
 The OpenAPI importer is in place, and the generator can emit Python, TypeScript, and Go packages from `openapi.json`.
 
+## Named operation inputs
+
+Arvalez 2 generates TypeScript input objects and Go input structs:
+
+```ts
+await client.getWidget({ widgetId: 'abc', page: 0 });
+```
+
+```go
+params := (&sdk.GetWidgetParams{WidgetID: "abc"}).WithPage(0)
+widget, err := client.GetWidget(ctx, params)
+```
+
+Required Go fields are plain values; optional setters preserve explicit zero
+values without pointer helpers. Nullable model fields additionally support
+`WithXNull()`, and `WithoutX()` clears optional fields. Transport settings remain
+separate from API inputs. Python calling conventions are unchanged.
+
+This is a breaking change to generated Go and TypeScript SDKs. See the
+[migration guide](MIGRATION.md) for call-site changes, omission/null semantics,
+custom template changes, and downstream versioning.
+
 ## Workspace Layout
 
 - `crates/arvalez-ir`: shared IR and validation
@@ -149,13 +171,17 @@ cargo run -p arvalez-cli -- generate-go --openapi openapi.json --template-dir ./
 
 Supported override names are:
 
-- `package/go.mod.tera`
-- `package/README.md.tera`
-- `package/models.go.tera`
-- `package/client.go.tera`
+- `root/go.mod.tera`
+- `root/README.md.tera`
+- `root/models.go.tera`
+- `root/params.go.tera`
+- `root/client.go.tera`
+- `root/utils.go.tera`
+- `partials/input_setters.go.tera`
 - `partials/model_struct.go.tera`
 - `partials/service.go.tera`
 - `partials/client_method.go.tera`
+- `partials/array_parameter.go.tera`
 
 When `group_by_tag = true`, tagged operations are grouped under subclients. For example, Python becomes `client.ingredients.create_ingredient(...)` and TypeScript becomes `client.ingredients.createIngredient(...)`. Operations without tags stay on the root client, and multi-tag operations use the first tag.
 
@@ -188,12 +214,14 @@ cargo run -p arvalez-cli -- generate-typescript --openapi openapi.json --templat
 
 The TypeScript backend also ships with bundled default Tera templates inside the binary. Supported override names are:
 
-- `package/package.json.tera`
-- `package/tsconfig.json.tera`
-- `package/README.md.tera`
-- `package/models.ts.tera`
-- `package/client.ts.tera`
-- `package/index.ts.tera`
+- `root/package.json.tera`
+- `root/tsconfig.json.tera`
+- `root/README.md.tera`
+- `root/src/models.ts.tera`
+- `root/src/params.ts.tera`
+- `root/src/client.ts.tera`
+- `root/src/utils.ts.tera`
+- `root/src/index.ts.tera`
 - `partials/model_interface.ts.tera`
 - `partials/client_method.ts.tera`
 - `partials/tag_group.ts.tera`

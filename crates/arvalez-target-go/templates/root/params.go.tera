@@ -1,0 +1,29 @@
+{%- set input_types = ir | go_input_types -%}
+{%- set_global uses_io = false -%}
+{%- for op in operations -%}
+{%- set op = op | go_operation(types=input_types) -%}
+{%- for field in op.input_fields -%}
+{%- if field.type == "io.Reader" -%}{%- set_global uses_io = true -%}{%- endif -%}
+{%- endfor -%}
+{%- endfor -%}
+package {{ package_name }}
+{% if uses_io %}
+import "io"
+{% endif %}
+{%- for op in operations %}
+{%- set op = op | go_operation(types=input_types) %}
+
+// {{ op.params_type }} contains the inputs for {{ op.name | go_exported }}.
+// Required value fields are always sent, including their zero values.
+type {{ op.params_type }} struct {
+{%- for field in op.input_fields %}
+{%- if field.attributes.description %}
+	// {{ field.attributes.description | go_comment }}
+{%- endif %}
+	{{ field.field_name }} {{ field.type }}
+{%- endfor %}
+}
+{% set input_fields = op.input_fields -%}
+{% set input_type = op.params_type -%}
+{% include "partials/input_setters.go.tera" %}
+{%- endfor %}

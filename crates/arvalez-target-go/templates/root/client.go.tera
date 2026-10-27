@@ -1,9 +1,20 @@
+{%- set input_types = ir | go_input_types -%}
+{%- set_global uses_fmt = false -%}
+{%- for op in operations -%}
+{%- if op.params | length > 0 or op.request_body.required -%}
+{%- set_global uses_fmt = true -%}
+{%- endif -%}
+{%- endfor -%}
 package {{ package_name }}
 
 import (
+{%- if operations | length > 0 %}
 	"context"
-	"fmt"
 	"io"
+{%- endif %}
+{%- if uses_fmt %}
+	"fmt"
+{%- endif %}
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,6 +40,23 @@ type RequestOptions struct {
 	Cookies                  []*http.Cookie
 	OnError                  ErrorHandler
 	ValidateContentEncodings *bool
+}
+
+// RequestOption configures a single call. Options are applied once, in order.
+type RequestOption func(*RequestOptions)
+
+// WithRequestOptions replaces the per-call settings. The last invocation wins.
+func WithRequestOptions(options RequestOptions) RequestOption {
+    return func(target *RequestOptions) { *target = options }
+}
+
+func resolveRequestOptions(options []RequestOption) *RequestOptions {
+    if len(options) == 0 { return nil }
+    resolved := &RequestOptions{}
+    for _, option := range options {
+        if option != nil { option(resolved) }
+    }
+    return resolved
 }
 
 // Client is a client for the generated API.

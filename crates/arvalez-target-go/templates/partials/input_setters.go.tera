@@ -1,0 +1,38 @@
+{%- for field in input_fields %}
+{%- if field.optional or field.nullable %}
+// {{ field.with_method }} supplies {{ field.field_name }} and returns the receiver.
+func (p *{{ input_type }}) {{ field.with_method }}(value {{ field.set_type }}) *{{ input_type }} {
+{%- if field.nullable %}
+{%- if field.optional %}
+	p.{{ field.field_name }} = NewNullable(value)
+{%- else %}
+	p.{{ field.field_name }} = *NewNullable(value)
+{%- endif %}
+{%- elif field.pointer %}
+	p.{{ field.field_name }} = &value
+{%- else %}
+	p.{{ field.field_name }} = value
+{%- endif %}
+	return p
+}
+{% if field.optional %}
+// {{ field.without_method }} resets {{ field.field_name }} to its omitted state.
+func (p *{{ input_type }}) {{ field.without_method }}() *{{ input_type }} {
+	var zero {{ field.type }}
+	p.{{ field.field_name }} = zero
+	return p
+}
+{% endif %}
+{%- if field.nullable %}
+// {{ field.null_method }} supplies an explicit JSON null for {{ field.field_name }}.
+func (p *{{ input_type }}) {{ field.null_method }}() *{{ input_type }} {
+{%- if field.optional %}
+	p.{{ field.field_name }} = Null[{{ field.set_type }}]()
+{%- else %}
+	p.{{ field.field_name }} = *Null[{{ field.set_type }}]()
+{%- endif %}
+	return p
+}
+{% endif %}
+{%- endif %}
+{%- endfor %}

@@ -1,6 +1,7 @@
-{%- set op = op | go_operation -%}
+{%- set op = op | go_operation(types=input_types) -%}
 {%- set method_name = op.name | go_exported -%}
 {%- set raw_method_name = method_name ~ "Raw" -%}
+{%- set request_method_name = "execute" ~ method_name -%}
 {%- set return_shape = op | go_return_shape -%}
 {%- set path_params = op | go_path_params -%}
 {%- set query_params = op.params | filter(attribute="location", value="query") -%}
@@ -20,6 +21,18 @@
 {% endif -%}
 {%- endfor -%}
 func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go_args_sig }}) (*http.Response, error) {
+    {{ op.request_options_identifier }} := resolveRequestOptions({{ op.options_identifier }})
+    return {{ receiver_name }}.{{ request_method_name }}({{ op | go_forward_args }})
+}
+
+func ({{ receiver_name }} *{{ receiver_type }}) {{ request_method_name }}({{ op.ctx_identifier }} context.Context, {{ op.params_identifier }} *{{ op.params_type }}, {{ op.request_options_identifier }} *RequestOptions) (*http.Response, error) {
+    if {{ op.params_identifier }} == nil {
+{% if op.has_required_inputs %}
+        return nil, fmt.Errorf("{{ method_name }}: params are required")
+{% else %}
+        {{ op.params_identifier }} = &{{ op.params_type }}{}
+{% endif %}
+    }
 	{{ op.client_identifier }} := {{ client_expression }}
 {% if path_params | length > 0 %}
 	{{ op.path_identifier }} := fmt.Sprintf("{{ op.path | go_path_format }}", {% for p in path_params %}url.PathEscape(fmt.Sprint({{ p.identifier | default(value=p.name) }})){% if not loop.last %}, {% endif %}{% endfor %})
@@ -131,7 +144,7 @@ func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go
 	if {{ op.body_identifier }} != nil {
 {% if body.content_encoding %}
 		if {{ op.err_identifier }} := {{ op.client_identifier }}.validateStringEncoding({{ op.body_identifier }}, "{{ body.content_encoding }}", "request body", {{ op.request_options_identifier }}); {{ op.err_identifier }} != nil {
-			return nil, err
+			return nil, {{ op.err_identifier }}
 		}
 {% endif %}
 		{{ op.body_reader_identifier }}, {{ op.content_type_identifier }}, {{ op.err_identifier }} = {{ op.client_identifier }}.encodeMultipartBody({{ op.body_identifier }})
@@ -168,7 +181,8 @@ func ({{ receiver_name }} *{{ receiver_type }}) {{ raw_method_name }}({{ op | go
 {%- endfor -%}
 func ({{ receiver_name }} *{{ receiver_type }}) {{ method_name }}({{ op | go_args_sig }}) {{ return_shape.signature }} {
 	{{ op.client_identifier }} := {{ client_expression }}
-	{{ op.response_identifier }}, {{ op.err_identifier }} := {{ receiver_name }}.{{ raw_method_name }}({{ op | go_forward_args }})
+	{{ op.request_options_identifier }} := resolveRequestOptions({{ op.options_identifier }})
+	{{ op.response_identifier }}, {{ op.err_identifier }} := {{ receiver_name }}.{{ request_method_name }}({{ op | go_forward_args }})
 {% if return_shape.has_result %}
 	if {{ op.err_identifier }} != nil {
 {% if return_shape.returns_nil_on_error %}

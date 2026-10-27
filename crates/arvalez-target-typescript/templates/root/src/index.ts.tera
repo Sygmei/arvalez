@@ -1,3 +1,4 @@
 export { ApiClient } from "./client";
 export type { ApiClientOptions, ErrorHandler, RequestOptions } from "./client";
 export * from "./models";
+export type * from "./params";

@@ -1,3 +1,20 @@
 # {{ module_path }}
 
 Generated Go SDK package.
+
+Operations accept `(ctx, *OperationParams, ...RequestOption)`. Supply required
+fields in a struct literal and optional values with fluent `WithX(value)` setters.
+`WithoutX()` clears optional fields. Setters mutate and return their receiver.
+Nullable model fields also provide `WithXNull()` for explicit JSON null.
+
+Required fields are plain Go values, including their zero values. Passing nil
+params is allowed only when the operation has no required inputs. Optional whole
+JSON bodies distinguish omission from an explicitly supplied nil payload.
+Model collection fields retain their generated `omitempty` behavior.
+
+Transport settings are supplied with `WithRequestOptions(RequestOptions{...})`.
+Options run once per call in order; the last `WithRequestOptions` replaces previous
+per-call settings. Raw methods return the HTTP response without decoding it.
+
+This calling convention replaces positional operation inputs from SDKs generated
+by Arvalez 1. See `params.go` for operation input types and `models.go` for bodies.

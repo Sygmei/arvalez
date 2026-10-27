@@ -1,4 +1,4 @@
-{%- set operation = operation | ts_operation -%}
+{%- set operation = operation | ts_operation(types=input_types) -%}
 {%- set raw_method_name = operation.name | ts_raw_method -%}
 {%- set method_name = operation.name | ts_id -%}
 {%- set args_sig = operation | ts_args_sig -%}
@@ -22,7 +22,7 @@
 {%- endif %}
    * Returns the raw HTTP response without parsing it or throwing for HTTP errors.
 {%- for p in doc_params %}
-   * @param {{ p.name }} {{ p.description }}
+   * @param {{ operation.params_identifier }}.{{ p.name }} {{ p.description }}
 {%- endfor %}
 {%- if deprecated %}
    * @deprecated This operation is deprecated.
@@ -30,6 +30,9 @@
    */
 {%- endif %}
   async {{ raw_method_name }}({{ args_sig }}): Promise<Response> {
+{%- for field in operation.input_fields %}
+    const {{ field.identifier }} = {{ operation.params_identifier }}.{{ field.identifier }};
+{%- endfor %}
     const {{ operation.path_identifier }} = {{ operation.path | ts_path }};
 {%- for param in path_params %}{%- if param.attributes.content_encoding %}
     validateStringEncoding({{ param.identifier | default(value=param.name) }}, "{{ param.attributes.content_encoding }}", "path parameter `{{ param.name }}`", this.validateContentEncodings, {{ operation.request_options_identifier }});
@@ -138,7 +141,7 @@
    * {{ summary }}
 {%- endif %}
 {%- for p in doc_params %}
-   * @param {{ p.name }} {{ p.description }}
+   * @param {{ operation.params_identifier }}.{{ p.name }} {{ p.description }}
 {%- endfor %}
 {%- if deprecated %}
    * @deprecated This operation is deprecated.

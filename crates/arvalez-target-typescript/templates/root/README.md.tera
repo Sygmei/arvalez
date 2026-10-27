@@ -1,3 +1,17 @@
 # {{ package_name }}
 
 Generated TypeScript SDK package.
+
+Operations accept `(params, requestOptions?)`. Pass path, query, header, cookie,
+and body inputs as named properties of the exported `OperationParams` type.
+Transport settings such as headers, query overrides, and cancellation remain in
+`requestOptions`. Request bodies use the `body` property, subject to collision
+renaming in the generated interface.
+
+Required inputs are required properties. When every input is optional, params
+defaults to `{}`. Omit an optional property to leave it unspecified; explicit
+`false`, `0`, and `""` are preserved. JSON null retains its normal meaning.
+
+This calling convention replaces positional operation inputs from SDKs generated
+by Arvalez 1. Input types are in `src/params.ts` and exported from the package index.
+Raw and tag-grouped methods use the same input objects.

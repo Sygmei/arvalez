@@ -1,0 +1,15 @@
+{%- set input_types = ir | ts_input_types -%}
+import type { {{ ir | ts_client_imports }} } from "./models";
+{%- for operation in operations %}
+{%- set operation = operation | ts_operation(types=input_types) %}
+
+/** Inputs for {{ operation.name | ts_id }}. */
+export interface {{ operation.params_type }} {
+{%- for field in operation.input_fields %}
+{%- if field.attributes.description %}
+  /** {{ field.attributes.description | ts_doc_text }} */
+{%- endif %}
+  {{ field.identifier }}{% if not field.required %}?{% endif %}: {{ field.type }};
+{%- endfor %}
+}
+{% endfor %}

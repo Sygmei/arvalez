@@ -7,4 +7,7 @@ type {{ model.name | go_exported }} struct {
 	{{ field.name | go_exported }} {{ field | go_field_type }} {{ field | go_json_tag }}
 {%- endfor %}
 }
+{% set input_type = model.name | go_exported %}
+{% set input_fields = model | go_model_inputs %}
+{% include "partials/input_setters.go.tera" %}
 {% endif -%}

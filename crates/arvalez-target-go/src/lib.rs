@@ -9,7 +9,7 @@ mod sanitize;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use arvalez_target_core::{operation_with_locals, CommonConfig};
 pub use arvalez_target_core::GeneratedFile;
@@ -49,9 +49,11 @@ fn default_module_path() -> String {
 pub const TEMPLATES: &[(&str, &str)] = &[
     ("root/go.mod.tera",                         include_str!("../templates/root/go.mod.tera")),
     ("root/README.md.tera",                      include_str!("../templates/root/README.md.tera")),
+    ("root/params.go.tera",                      include_str!("../templates/root/params.go.tera")),
     ("root/models.go.tera",                      include_str!("../templates/root/models.go.tera")),
     ("root/client.go.tera",                      include_str!("../templates/root/client.go.tera")),
     ("root/utils.go.tera",                       include_str!("../templates/root/utils.go.tera")),
+    ("partials/input_setters.go.tera",           include_str!("../templates/partials/input_setters.go.tera")),
     ("partials/model_struct.go.tera",            include_str!("../templates/partials/model_struct.go.tera")),
     ("partials/service.go.tera",                 include_str!("../templates/partials/service.go.tera")),
     ("partials/client_method.go.tera",           include_str!("../templates/partials/client_method.go.tera")),
@@ -61,8 +63,14 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ──────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
-    tera.register_filter("go_operation", |v: &Value, _: &HashMap<String, Value>| {
+    tera.register_filter("go_input_types", |v: &Value, _: &HashMap<String, Value>| {
+        Ok(arvalez_target_core::operation_input_type_names(v, sanitize_exported_identifier,
+            &["Client", "ClientOptions", "RequestOptions", "RequestOption", "ErrorHandler", "APIError", "Nullable", "NewNullable", "Null", "WithRequestOptions", "SDKVersion"]))
+    });
+    tera.register_filter("go_operation", |v: &Value, args: &HashMap<String, Value>| {
         let mut operation = operation_with_locals(v, &[
+            ("params_identifier", "params"),
+            ("options_identifier", "opts"),
             ("ctx_identifier", "ctx"),
             ("client_identifier", "client"),
             ("path_identifier", "path"),
@@ -84,6 +92,9 @@ pub fn register_filters(tera: &mut Tera) {
         ], sanitize_identifier);
         // Go uses Sprintf slots; retain wire names to validate and order them.
         operation["path"] = v["path"].clone();
+        let names = args.get("types").ok_or_else(|| tera::Error::msg("go_operation requires types=ir | go_input_types"))?;
+        operation["params_type"] = names[v["id"].as_str().unwrap_or("")].clone();
+        add_operation_inputs(&mut operation);
         Ok(operation)
     });
     tera.register_filter("go_path_params", |v: &Value, _: &HashMap<String, Value>| {
@@ -93,6 +104,21 @@ pub fn register_filters(tera: &mut Tera) {
         let mut encoding = arvalez_target_core::array_parameter_encoding(v)?;
         encoding["string_items"] = Value::Bool(go_type_from_value(&v["type_ref"]["item"]) == "string");
         Ok(encoding)
+    });
+    tera.register_filter("go_model_inputs", |v: &Value, _: &HashMap<String, Value>| {
+        let mut fields = v["fields"].as_array().cloned().unwrap_or_default();
+        for field in &mut fields {
+            field["field_name"] = Value::String(sanitize_exported_identifier(field["name"].as_str().unwrap_or("")));
+            let ty = go_type_from_value(&field["type_ref"]);
+            let optional = field["optional"] == true;
+            let nullable = field["nullable"] == true;
+            let field_ty = go_field_type_from_value(&field["type_ref"], optional, nullable);
+            field["set_type"] = Value::String(ty.clone());
+            field["type"] = Value::String(field_ty.clone());
+            field["pointer"] = Value::Bool(field_ty == format!("*{ty}"));
+        }
+        allocate_setter_names(&mut fields);
+        Ok(Value::Array(fields))
     });
     // {{ "get_widget" | go_exported }} → "GetWidget"
     tera.register_filter("go_exported", |v: &Value, _: &HashMap<String, Value>| {
@@ -314,81 +340,80 @@ fn build_path_format(path: &str) -> String {
 }
 
 fn build_args_sig(op: &Value) -> String {
-    let ctx_name = op.get("ctx_identifier").and_then(Value::as_str).unwrap_or("ctx");
-    let body_name = op.get("body_identifier").and_then(Value::as_str).unwrap_or("body");
-    let request_options_name = op.get("request_options_identifier").and_then(Value::as_str).unwrap_or("requestOptions");
-    let mut args = vec![format!("{ctx_name} context.Context")];
-    let params = op.get("params").and_then(Value::as_array);
-    // Required params
-    if let Some(ps) = params {
-        for p in ps.iter().filter(|p| p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-            let name = p.get("identifier")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| p.get("name").and_then(Value::as_str).unwrap_or(""));
-            let t = go_required_type_from_value(p.get("type_ref").unwrap_or(&Value::Null));
-            args.push(format!("{name} {t}"));
-        }
-    }
-    // Required body
-    if let Some(body) = op.get("request_body").filter(|v| !v.is_null()) {
-        if body.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push(format!("{body_name} {}", go_body_type_from_value(body, true)));
-        }
-    }
-    // Optional params
-    if let Some(ps) = params {
-        for p in ps.iter().filter(|p| !p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-            let name = p.get("identifier")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| p.get("name").and_then(Value::as_str).unwrap_or(""));
-            let t = go_optional_type_from_value(p.get("type_ref").unwrap_or(&Value::Null));
-            args.push(format!("{name} {t}"));
-        }
-    }
-    // Optional body
-    if let Some(body) = op.get("request_body").filter(|v| !v.is_null()) {
-        if !body.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push(format!("{body_name} {}", go_body_type_from_value(body, false)));
-        }
-    }
-    args.push(format!("{request_options_name} *RequestOptions"));
-    args.join(", ")
+    format!("{} context.Context, {} *{}, {} ...RequestOption",
+        op["ctx_identifier"].as_str().unwrap_or("ctx"),
+        op["params_identifier"].as_str().unwrap_or("params"),
+        op["params_type"].as_str().unwrap_or("UnknownParams"),
+        op["options_identifier"].as_str().unwrap_or("opts"))
 }
 
 fn build_forward_args(op: &Value) -> String {
-    let ctx_name = op.get("ctx_identifier").and_then(Value::as_str).unwrap_or("ctx");
-    let body_name = op.get("body_identifier").and_then(Value::as_str).unwrap_or("body");
-    let request_options_name = op.get("request_options_identifier").and_then(Value::as_str).unwrap_or("requestOptions");
-    let mut args = vec![ctx_name.to_owned()];
-    let params = op.get("params").and_then(Value::as_array);
-    if let Some(ps) = params {
-        for p in ps.iter().filter(|p| p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-            args.push(p.get("identifier")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| p.get("name").and_then(Value::as_str).unwrap_or(""))
-                .to_owned());
+    format!("{}, {}, {}",
+        op["ctx_identifier"].as_str().unwrap_or("ctx"),
+        op["params_identifier"].as_str().unwrap_or("params"),
+        op["request_options_identifier"].as_str().unwrap_or("requestOptions"))
+}
+
+fn allocate_name(base: String, used: &mut HashSet<String>) -> String {
+    let mut name = base.clone();
+    let mut suffix = 2;
+    while !used.insert(name.clone()) {
+        name = format!("{base}{suffix}");
+        suffix += 1;
+    }
+    name
+}
+
+fn allocate_setter_names(fields: &mut [Value]) {
+    let mut used: HashSet<String> = fields.iter().filter_map(|f| f["field_name"].as_str().map(str::to_owned)).collect();
+    // Model methods and JSON hooks share the field/method namespace.
+    used.extend(["MarshalJSON".into(), "UnmarshalJSON".into()]);
+    for field in fields {
+        if field["optional"] != true && field["nullable"] != true { continue; }
+        let name = field["field_name"].as_str().unwrap_or("");
+        let with = allocate_name(format!("With{name}"), &mut used);
+        let without = allocate_name(format!("Without{name}"), &mut used);
+        let null = allocate_name(format!("With{name}Null"), &mut used);
+        field["with_method"] = Value::String(with);
+        field["without_method"] = Value::String(without);
+        field["null_method"] = Value::String(null);
+    }
+}
+
+fn add_operation_inputs(op: &mut Value) {
+    let params_name = op["params_identifier"].as_str().unwrap_or("params").to_owned();
+    let mut used = HashSet::new();
+    let mut fields = Vec::new();
+    if let Some(params) = op["params"].as_array_mut() {
+        for param in params {
+            let name = allocate_name(sanitize_exported_identifier(param["name"].as_str().unwrap_or("")), &mut used);
+            let ty = go_required_type_from_value(&param["type_ref"]);
+            let optional = param["required"] != true;
+            // Arrays already distinguish nil from empty; other optional
+            // parameter values use a pointer, matching the wire templates.
+            let pointer = optional && param["type_ref"]["kind"] != "array";
+            fields.push(json!({"field_name": name, "type": if pointer { format!("*{ty}") } else { ty.clone() },
+                "set_type": ty, "optional": optional, "nullable": false, "pointer": pointer,
+                "attributes": param["attributes"]}));
+            param["identifier"] = Value::String(format!("{params_name}.{name}"));
         }
     }
-    if let Some(body) = op.get("request_body").filter(|v| !v.is_null()) {
-        if body.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push(body_name.to_owned());
-        }
+    if let Some(body) = op.get("request_body").filter(|b| !b.is_null()) {
+        let name = allocate_name("Body".into(), &mut used);
+        let ty = go_body_type_from_value(body, true);
+        let optional = body["required"] != true;
+        let is_stream = ty == "io.Reader";
+        // A pointer to the entire JSON payload also preserves an explicitly
+        // supplied nil map/slice/interface (JSON null) versus no body.
+        let pointer = optional && !is_stream;
+        fields.push(json!({"field_name": name, "type": if pointer { format!("*{ty}") } else { ty.clone() },
+            "set_type": ty, "optional": optional, "nullable": false, "pointer": pointer,
+            "attributes": body["attributes"]}));
+        op["body_identifier"] = Value::String(format!("{params_name}.{name}"));
     }
-    if let Some(ps) = params {
-        for p in ps.iter().filter(|p| !p.get("required").and_then(Value::as_bool).unwrap_or(false)) {
-            args.push(p.get("identifier")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| p.get("name").and_then(Value::as_str).unwrap_or(""))
-                .to_owned());
-        }
-    }
-    if let Some(body) = op.get("request_body").filter(|v| !v.is_null()) {
-        if !body.get("required").and_then(Value::as_bool).unwrap_or(false) {
-            args.push(body_name.to_owned());
-        }
-    }
-    args.push(request_options_name.to_owned());
-    args.join(", ")
+    allocate_setter_names(&mut fields);
+    op["has_required_inputs"] = Value::Bool(fields.iter().any(|f| f["optional"] != true));
+    op["input_fields"] = Value::Array(fields);
 }
 
 fn build_return_shape(op: &Value) -> Value {

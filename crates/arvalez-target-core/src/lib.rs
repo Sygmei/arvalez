@@ -418,6 +418,52 @@ pub fn operation_with_locals(
     view
 }
 
+/// Allocate public operation input type names without colliding with model,
+/// inline enum, or runtime names. The map is computed once per root template.
+pub fn operation_input_type_names(
+    ir: &Value,
+    sanitize: fn(&str) -> String,
+    reserved: &[&str],
+) -> Value {
+    fn collect(value: &Value, sanitize: fn(&str) -> String, used: &mut HashSet<String>) {
+        match value {
+            Value::Object(object) => {
+                if matches!(object.get("kind").and_then(Value::as_str), Some("named" | "enum" | "object")) {
+                    if let Some(name) = object.get("name").and_then(Value::as_str) {
+                        used.insert(sanitize(name));
+                    }
+                }
+                for child in object.values() { collect(child, sanitize, used); }
+            }
+            Value::Array(values) => for child in values { collect(child, sanitize, used); },
+            _ => {}
+        }
+    }
+    let mut used: HashSet<String> = reserved.iter().map(|s| (*s).to_owned()).collect();
+    collect(ir, sanitize, &mut used);
+    let mut operations: Vec<&Value> = ir["operations"].as_array().into_iter().flatten().collect();
+    operations.sort_by_key(|op| (op["name"].as_str(), op["id"].as_str()));
+    // Reserve service names, even for ungrouped generation, so grouping does not
+    // change public input type names.
+    for op in &operations {
+        if let Some(tag) = op["attributes"]["tags"].as_array().and_then(|tags| tags.first()).and_then(Value::as_str) {
+            used.insert(format!("{}Service", sanitize(tag)));
+        }
+    }
+    let mut names = serde_json::Map::new();
+    for op in operations {
+        let base = format!("{}Params", sanitize(op["name"].as_str().unwrap_or("")));
+        let mut name = base.clone();
+        let mut suffix = 2;
+        while !used.insert(name.clone()) {
+            name = format!("{base}{suffix}");
+            suffix += 1;
+        }
+        names.insert(op["id"].as_str().unwrap_or("").to_owned(), Value::String(name));
+    }
+    Value::Object(names)
+}
+
 /// Legacy view that allocates parameter identifiers around a target's reserved
 /// locals. Kept for targets that have not yet switched their generated locals
 /// to operation-scoped names.

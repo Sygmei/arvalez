@@ -171,11 +171,11 @@ fn renders_basic_typescript_package() {
     );
     assert!(client.contents.contains("async _getWidgetRaw("));
     assert!(client.contents.contains("async getWidget("));
-    assert!(client.contents.contains("async _getWidgetRaw(widgetId: string, includeCount?: boolean, body?: Widget, requestOptions?: RequestOptions)"));
+    assert!(client.contents.contains("async _getWidgetRaw(params: GetWidgetParams, requestOptions?: RequestOptions)"));
     assert!(
         client
             .contents
-            .contains("@param widgetId Unique widget identifier.")
+            .contains("@param params.widgetId Unique widget identifier.")
     );
     assert!(client.contents.contains("@deprecated This operation is deprecated."));
     assert!(client.contents.contains("requestOptions?: RequestOptions"));
@@ -190,7 +190,7 @@ fn renders_basic_typescript_package() {
             .contents
             .contains("const query = mergeQuery(baseQuery, requestOptions);")
     );
-    assert!(client.contents.contains("body?: Widget"));
+    assert!(files.iter().find(|f| f.path.ends_with("params.ts")).unwrap().contents.contains("body?: Widget"));
     assert!(
         client
             .contents
@@ -220,7 +220,7 @@ fn avoids_collisions_between_parameters_and_generated_locals() {
         .find(|file| file.path.ends_with("client.ts"))
         .expect("client.ts");
 
-    assert!(client.contents.contains("query?: boolean"));
+    assert!(files.iter().find(|f| f.path.ends_with("params.ts")).unwrap().contents.contains("query?: boolean"));
     assert!(client.contents.contains("baseQuery.set(\"query\", String(query));"));
     assert!(client.contents.contains("const query_ = mergeQuery(baseQuery, requestOptions);"));
 }
