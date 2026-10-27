@@ -14,6 +14,7 @@ arvalez-ir.workspace = true
 arvalez-openapi.workspace = true
 arvalez-target-core.workspace = true
 arvalez-target-go.workspace = true
+arvalez-target-terraform.workspace = true
 arvalez-target-python.workspace = true
 arvalez-target-typescript.workspace = true
 arvalez-target-nushell.workspace = true

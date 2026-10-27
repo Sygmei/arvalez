@@ -221,7 +221,28 @@ pub fn register_filters(tera: &mut Tera) {
 
 // ── Type helpers ──────────────────────────────────────────────────────────────
 
+/// The exported identifier used by the standard Go SDK templates.
+pub fn model_identifier(name: &str) -> String {
+    sanitize_exported_identifier(name)
+}
+
+/// The standard SDK value type, optionally qualifying references to SDK models.
+pub fn model_value_type(type_ref: &arvalez_ir::TypeRef, package: &str) -> String {
+    let prefix = if package.is_empty() { String::new() } else { format!("{package}.") };
+    go_type_with_prefix(&serde_json::to_value(type_ref).expect("serializable type"), &prefix)
+}
+
+/// Whether an optional, non-nullable SDK field wraps its value in a pointer.
+pub fn model_field_is_pointer(field: &arvalez_ir::Field) -> bool {
+    let value = serde_json::to_value(&field.type_ref).expect("serializable type");
+    !field.nullable && go_field_type_from_value(&value, field.optional, false) == format!("*{}", go_type_from_value(&value))
+}
+
 fn go_type_from_value(v: &Value) -> String {
+    go_type_with_prefix(v, "")
+}
+
+fn go_type_with_prefix(v: &Value, prefix: &str) -> String {
     match v.get("kind").and_then(Value::as_str) {
         Some("primitive") => match v["name"].as_str().unwrap_or("") {
             "string"  => "string",
@@ -231,9 +252,9 @@ fn go_type_from_value(v: &Value) -> String {
             "binary"  => "[]byte",
             _         => "any",
         }.into(),
-        Some("named") => sanitize_exported_identifier(v["name"].as_str().unwrap_or("")),
-        Some("enum")  => go_type_from_value(&v["base"]),
-        Some("array") => format!("[]{}", go_type_from_value(&v["item"])),
+        Some("named") => format!("{prefix}{}", sanitize_exported_identifier(v["name"].as_str().unwrap_or(""))),
+        Some("enum")  => go_type_with_prefix(&v["base"], prefix),
+        Some("array") => format!("[]{}", go_type_with_prefix(&v["item"], prefix)),
         // Go has no heterogeneous tuple type; keep the JSON array shape.
         Some("tuple") => {
             if v
@@ -252,7 +273,7 @@ fn go_type_from_value(v: &Value) -> String {
                 "[]any".into()
             }
         }
-        Some("map")   => format!("map[string]{}", go_type_from_value(&v["value"])),
+        Some("map")   => format!("map[string]{}", go_type_with_prefix(&v["value"], prefix)),
         _             => "any".into(),
     }
 }

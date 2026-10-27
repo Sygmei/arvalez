@@ -949,16 +949,49 @@ impl OpenApiImporter {
             .as_deref()
             .filter(|reference| is_inline_local_schema_reference(reference))
             .map(ToOwned::to_owned);
-        if let Some(imported) = self.import_decorated_reference_type(schema, context)? {
+        if let Some(mut imported) = self.import_decorated_reference_type(schema, context)? {
+            imported.nullable |= self.schema_allows_null(schema, &mut Vec::new())?;
             return Ok(imported);
         }
         let schema = self.normalize_schema(schema, &context.describe())?;
-        self.import_schema_type_normalized(
+        let mut imported = self.import_schema_type_normalized(
             schema.as_ref(),
             context,
             skip_keyword_validation,
             local_reference.as_deref(),
-        )
+        )?;
+        imported.nullable |= self.schema_allows_null(schema.as_ref(), &mut Vec::new())?;
+        Ok(imported)
+    }
+
+    // References retain their named SDK type, but nullability belongs to the
+    // field using that type. Only follow schema composition, never properties.
+    fn schema_allows_null(&mut self, schema: &Schema, visiting: &mut Vec<String>) -> Result<bool> {
+        if let Some(reference) = &schema.reference {
+            // External references are retained as names by this importer; their
+            // schema (and therefore nullability) is not available locally.
+            if !reference.starts_with("#/") || visiting.contains(reference) {
+                return Ok(false);
+            }
+            visiting.push(reference.clone());
+            let resolved = self.resolve_schema_reference_for_all_of(reference, reference)?;
+            let result = self.schema_allows_null(&resolved, visiting);
+            visiting.pop();
+            return result;
+        }
+        let schema = self.normalize_schema(schema, "nullable schema")?;
+        if schema
+            .schema_type_variants()
+            .is_some_and(|types| types.iter().any(|ty| ty == "null"))
+        {
+            return Ok(true);
+        }
+        for variant in schema.any_of.iter().chain(schema.one_of.iter()).flatten() {
+            if self.schema_allows_null(variant, visiting)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn import_decorated_reference_type(
@@ -1410,6 +1443,11 @@ impl OpenApiImporter {
         context: &str,
     ) -> Result<Cow<'a, Schema>> {
         if schema.all_of.is_none() {
+            if schema.nullable {
+                let mut normalized = schema.clone();
+                normalized.normalize_nullable();
+                return Ok(Cow::Owned(normalized));
+            }
             return Ok(Cow::Borrowed(schema));
         }
 
@@ -1422,6 +1460,7 @@ impl OpenApiImporter {
             all_of: None,
             ..schema.clone()
         };
+        merged.normalize_nullable();
 
         for member in schema.all_of.clone().unwrap_or_default() {
             let resolved_member = self.resolve_schema_for_merge(&member, context)?;
@@ -1731,9 +1770,11 @@ impl OpenApiImporter {
     pub(crate) fn merge_schemas(
         &mut self,
         mut base: Schema,
-        overlay: Schema,
+        mut overlay: Schema,
         context: &str,
     ) -> Result<Schema> {
+        base.normalize_nullable();
+        overlay.normalize_nullable();
         let inferred_base_type = infer_schema_type_for_merge(&base);
         let inferred_overlay_type = infer_schema_type_for_merge(&overlay);
         let base_is_generic_object_placeholder = is_generic_object_placeholder(&base);

@@ -277,3 +277,75 @@ pre-commit install
 ```
 
 The `pre-commit` config keeps internal workspace dependency versions aligned with the workspace version and regenerates `Cargo.lock` whenever Cargo manifests are part of the commit.
+
+## Terraform adapters for Go SDKs
+
+The opt-in Terraform target generates a separate Go module importing an existing
+Arvalez Go SDK. Microservice authors maintain their normal OpenAPI contract and
+SDK; provider builders own the Terraform configuration and adapter module. The
+SDK has no Terraform dependency and requires no Terraform-specific annotations.
+
+```toml
+[target.terraform]
+module_path = "github.com/acme/orchestrator-tfmodels"
+sdk_module_path = "github.com/acme/orchestrator-client/v2"
+sdk_version = "v2.0.0"
+# sdk_import_path defaults to sdk_module_path; set it for an SDK subpackage.
+
+[target.terraform.package]
+name = "tfmodels"
+
+# Original IR model/field names identify these optional overrides.
+[target.terraform.models.Widget.fields.payload]
+representation = "json"
+
+[target.terraform.models.Widget.fields.displayName]
+name = "display_name"
+null_behavior = "explicit_null" # requires an optional nullable SDK field
+```
+
+```sh
+cargo run -p arvalez-cli -- generate-terraform --openapi openapi.json
+cargo run -p arvalez-cli -- dump-templates --target terraform
+```
+
+Output defaults to `generated/terraform`. The aggregate `generate` command only
+includes this target when `[target.terraform]` exists and is enabled;
+`--no-terraform` disables it. The dedicated command also accepts
+`--module-path`, `--sdk-module-path`, `--sdk-version`, `--sdk-import-path`,
+`--package-name`, `--output-directory`, and `--template-dir` overrides.
+Module paths and the pinned SDK version are required. Generate adapters from the
+same specification and Arvalez version as the standard Go SDK.
+
+For each object `Widget`, the module provides `WidgetModel`, `WidgetFromAPI`,
+`WidgetToAPI`, `WidgetAttributeTypes`, `WidgetResourceAttributes`, and
+`WidgetDataSourceAttributes`. Named enums have scalar counterparts and
+conversions. Schema helpers default every field to Computed; provider authors
+configure input roles and nested field options in Go through `SchemaOptions`.
+They can add their own validators and plan modifiers to the returned schemas.
+
+Adapters preserve zero values and handle nullable SDK wrappers explicitly.
+Unknown outbound values produce path-specific diagnostics. Optional API fields
+are omitted on Terraform null unless an optional nullable field opts into
+explicit JSON null. API omission and API null both become Terraform null, so
+conversion does not promise lossless preservation of that distinction.
+
+Unions, free-form JSON, tuples, and recursive edges need explicit JSON-string
+fallback configuration. Unsupported structures, invalid overrides, and naming
+collisions are rejected before Terraform files are written. Arrays map to lists;
+binary data uses base64 strings. Generation does not install dependencies.
+
+Generated modules require Go 1.24+ and pin Plugin Framework v1.18.0. Run
+`go mod tidy` after generation. Use a parent `go.work` to develop alongside an
+unpublished SDK without putting local replacements in the generated module.
+The generated README contains schema, state, and request conversion examples.
+Provider authors retain ownership of CRUD, identity/imports, replacement rules,
+and reconciliation when API responses normalize configured values.
+
+Nullability follows the shared IR and the SDK representation. Both OpenAPI 3.0
+`type: string` with `nullable: true` and OpenAPI 3.1 `type: ["string", "null"]`
+produce nullable SDK fields and Terraform conversions. In OpenAPI 3.0, declare
+`nullable` alongside an explicit `type`; for a `$ref`, put it on the referenced
+schema. Required nullable fields use `Nullable[T]`; optional nullable fields use
+`*Nullable[T]` to distinguish omission from explicit null. Regenerate both the
+SDK and adapters when adopting nullable declarations.

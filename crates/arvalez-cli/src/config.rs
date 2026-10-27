@@ -185,6 +185,7 @@ pub(crate) struct NushellTargetConfigExt {
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct TargetSection {
+    pub(crate) terraform: Option<TerraformTargetConfig>,
     #[serde(default)]
     pub(crate) go: GoTargetConfig,
     #[serde(default)]
@@ -463,4 +464,75 @@ pub(crate) fn resolve_nushell_config(
         group_by_tag: effective_group_by_tag,
     };
     (template_dir, common_cfg, target_cfg)
+}
+
+// Terraform is opt-in: absence of this section must not change existing builds.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct TerraformTargetConfig {
+    #[serde(flatten)]
+    pub(crate) base: TargetConfig,
+    pub(crate) module_path: Option<String>,
+    pub(crate) sdk_module_path: Option<String>,
+    pub(crate) sdk_version: Option<String>,
+    pub(crate) sdk_import_path: Option<String>,
+    #[serde(default)]
+    pub(crate) models: std::collections::BTreeMap<String, arvalez_target_terraform::ModelOptions>,
+}
+
+#[derive(Default)]
+pub(crate) struct TerraformOverrides {
+    pub(crate) module_path: Option<String>,
+    pub(crate) sdk_module_path: Option<String>,
+    pub(crate) sdk_version: Option<String>,
+    pub(crate) sdk_import_path: Option<String>,
+    pub(crate) package_name: Option<String>,
+    pub(crate) template_dir: Option<PathBuf>,
+    pub(crate) output_version: Option<String>,
+}
+
+pub(crate) fn resolve_terraform_config(
+    config: &AppConfig,
+    overrides: TerraformOverrides,
+) -> (
+    CommonConfig,
+    arvalez_target_terraform::TargetConfig,
+    Option<PathBuf>,
+) {
+    let default_target = TerraformTargetConfig::default();
+    let target = config.target.terraform.as_ref().unwrap_or(&default_target);
+    let common = CommonConfig {
+        package: PackageConfig {
+            name: target.base.resolve_package_name(
+                overrides.package_name,
+                &config.common.package,
+                "tfmodels",
+            ),
+            version: target
+                .base
+                .resolve_version(overrides.output_version, &config.common.package),
+            description: target.base.resolve_description(&config.common.package),
+        },
+    };
+    let generator = arvalez_target_terraform::TargetConfig {
+        module_path: overrides
+            .module_path
+            .or_else(|| target.module_path.clone())
+            .unwrap_or_default(),
+        sdk_module_path: overrides
+            .sdk_module_path
+            .or_else(|| target.sdk_module_path.clone())
+            .unwrap_or_default(),
+        sdk_version: overrides
+            .sdk_version
+            .or_else(|| target.sdk_version.clone())
+            .unwrap_or_default(),
+        sdk_import_path: overrides
+            .sdk_import_path
+            .or_else(|| target.sdk_import_path.clone()),
+        models: target.models.clone(),
+    };
+    let templates = target
+        .base
+        .resolve_template_dir(overrides.template_dir, config.common.template_dir.clone());
+    (common, generator, templates)
 }

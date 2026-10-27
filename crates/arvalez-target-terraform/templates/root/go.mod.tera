@@ -1,0 +1,8 @@
+module {{ module_path }}
+
+go 1.24.0
+
+require (
+    {{ sdk_module_path }} {{ sdk_version }}
+    github.com/hashicorp/terraform-plugin-framework v1.18.0
+)

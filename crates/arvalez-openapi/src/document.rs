@@ -363,6 +363,8 @@ pub(crate) struct Schema {
     #[serde(default)]
     pub(crate) schema_type: Option<SchemaTypeDecl>,
     #[serde(default)]
+    pub(crate) nullable: bool,
+    #[serde(default)]
     pub(crate) title: Option<String>,
     #[serde(default)]
     pub(crate) format: Option<String>,
@@ -522,6 +524,20 @@ impl SchemaTypeDecl {
 }
 
 impl Schema {
+    /// Translate the OpenAPI 3.0 spelling before composition, so a nullable
+    /// annotation without its own explicit type cannot affect another member.
+    pub(crate) fn normalize_nullable(&mut self) {
+        if std::mem::take(&mut self.nullable) && self.reference.is_none() {
+            if let Some(types) = self.schema_type_variants() {
+                if !types.is_empty() && !types.iter().any(|value| value == "null") {
+                    let mut types = types.to_vec();
+                    types.push("null".into());
+                    self.schema_type = Some(SchemaTypeDecl::Multiple(types));
+                }
+            }
+        }
+    }
+
     pub(crate) fn schema_type_variants(&self) -> Option<&[String]> {
         self.schema_type.as_ref().map(SchemaTypeDecl::as_slice)
     }

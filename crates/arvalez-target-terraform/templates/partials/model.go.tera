@@ -1,0 +1,9 @@
+{% if model.object %}
+type {{ model.name }}Model struct {
+{% for field in model.fields %}
+    {{ field.name }} {{ field.tf_type }} `tfsdk:"{{ field.attribute }}"`
+{% endfor %}
+}
+{% else %}
+type {{ model.name }}Model = {{ model.tf_type }}
+{% endif %}

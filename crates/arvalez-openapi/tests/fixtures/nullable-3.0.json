@@ -1,0 +1,33 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Nullable models", "version": "1"},
+  "paths": {},
+  "components": {
+    "schemas": {
+      "NullableInput": {
+        "type": "object",
+        "required": ["requiredValue", "plainValue"],
+        "properties": {
+          "requiredValue": {"type": "string", "nullable": true},
+          "optionalValue": {"type": "string", "nullable": true},
+          "explicitValue": {"type": "integer", "nullable": true},
+          "plainValue": {"type": "boolean"},
+          "disabledValue": {"type": "string", "nullable": false},
+          "numbers": {"type": "array", "items": {"type": "integer"}, "nullable": true},
+          "labels": {"type": "object", "additionalProperties": {"type": "string"}, "nullable": true},
+          "child": {"$ref": "#/components/schemas/NullableChild"},
+          "state": {"$ref": "#/components/schemas/NullableState"},
+          "inline": {"type": "object", "nullable": true, "properties": {"name": {"type": "string"}}},
+          "decorated": {"allOf": [{"$ref": "#/components/schemas/NullableChild"}], "description": "Referenced nullable object"}
+        }
+      },
+      "NullableChild": {
+        "type": "object",
+        "nullable": true,
+        "required": ["action"],
+        "properties": {"action": {"type": "string"}}
+      },
+      "NullableState": {"type": "string", "nullable": true, "enum": ["ready", "done"]}
+    }
+  }
+}

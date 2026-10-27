@@ -1,0 +1,24 @@
+name: Terraform target
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      ARVALEZ_REQUIRE_GO: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.0"
+          cache: false
+      - name: Generate and test SDK and Terraform adapters
+        run: cargo test --locked -p arvalez-target-terraform
+      - name: Test CLI integration
+        run: cargo test --locked -p arvalez-cli --test terraform_generation
+      - name: Check existing Go generation
+        run: cargo test --locked -p arvalez-target-go

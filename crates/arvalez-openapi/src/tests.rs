@@ -14,6 +14,107 @@ fn json_test_source(spec: &str) -> OpenApiSource {
 }
 
 #[test]
+fn imports_openapi_30_nullable_like_31_null_types() {
+    let spec = include_str!("../tests/fixtures/nullable-3.0.json");
+    let import = |spec: &str| {
+        OpenApiImporter::new(
+            serde_json::from_str(spec).unwrap(),
+            json_test_source(spec),
+            LoadOpenApiOptions::default(),
+        )
+        .build_ir()
+        .unwrap()
+        .ir
+    };
+    let ir = import(&serde_json::from_str::<Value>(spec).unwrap().to_string());
+    let input = ir
+        .models
+        .iter()
+        .find(|model| model.name == "NullableInput")
+        .unwrap();
+    for field in &input.fields {
+        assert_eq!(
+            field.nullable,
+            !matches!(field.name.as_str(), "plainValue" | "disabledValue"),
+            "{}",
+            field.name
+        );
+        assert_eq!(
+            field.optional,
+            !matches!(field.name.as_str(), "requiredValue" | "plainValue"),
+            "{}",
+            field.name
+        );
+    }
+    fn upgrade(value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                if object.remove("nullable") == Some(json!(true)) {
+                    let ty = object.remove("type").unwrap();
+                    object.insert("type".into(), json!([ty, "null"]));
+                }
+                for value in object.values_mut() {
+                    upgrade(value);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    upgrade(value);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut upgraded: Value = serde_json::from_str(spec).unwrap();
+    upgraded["openapi"] = json!("3.1.0");
+    upgrade(&mut upgraded);
+    let upgraded_ir = import(&upgraded.to_string());
+    assert_eq!(
+        serde_json::to_value(&ir.models).unwrap(),
+        serde_json::to_value(&upgraded_ir.models).unwrap()
+    );
+}
+
+#[test]
+fn openapi_nullable_requires_own_type_before_composition() {
+    let spec = r##"{
+      "openapi":"3.0.3", "paths":{}, "components":{"schemas":{
+        "Plain":{"type":"string"},
+        "Example":{"type":"object","properties":{
+          "annotation":{"nullable":true,"allOf":[{"type":"string"}]},
+          "member":{"allOf":[{"type":"string"},{"nullable":true}]},
+          "typed":{"type":"string","nullable":true,"allOf":[{"type":"string"}]},
+          "typedMember":{"allOf":[{"type":"string","nullable":true},{"maxLength":20}]},
+          "referenceSibling":{"$ref":"#/components/schemas/Plain","nullable":true},
+          "referenceWithType":{"$ref":"#/components/schemas/Plain","type":"string","nullable":true},
+          "disabled":{"type":"string","nullable":false}
+        }}
+      }}
+    }"##;
+    let ir = OpenApiImporter::new(
+        serde_json::from_str(spec).unwrap(),
+        json_test_source(spec),
+        LoadOpenApiOptions::default(),
+    )
+    .build_ir()
+    .unwrap()
+    .ir;
+    let model = ir
+        .models
+        .iter()
+        .find(|model| model.name == "Example")
+        .unwrap();
+    for field in &model.fields {
+        assert_eq!(
+            field.nullable,
+            matches!(field.name.as_str(), "typed" | "typedMember"),
+            "{}",
+            field.name
+        );
+    }
+}
+
+#[test]
     fn imports_minimal_openapi_document() {
         let spec = r##"
 {

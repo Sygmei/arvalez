@@ -396,7 +396,6 @@ pub(crate) fn is_known_ignored_schema_keyword(keyword: &str) -> bool {
             | "uniqueItems"
             | "minProperties"
             | "maxProperties"
-            | "nullable"
             | "$schema"
             | "$id"
             | "$comment"

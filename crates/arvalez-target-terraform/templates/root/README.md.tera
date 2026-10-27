@@ -1,0 +1,101 @@
+# {{ package_name }}
+
+Generated Terraform Plugin Framework models for `{{ sdk_import }}` at
+`{{ sdk_version }}`. Requires Go 1.24 or later. Run `go mod tidy` to resolve
+module dependencies after generation.
+
+The SDK remains independent of Terraform. Provider builders own this module,
+its generation configuration, and the resource/data-source implementations.
+Use the same OpenAPI/IR and Arvalez version as the SDK, with the standard Go
+model templates. No Terraform annotations are required in the service's API.
+
+## Usage
+
+For an SDK model `Widget`, the generated functions are `WidgetFromAPI`,
+`WidgetToAPI`, `WidgetAttributeTypes`, `WidgetResourceAttributes`, and
+`WidgetDataSourceAttributes`. Named enums have scalar models and conversions.
+
+```go
+// In a provider Schema method:
+attrs, diags := tfmodels.WidgetResourceAttributes(ctx, tfmodels.SchemaOptions{
+    Fields: map[string]tfmodels.FieldOptions{
+        "name": {Role: tfmodels.Required},
+    },
+})
+resp.Diagnostics.Append(diags...)
+resp.Schema = schema.Schema{Attributes: attrs}
+
+// In Read, after your SDK call:
+model, diags := tfmodels.WidgetFromAPI(ctx, apiResponse)
+resp.Diagnostics.Append(diags...)
+if resp.Diagnostics.HasError() { return }
+// Reconcile configured attributes before writing state if the API normalizes
+// them. A nil API response is not an instruction to remove a resource.
+if model != nil { resp.Diagnostics.Append(resp.State.Set(ctx, model)...) }
+
+// In Create/Update, after req.Plan.Get into the appropriate request model:
+request, diags := tfmodels.NewWidgetToAPI(ctx, &plan)
+resp.Diagnostics.Append(diags...)
+if resp.Diagnostics.HasError() { return }
+// Pass request to your SDK operation's input struct.
+```
+
+These snippets illustrate model names; use the names generated from your API.
+Nested `FieldOptions.Fields` apply to an object, or every object in a list/map.
+Both schema helpers default every attribute to Computed. Resource options also
+support OptionalComputed. Set `Sensitive` with a bool pointer. Helpers return
+fresh maps, allowing provider-specific validators and plan modifiers to be
+added. Field names and types must continue to match the models.
+
+Conversions process all model fields independently of schema roles. Unknown
+values anywhere in an outbound request produce diagnostics, never empty values.
+Use SDK request models for writes. `FromAPI` performs structural conversion,
+not lifecycle or plan/state reconciliation. Provider code owns CRUD, IDs,
+imports, replacement rules, timeouts, API normalization, and error handling.
+
+## Null and complex values
+
+API omission and explicit JSON null both become Terraform null. Optional SDK
+fields are omitted on reverse conversion by default. For an optional nullable
+field, `null_behavior = "explicit_null"` sends JSON null instead; required
+nullable fields always use the SDK's explicit-null representation. Required
+non-nullable fields reject Terraform null. Nil and empty collections remain
+distinct in memory, subject to the SDK's JSON omission rules.
+
+Unions, free-form JSON, tuples, and recursive edges require explicit field
+configuration in the generator:
+
+```toml
+[target.terraform.models.Widget.fields.payload]
+representation = "json"
+
+[target.terraform.models.Widget.fields.displayName]
+name = "display_name"
+null_behavior = "explicit_null" # only for optional nullable SDK fields
+```
+
+JSON strings must contain one value representable by the SDK type without data
+loss. Unknown object fields, truncated fixed arrays, and trailing JSON are
+rejected. Use Terraform null, not the JSON string `"null"`, for absent values.
+JSON numbers retain precision through `json.Number` when the SDK uses `any`.
+Default attribute names are snake_case; reserved Terraform names use `_value`.
+Generation reports collisions so you can specify explicit `name` overrides.
+
+## Local SDK development
+
+Keep the generated `go.mod` portable. In a parent development directory, use
+`go work init ./sdk ./tfmodels ./provider` (adjust paths) to develop the SDK,
+adapters, and provider together without publishing. Do not commit a
+machine-specific replacement into this generated module.
+
+Regenerate adapters when the SDK model contract changes. Generation does not
+install dependencies or change the SDK. Tera templates can be dumped and
+overridden through Arvalez's Terraform template commands.
+
+Nullability follows the shared IR and the SDK representation. Both OpenAPI 3.0
+`type: string` with `nullable: true` and OpenAPI 3.1 `type: ["string", "null"]`
+produce nullable SDK fields and Terraform conversions. In OpenAPI 3.0, declare
+`nullable` alongside an explicit `type`; for a `$ref`, put it on the referenced
+schema. Required nullable fields use `Nullable[T]`; optional nullable fields use
+`*Nullable[T]` to distinguish omission from explicit null. Regenerate both the
+SDK and adapters when adopting nullable declarations.

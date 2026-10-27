@@ -19,6 +19,7 @@ INTERNAL_CRATES = [
     "arvalez-target-nushell",
     "arvalez-target-pythonmini",
     "arvalez-target-go",
+    "arvalez-target-terraform",
     "arvalez-target-python",
     "arvalez-target-typescript",
 ]

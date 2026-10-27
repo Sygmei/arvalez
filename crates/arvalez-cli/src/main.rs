@@ -41,6 +41,7 @@ use generate::{
 enum DumpTarget {
     PythonMini,
     Typescript,
+    Terraform,
 }
 
 impl DumpTarget {
@@ -48,6 +49,7 @@ impl DumpTarget {
         match self {
             DumpTarget::PythonMini => "python-mini",
             DumpTarget::Typescript => "typescript",
+            DumpTarget::Terraform => "terraform",
         }
     }
 }
@@ -92,6 +94,36 @@ enum Command {
         no_typescript: bool,
         #[arg(long)]
         no_nushell: bool,
+        #[arg(long)]
+        no_terraform: bool,
+        #[arg(long)]
+        output_version: Option<String>,
+        #[arg(long)]
+        timings: bool,
+    },
+    GenerateTerraform {
+        #[arg(long)]
+        ir: Option<PathBuf>,
+        #[arg(long)]
+        openapi: Option<PathBuf>,
+        #[arg(long, default_value = "arvalez.toml")]
+        config: PathBuf,
+        #[arg(long = "output-directory")]
+        output_directory: Option<PathBuf>,
+        #[arg(long)]
+        ignore_unhandled: bool,
+        #[arg(long)]
+        module_path: Option<String>,
+        #[arg(long)]
+        sdk_module_path: Option<String>,
+        #[arg(long)]
+        sdk_version: Option<String>,
+        #[arg(long)]
+        sdk_import_path: Option<String>,
+        #[arg(long)]
+        package_name: Option<String>,
+        #[arg(long)]
+        template_dir: Option<PathBuf>,
         #[arg(long)]
         output_version: Option<String>,
         #[arg(long)]
@@ -329,6 +361,7 @@ fn main() -> Result<()> {
             no_python,
             no_typescript,
             no_nushell,
+            no_terraform,
             output_version,
             timings,
         } => {
@@ -352,7 +385,32 @@ fn main() -> Result<()> {
                     config_file.target.nushell.base.disabled,
                 );
 
-            if !go_enabled && !python_enabled && !typescript_enabled && !nushell_enabled {
+            let terraform_enabled = !no_terraform
+                && config_file.target.terraform.as_ref().is_some_and(|target| {
+                    is_target_enabled(&config_file.common, target.base.disabled)
+                });
+            // Validate/render the opt-in target before writing any aggregate output.
+            let terraform_files = if terraform_enabled {
+                let (common, target, templates) = config::resolve_terraform_config(
+                    &config_file,
+                    config::TerraformOverrides {
+                        output_version: output_version.clone(),
+                        ..Default::default()
+                    },
+                );
+                Some(timing_collector.measure_result("terraform_generate", || {
+                    arvalez_target_terraform::generate(&ir, templates.as_deref(), &common, &target)
+                })?)
+            } else {
+                None
+            };
+
+            if !go_enabled
+                && !python_enabled
+                && !typescript_enabled
+                && !nushell_enabled
+                && !terraform_enabled
+            {
                 bail!("no generation targets enabled");
             }
 
@@ -504,6 +562,62 @@ fn main() -> Result<()> {
                     .measure_result("nushell_write", || write_nushell_package(&output, &files))?;
                 eprintln!("generated {} files into {}", files.len(), output.display());
             }
+            if let Some(files) = terraform_files {
+                let output = config_file.target.terraform.as_ref()
+                    .and_then(|t| t.base.output.directory.clone())
+                    .unwrap_or_else(|| output_root.join("terraform"));
+                timing_collector.measure_result("terraform_write", || {
+                    arvalez_target_terraform::write_package(&output, &files)
+                })?;
+                eprintln!("generated {} files into {}", files.len(), output.display());
+            }
+            timing_collector.print();
+        }
+        Command::GenerateTerraform {
+            ir,
+            openapi,
+            config,
+            output_directory,
+            ignore_unhandled,
+            module_path,
+            sdk_module_path,
+            sdk_version,
+            sdk_import_path,
+            package_name,
+            template_dir,
+            output_version,
+            timings,
+        } => {
+            let mut timing_collector = TimingCollector::new(timings);
+            let (ir, warnings) =
+                load_input_ir(ir, openapi, ignore_unhandled, &mut timing_collector)?;
+            print_openapi_warnings(&warnings);
+            let config_file =
+                timing_collector.measure_result("config_load", || load_optional_config(&config))?;
+            let default_target = config::TerraformTargetConfig::default();
+            let target = config_file.target.terraform.as_ref().unwrap_or(&default_target);
+            let output = resolve_target_output_directory(
+                &config_file, &target.base, output_directory, "terraform",
+            );
+            let (common, generator, templates) = config::resolve_terraform_config(
+                &config_file,
+                config::TerraformOverrides {
+                    module_path,
+                    sdk_module_path,
+                    sdk_version,
+                    sdk_import_path,
+                    package_name,
+                    template_dir,
+                    output_version,
+                },
+            );
+            let files = timing_collector.measure_result("terraform_generate", || {
+                arvalez_target_terraform::generate(&ir, templates.as_deref(), &common, &generator)
+            })?;
+            timing_collector.measure_result("terraform_write", || {
+                arvalez_target_terraform::write_package(&output, &files)
+            })?;
+            eprintln!("generated {} files into {}", files.len(), output.display());
             timing_collector.print();
         }
         Command::GenerateGo {
@@ -761,6 +875,7 @@ fn main() -> Result<()> {
             match target {
                 DumpTarget::PythonMini => dump_pythonmini_templates(&dir)?,
                 DumpTarget::Typescript => dump_typescript_templates(&dir)?,
+                DumpTarget::Terraform => arvalez_target_terraform::dump_templates(&dir)?,
             }
             eprintln!("dumped templates into {}", dir.display());
         }
@@ -773,6 +888,7 @@ fn main() -> Result<()> {
             match target {
                 DumpTarget::PythonMini => dump_pythonmini_erasers(&dir)?,
                 DumpTarget::Typescript => dump_typescript_erasers(&dir)?,
+                DumpTarget::Terraform => arvalez_target_terraform::dump_erasers(&dir)?,
             }
             eprintln!("dumped erasers into {}", dir.display());
         }

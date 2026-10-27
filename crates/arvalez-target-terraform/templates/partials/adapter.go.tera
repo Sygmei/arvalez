@@ -1,0 +1,86 @@
+{% if model.object %}
+func codec{{ model.name }}() codec[sdk.{{ model.name }}] {
+    fields := map[string]fieldSpec{
+{% for field in model.fields %}
+        "{{ field.attribute }}": {node: {{ field.codec }}.node, description: {{ field.description | safe }}},
+{% endfor %}
+    }
+    typ := objectType(fields)
+    return codec[sdk.{{ model.name }}]{
+        node: &schemaNode{typ: typ, fields: fields},
+        from: func(ctx context.Context, value sdk.{{ model.name }}, p path.Path) (attr.Value, diag.Diagnostics) {
+            values := make(map[string]attr.Value, len(fields))
+            var diagnostics diag.Diagnostics
+{% for field in model.fields %}
+            {
+                v, d := {{ field.codec }}.from(ctx, value.{{ field.name }}, p.AtName("{{ field.attribute }}"))
+                diagnostics.Append(d...)
+                values["{{ field.attribute }}"] = v
+            }
+{% endfor %}
+            if diagnostics.HasError() { return nil, diagnostics }
+            result, d := types.ObjectValue(typ.AttrTypes, values)
+            diagnostics.Append(d...)
+            return result, diagnostics
+        },
+        to: func(ctx context.Context, value attr.Value, p path.Path) (sdk.{{ model.name }}, diag.Diagnostics) {
+            var result sdk.{{ model.name }}
+            if d := requireKnown(value, typ, p, false); d.HasError() { return result, d }
+{% if model.fields | length > 0 %}
+            values := value.(types.Object).Attributes()
+{% endif %}
+            var diagnostics diag.Diagnostics
+{% for field in model.fields %}
+            {
+                v, d := {{ field.codec }}.to(ctx, values["{{ field.attribute }}"], p.AtName("{{ field.attribute }}"))
+                diagnostics.Append(d...)
+                result.{{ field.name }} = v
+            }
+{% endfor %}
+            if diagnostics.HasError() { return sdk.{{ model.name }}{}, diagnostics }
+            return result, diagnostics
+        },
+    }
+}
+
+func {{ model.name }}AttributeTypes() map[string]attr.Type {
+    return codec{{ model.name }}().node.typ.(types.ObjectType).AttrTypes
+}
+{% else %}
+func codec{{ model.name }}() codec[sdk.{{ model.name }}] {
+    return mappedCodec({{ model.base_codec }},
+        func(value sdk.{{ model.name }}) {{ model.base }} { return {{ model.base }}(value) },
+        func(value {{ model.base }}) sdk.{{ model.name }} { return sdk.{{ model.name }}(value) })
+}
+{% endif %}
+
+// {{ model.name }}FromAPI converts SDK values without interpreting resource schema roles.
+func {{ model.name }}FromAPI(ctx context.Context, value *sdk.{{ model.name }}) (*{{ model.name }}Model, diag.Diagnostics) {
+    if value == nil { return nil, nil }
+    converted, diagnostics := codec{{ model.name }}().from(ctx, *value, path.Empty())
+    if diagnostics.HasError() { return nil, diagnostics }
+{% if model.object %}
+    var result {{ model.name }}Model
+    diagnostics.Append(converted.(types.Object).As(ctx, &result, basetypes.ObjectAsOptions{})...)
+{% else %}
+    result := converted.({{ model.tf_type }})
+{% endif %}
+    if diagnostics.HasError() { return nil, diagnostics }
+    return &result, diagnostics
+}
+
+// {{ model.name }}ToAPI requires known, representable values. Schema roles do not omit fields.
+func {{ model.name }}ToAPI(ctx context.Context, value *{{ model.name }}Model) (*sdk.{{ model.name }}, diag.Diagnostics) {
+    if value == nil { return nil, nil }
+{% if model.object %}
+    converted, diagnostics := types.ObjectValueFrom(ctx, {{ model.name }}AttributeTypes(), value)
+    if diagnostics.HasError() { return nil, diagnostics }
+{% else %}
+    converted := *value
+    var diagnostics diag.Diagnostics
+{% endif %}
+    result, d := codec{{ model.name }}().to(ctx, converted, path.Empty())
+    diagnostics.Append(d...)
+    if diagnostics.HasError() { return nil, diagnostics }
+    return &result, diagnostics
+}

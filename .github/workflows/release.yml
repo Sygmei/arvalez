@@ -221,6 +221,7 @@ jobs:
             arvalez-openapi
             arvalez-target-core
             arvalez-target-go
+            arvalez-target-terraform
             arvalez-target-python
             arvalez-target-typescript
             arvalez-target-nushell
