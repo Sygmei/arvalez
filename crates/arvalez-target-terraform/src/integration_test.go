@@ -300,7 +300,7 @@ func TestFrameworkStateAndSchemas(t *testing.T) {
 	}
 }
 
-func TestExplicitJSONAndAPIErrorPaths(t *testing.T) {
+func TestAutomaticJSONAndAPIErrorPaths(t *testing.T) {
 	input := sample()
 	input.Next = &sdk.Widget{Action: "next", Tuple: [2]any{"x", json.Number("3")}}
 	m, d := WidgetFromAPI(ctx, input)
@@ -328,5 +328,64 @@ func TestExplicitJSONAndAPIErrorPaths(t *testing.T) {
 	status := types.StringUnknown()
 	if output, d := StatusToAPI(ctx, &status); output != nil || !d.HasError() {
 		t.Fatal("unknown enum accepted")
+	}
+}
+
+func TestAutomaticJSONForCyclesAndCollections(t *testing.T) {
+	input := &sdk.Envelope{
+		Node:    &sdk.CycleA{Label: "root", B: &sdk.CycleB{A: &sdk.CycleA{Label: "back"}}, Children: []sdk.CycleA{}},
+		Choices: []any{"text", json.Number("9007199254740993")},
+		Extras:  map[string]any{"large": json.Number("9007199254740993")},
+		Choice:  json.Number("9007199254740993"),
+	}
+	model, d := EnvelopeFromAPI(ctx, input)
+	check(t, d)
+	if model.Node.IsNull() || model.Choices.IsNull() || !strings.Contains(model.Choice.ValueString(), "9007199254740993") {
+		t.Fatal("automatic representation lost a value")
+	}
+	output, d := EnvelopeToAPI(ctx, model)
+	check(t, d)
+	if !reflect.DeepEqual(input, output) {
+		t.Fatalf("automatic JSON round trip: %#v != %#v", input, output)
+	}
+	for name, typ := range CycleAAttributeTypes() {
+		if !typ.Equal(types.StringType) {
+			t.Fatalf("expected scalar or JSON for CycleA.%s: %v", name, typ)
+		}
+	}
+	if _, ok := EnvelopeAttributeTypes()["node"].(types.ObjectType); !ok {
+		t.Fatal("nonrecursive parent lost its typed object")
+	}
+	attrs, d := EnvelopeResourceAttributes(ctx, SchemaOptions{})
+	check(t, d)
+	schema := resourceschema.Schema{Attributes: attrs}
+	check(t, schema.ValidateImplementation(ctx))
+	state := tfsdk.State{Schema: schema}
+	check(t, state.Set(ctx, model))
+	var restored EnvelopeModel
+	check(t, state.Get(ctx, &restored))
+	output, d = EnvelopeToAPI(ctx, &restored)
+	check(t, d)
+	if !reflect.DeepEqual(input, output) {
+		t.Fatal("automatic JSON state changed values")
+	}
+	ds, d := EnvelopeDataSourceAttributes(ctx, SchemaOptions{})
+	check(t, d)
+	check(t, (datasourceschema.Schema{Attributes: ds}).ValidateImplementation(ctx))
+	for _, value := range []types.String{types.StringUnknown(), types.StringValue("[broken"), types.StringValue(`{"not":"an array"}`)} {
+		model.Choices = value
+		output, d := EnvelopeToAPI(ctx, model)
+		if output != nil || !d.HasError() {
+			t.Fatal("invalid automatic JSON accepted")
+		}
+		diagnostic, ok := d[0].(diag.DiagnosticWithPath)
+		if !ok || !diagnostic.Path().Equal(path.Root("choices")) {
+			t.Fatalf("missing JSON field path: %v", d)
+		}
+	}
+	cycle := &sdk.CycleA{Label: "cycle"}
+	cycle.B = &sdk.CycleB{A: cycle}
+	if output, d := CycleAFromAPI(ctx, cycle); output != nil || !d.HasError() {
+		t.Fatal("cyclic Go value accepted")
 	}
 }

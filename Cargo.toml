@@ -16,23 +16,23 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "2.1.0"
+version = "2.2.0"
 homepage = "https://github.com/Sygmei/arvalez"
 repository = "https://github.com/Sygmei/arvalez"
 readme = "README.md"
 
 [workspace.dependencies]
 anyhow = "1.0.98"
-arvalez-cli = { version = "2.1.0", path = "crates/arvalez-cli" }
-arvalez-ir = { version = "2.1.0", path = "crates/arvalez-ir" }
-arvalez-openapi = { version = "2.1.0", path = "crates/arvalez-openapi" }
-arvalez-target-core = { version = "2.1.0", path = "crates/arvalez-target-core" }
-arvalez-target-terraform = { version = "2.1.0", path = "crates/arvalez-target-terraform" }
-arvalez-target-go = { version = "2.1.0", path = "crates/arvalez-target-go" }
-arvalez-target-python = { version = "2.1.0", path = "crates/arvalez-target-python" }
-arvalez-target-typescript = { version = "2.1.0", path = "crates/arvalez-target-typescript" }
-arvalez-target-nushell = { version = "2.1.0", path = "crates/arvalez-target-nushell" }
-arvalez-target-pythonmini = { version = "2.1.0", path = "crates/arvalez-target-pythonmini" }
+arvalez-cli = { version = "2.2.0", path = "crates/arvalez-cli" }
+arvalez-ir = { version = "2.2.0", path = "crates/arvalez-ir" }
+arvalez-openapi = { version = "2.2.0", path = "crates/arvalez-openapi" }
+arvalez-target-core = { version = "2.2.0", path = "crates/arvalez-target-core" }
+arvalez-target-terraform = { version = "2.2.0", path = "crates/arvalez-target-terraform" }
+arvalez-target-go = { version = "2.2.0", path = "crates/arvalez-target-go" }
+arvalez-target-python = { version = "2.2.0", path = "crates/arvalez-target-python" }
+arvalez-target-typescript = { version = "2.2.0", path = "crates/arvalez-target-typescript" }
+arvalez-target-nushell = { version = "2.2.0", path = "crates/arvalez-target-nushell" }
+arvalez-target-pythonmini = { version = "2.2.0", path = "crates/arvalez-target-pythonmini" }
 clap = { version = "4.5.38", features = ["derive"] }
 crossterm = "0.29.0"
 indexmap = { version = "2.10.0", features = ["serde"] }

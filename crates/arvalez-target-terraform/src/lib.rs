@@ -11,16 +11,34 @@ use serde_json::{Value, json};
 
 pub use arvalez_target_core::write_files as write_package;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetConfig {
     pub module_path: String,
     pub sdk_module_path: String,
+    /// "current" resolves to CommonConfig.package.version for direct library callers.
+    #[serde(default = "current_sdk_version")]
     pub sdk_version: String,
     #[serde(default)]
     pub sdk_import_path: Option<String>,
     #[serde(default)]
     pub models: BTreeMap<String, ModelOptions>,
+}
+
+fn current_sdk_version() -> String {
+    "current".into()
+}
+
+impl Default for TargetConfig {
+    fn default() -> Self {
+        Self {
+            module_path: String::new(),
+            sdk_module_path: String::new(),
+            sdk_version: current_sdk_version(),
+            sdk_import_path: None,
+            models: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -175,8 +193,109 @@ struct Shape {
 struct Resolver<'a> {
     ir: &'a CoreIr,
     config: &'a TargetConfig,
+    json_fields: BTreeMap<(String, String), &'static str>,
 }
-impl Resolver<'_> {
+// A collection containing an unsupported value uses JSON for the whole field.
+// Object contents are handled by their own model, preserving typed parent fields.
+fn supports_native_type(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive { name } => matches!(
+            name.as_str(),
+            "string" | "integer" | "number" | "boolean" | "binary"
+        ),
+        TypeRef::Named { .. } => true,
+        TypeRef::Enum { base, .. } => supports_native_type(base),
+        TypeRef::Array { item } => supports_native_type(item),
+        TypeRef::Map { value } => supports_native_type(value),
+        _ => false,
+    }
+}
+
+fn model_references(ty: &TypeRef, names: &mut BTreeSet<String>) {
+    match ty {
+        TypeRef::Named { name } => {
+            names.insert(name.clone());
+        }
+        TypeRef::Enum { base, .. } => model_references(base, names),
+        TypeRef::Array { item } => model_references(item, names),
+        TypeRef::Map { value } => model_references(value, names),
+        _ => {}
+    }
+}
+
+fn reaches_model(
+    graph: &BTreeMap<String, BTreeSet<String>>,
+    start: &str,
+    target: &str,
+    visited: &mut BTreeSet<String>,
+) -> bool {
+    if start == target {
+        return true;
+    }
+    if !visited.insert(start.into()) {
+        return false;
+    }
+    graph.get(start).is_some_and(|names| {
+        names
+            .iter()
+            .any(|name| reaches_model(graph, name, target, visited))
+    })
+}
+
+impl<'a> Resolver<'a> {
+    fn new(ir: &'a CoreIr, config: &'a TargetConfig) -> Self {
+        let mut resolver = Self {
+            ir,
+            config,
+            json_fields: BTreeMap::new(),
+        };
+        let mut graph = BTreeMap::<String, BTreeSet<String>>::new();
+        for model in &ir.models {
+            let references = graph.entry(model.name.clone()).or_default();
+            for field in &model.fields {
+                let reason = if resolver.options(model, field).representation
+                    == Some(Representation::Json)
+                {
+                    Some("explicit override")
+                } else if !supports_native_type(&field.type_ref) {
+                    Some("type without a native Terraform representation")
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    resolver
+                        .json_fields
+                        .insert((model.name.clone(), field.name.clone()), reason);
+                } else {
+                    model_references(&field.type_ref, references);
+                }
+            }
+            if let ModelKind::Enum { base, .. } = &model.kind {
+                model_references(base, references);
+            }
+        }
+        // Cut every field edge participating in a cycle. Compute against the
+        // same graph for every model so traversal order cannot change schemas.
+        for model in &ir.models {
+            for field in &model.fields {
+                let key = (model.name.clone(), field.name.clone());
+                if resolver.json_fields.contains_key(&key) {
+                    continue;
+                }
+                let mut references = BTreeSet::new();
+                model_references(&field.type_ref, &mut references);
+                if references
+                    .iter()
+                    .any(|name| reaches_model(&graph, name, &model.name, &mut BTreeSet::new()))
+                {
+                    resolver
+                        .json_fields
+                        .insert(key, "recursive model reference");
+                }
+            }
+        }
+        resolver
+    }
     fn options(&self, model: &Model, field: &Field) -> FieldOptions {
         self.config
             .models
@@ -192,7 +311,10 @@ impl Resolver<'_> {
         {
             bail!("explicit_null requires an optional nullable field");
         }
-        let mut shape = if options.representation == Some(Representation::Json) {
+        let mut shape = if self
+            .json_fields
+            .contains_key(&(model.name.clone(), field.name.clone()))
+        {
             Shape {
                 tf: "types.String",
                 codec: format!("jsonCodec[{}]()", model_value_type(&field.type_ref, "sdk")),
@@ -234,16 +356,12 @@ impl Resolver<'_> {
                 "number" => ("types.Float64", "float64Codec()".into()),
                 "boolean" => ("types.Bool", "boolCodec()".into()),
                 "binary" => ("types.String", "binaryCodec()".into()),
-                _ => bail!(
-                    "unsupported primitive {name:?}; set representation = \"json\" on the containing field"
-                ),
+                _ => bail!("unsupported primitive {name:?} outside an object field"),
             },
             TypeRef::Enum { base, .. } => return self.shape(base, stack),
             TypeRef::Named { name } => {
                 if stack.contains(name) {
-                    bail!(
-                        "recursive model {name:?}; set representation = \"json\" on an edge of this cycle"
-                    );
+                    bail!("recursive model {name:?} cannot be expanded outside an object field");
                 }
                 let model = self
                     .ir
@@ -282,9 +400,7 @@ impl Resolver<'_> {
                 let child = self.shape(value, stack)?;
                 ("types.Map", format!("mapCodec({})", child.codec))
             }
-            _ => bail!(
-                "unsupported union or tuple; set representation = \"json\" on the containing field"
-            ),
+            _ => bail!("unsupported union or tuple outside an object field"),
         };
         Ok(Shape { tf, codec })
     }
@@ -311,6 +427,7 @@ impl Resolver<'_> {
                 .field(model, field, &mut vec![model.name.clone()])
                 .with_context(|| format!("{}.{}", model.name, field.name))?;
             fields.push(json!({ "name": go, "attribute": attr, "tf_type": shape.tf, "codec": shape.codec,
+                "json_reason": self.json_fields.get(&(model.name.clone(), field.name.clone())),
                 "description": serde_json::to_string(field.attributes.get("description").and_then(Value::as_str).unwrap_or(""))? }));
         }
         let (base, base_codec) = match &model.kind {
@@ -335,6 +452,16 @@ pub fn generate(
     common: &CommonConfig,
     config: &TargetConfig,
 ) -> Result<Vec<GeneratedFile>> {
+    let mut resolved = std::borrow::Cow::Borrowed(config);
+    if config.sdk_version == "current" {
+        let version = &common.package.version;
+        resolved.to_mut().sdk_version = if version.starts_with('v') {
+            version.clone()
+        } else {
+            format!("v{version}")
+        };
+    }
+    let config = resolved.as_ref();
     for (key, value) in [
         ("module_path", &config.module_path),
         ("sdk_module_path", &config.sdk_module_path),
@@ -358,7 +485,7 @@ pub fn generate(
     }
     if !valid_version(&config.sdk_version) {
         bail!(
-            "sdk_version is required and must be a pinned Go semantic version (for example v2.0.0)"
+            "sdk_version must resolve to a pinned Go semantic version (for example v2.0.0); current uses the SDK package version"
         );
     }
 
@@ -410,7 +537,7 @@ pub fn generate(
             }
         }
     }
-    let resolver = Resolver { ir, config };
+    let resolver = Resolver::new(ir, config);
     let mut names = BTreeSet::new();
     let mut models = Vec::new();
     for model in arvalez_target_core::sorted_models(ir) {

@@ -116,6 +116,7 @@ enum Command {
         module_path: Option<String>,
         #[arg(long)]
         sdk_module_path: Option<String>,
+        /// SDK version to pin; defaults to "current" (the Go SDK output version).
         #[arg(long)]
         sdk_version: Option<String>,
         #[arg(long)]

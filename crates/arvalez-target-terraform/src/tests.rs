@@ -95,6 +95,62 @@ fn fixture() -> (CoreIr, TargetConfig, CommonConfig) {
         models: vec![widget, status, child],
         ..Default::default()
     };
+    let mut cycle_a = Model::new("cycle_a", "CycleA");
+    cycle_a.fields = vec![
+        field("label", TypeRef::primitive("string"), false, false),
+        field("b", TypeRef::named("CycleB"), true, false),
+        field(
+            "children",
+            TypeRef::Array {
+                item: Box::new(TypeRef::named("CycleA")),
+            },
+            true,
+            false,
+        ),
+    ];
+    let mut cycle_b = Model::new("cycle_b", "CycleB");
+    cycle_b.fields = vec![
+        field("a", TypeRef::named("CycleA"), true, false),
+        field(
+            "by_name",
+            TypeRef::Map {
+                value: Box::new(TypeRef::named("CycleB")),
+            },
+            true,
+            false,
+        ),
+    ];
+    let mut envelope = Model::new("envelope", "Envelope");
+    envelope.fields = vec![
+        field("node", TypeRef::named("CycleA"), true, false),
+        field(
+            "choices",
+            TypeRef::Array {
+                item: Box::new(TypeRef::Union {
+                    variants: vec![TypeRef::primitive("string"), TypeRef::primitive("integer")],
+                }),
+            },
+            true,
+            false,
+        ),
+        field(
+            "extras",
+            TypeRef::Map {
+                value: Box::new(TypeRef::primitive("any")),
+            },
+            true,
+            false,
+        ),
+        field(
+            "choice",
+            TypeRef::Union {
+                variants: vec![TypeRef::primitive("string"), TypeRef::primitive("integer")],
+            },
+            false,
+            false,
+        ),
+    ];
+    ir.models.extend([cycle_a, cycle_b, envelope]);
     let fixture_dir = tempdir().unwrap();
     let fixture_path = fixture_dir.path().join("nullable-3.0.json");
     fs::write(&fixture_path, json!({
@@ -125,15 +181,6 @@ fn fixture() -> (CoreIr, TargetConfig, CommonConfig) {
         ..Default::default()
     };
     let mut options = ModelOptions::default();
-    for name in ["payload", "next", "tuple"] {
-        options.fields.insert(
-            name.into(),
-            FieldOptions {
-                representation: Some(Representation::Json),
-                ..Default::default()
-            },
-        );
-    }
     options.fields.insert(
         "clear".into(),
         FieldOptions {
@@ -195,15 +242,98 @@ fn deterministic_typed_output_and_template_overrides() {
     assert!(!files.iter().any(|f| f.path == Path::new("schema.go")));
 }
 #[test]
-fn rejects_invalid_configuration_and_unsupported_shapes() {
-    let (ir, config, common) = fixture();
-    for key in ["payload", "next", "tuple"] {
-        let mut changed = config.clone();
-        changed.models.get_mut("Widget").unwrap().fields.remove(key);
-        let error = format!("{:#}", generate(&ir, None, &common, &changed).unwrap_err());
-        assert!(error.contains(key), "{error}");
-        assert!(error.contains("representation"), "{error}");
+fn current_sdk_version_uses_package_version_and_renders_a_pin() {
+    let (ir, mut config, mut common) = fixture();
+    config.sdk_version = TargetConfig::default().sdk_version;
+    assert_eq!(config.sdk_version, "current");
+    let parsed: TargetConfig = serde_json::from_value(json!({
+        "module_path": config.module_path, "sdk_module_path": config.sdk_module_path
+    }))
+    .unwrap();
+    assert_eq!(parsed.sdk_version, "current");
+    for version in ["2.4.0", "v2.4.0", "2.4.0-rc.1"] {
+        common.package.version = version.into();
+        let files = generate(&ir, None, &common, &config).unwrap();
+        let expected = format!("example.com/sdk/v2 v{}", version.trim_start_matches('v'));
+        assert!(source(&files, "go.mod").contains(&expected));
+        assert!(!source(&files, "go.mod").contains("current"));
     }
+    common.package.version = "latest".into();
+    assert!(generate(&ir, None, &common, &config).is_err());
+    config.sdk_version = "v2.0.0".into();
+    assert!(
+        source(&generate(&ir, None, &common, &config).unwrap(), "go.mod")
+            .contains("example.com/sdk/v2 v2.0.0")
+    );
+}
+
+#[test]
+fn automatic_json_matches_explicit_overrides_and_keeps_native_fields() {
+    let (ir, config, common) = fixture();
+    let automatic = generate(&ir, None, &common, &config).unwrap();
+    let mut explicit = config.clone();
+    for key in ["payload", "next", "tuple"] {
+        explicit.models.get_mut("Widget").unwrap().fields.insert(
+            key.into(),
+            FieldOptions {
+                representation: Some(Representation::Json),
+                ..Default::default()
+            },
+        );
+    }
+    let explicit_files = generate(&ir, None, &common, &explicit).unwrap();
+    for file in ["models.go", "adapters.go", "schema.go"] {
+        assert_eq!(source(&automatic, file), source(&explicit_files, file));
+    }
+    let resolver = Resolver::new(&ir, &config);
+    assert!(
+        resolver
+            .json_fields
+            .contains_key(&("CycleA".into(), "b".into()))
+    );
+    assert!(
+        resolver
+            .json_fields
+            .contains_key(&("CycleB".into(), "a".into()))
+    );
+    assert!(
+        !resolver
+            .json_fields
+            .contains_key(&("Envelope".into(), "node".into()))
+    );
+    explicit
+        .models
+        .entry("CycleA".into())
+        .or_default()
+        .fields
+        .insert(
+            "b".into(),
+            FieldOptions {
+                representation: Some(Representation::Json),
+                ..Default::default()
+            },
+        );
+    let resolver = Resolver::new(&ir, &explicit);
+    assert!(
+        !resolver
+            .json_fields
+            .contains_key(&("CycleB".into(), "a".into()))
+    );
+    explicit.models.get_mut("Widget").unwrap().fields.insert(
+        "child".into(),
+        FieldOptions {
+            representation: Some(Representation::Json),
+            ..Default::default()
+        },
+    );
+    let files = generate(&ir, None, &common, &explicit).unwrap();
+    assert!(source(&files, "adapters.go").contains("jsonCodec[sdk.Child]()"));
+    assert!(source(&automatic, "README.md").contains("`CycleA.b`"));
+}
+
+#[test]
+fn rejects_invalid_configuration_and_unknown_models() {
+    let (ir, config, common) = fixture();
     let mut changed = config.clone();
     changed.sdk_version.clear();
     assert!(generate(&ir, None, &common, &changed).is_err());
@@ -239,9 +369,7 @@ fn rejects_invalid_configuration_and_unsupported_shapes() {
     );
     assert!(generate(&ir, None, &common, &changed).is_err());
     let mut changed = ir.clone();
-    changed.models[0].fields[0].type_ref = TypeRef::Union {
-        variants: vec![TypeRef::primitive("string"), TypeRef::primitive("integer")],
-    };
+    changed.models[0].fields[0].type_ref = TypeRef::named("Missing");
     assert!(generate(&changed, None, &common, &config).is_err());
 }
 #[test]

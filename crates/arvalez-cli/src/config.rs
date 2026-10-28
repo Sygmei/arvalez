@@ -500,6 +500,24 @@ pub(crate) fn resolve_terraform_config(
 ) {
     let default_target = TerraformTargetConfig::default();
     let target = config.target.terraform.as_ref().unwrap_or(&default_target);
+    let sdk_version = overrides
+        .sdk_version
+        .or_else(|| target.sdk_version.clone())
+        .unwrap_or_else(|| "current".into());
+    let sdk_version = if sdk_version == "current" {
+        // Match the SDK's version, even when the adapter package has its own.
+        let version = config.target.go.base.resolve_version(
+            overrides.output_version.clone(),
+            &config.common.package,
+        );
+        if version.starts_with('v') {
+            version
+        } else {
+            format!("v{version}")
+        }
+    } else {
+        sdk_version
+    };
     let common = CommonConfig {
         package: PackageConfig {
             name: target.base.resolve_package_name(
@@ -522,10 +540,7 @@ pub(crate) fn resolve_terraform_config(
             .sdk_module_path
             .or_else(|| target.sdk_module_path.clone())
             .unwrap_or_default(),
-        sdk_version: overrides
-            .sdk_version
-            .or_else(|| target.sdk_version.clone())
-            .unwrap_or_default(),
+        sdk_version,
         sdk_import_path: overrides
             .sdk_import_path
             .or_else(|| target.sdk_import_path.clone()),

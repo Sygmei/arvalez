@@ -4,6 +4,13 @@ Generated Terraform Plugin Framework models for `{{ sdk_import }}` at
 `{{ sdk_version }}`. Requires Go 1.24 or later. Run `go mod tidy` to resolve
 module dependencies after generation.
 
+In Arvalez configuration, `sdk_version` defaults to `"current"`: it uses
+`--output-version`, then `[target.go.package].version`, then
+`[common.package].version`, then `0.1.0`. The generated module always pins the
+resolved version, adding Go's `v` prefix if needed. Set an explicit
+`sdk_version = "v2.0.0"` to use a different SDK release. `current` does not look
+up the latest registry release; use a Go workspace for an unpublished local SDK.
+
 The SDK remains independent of Terraform. Provider builders own this module,
 its generation configuration, and the resource/data-source implementations.
 Use the same OpenAPI/IR and Arvalez version as the SDK, with the standard Go
@@ -62,11 +69,18 @@ nullable fields always use the SDK's explicit-null representation. Required
 non-nullable fields reject Terraform null. Nil and empty collections remain
 distinct in memory, subject to the SDK's JSON omission rules.
 
-Unions, free-form JSON, tuples, and recursive edges require explicit field
-configuration in the generator:
+Arvalez automatically represents unions, free-form values, tuples, and fields
+participating in recursive model cycles as JSON strings. If a collection contains
+an unsupported value type, its entire field becomes a JSON string. Other objects
+keep their typed nested fields. No Terraform annotations are needed in the API
+or generation configuration.
+
+Every field edge participating in a recursive cycle uses JSON, independently of
+model order or entry point. An explicit JSON override can break a cycle sooner.
+Provider authors can optionally force JSON for any otherwise typed field:
 
 ```toml
-[target.terraform.models.Widget.fields.payload]
+[target.terraform.models.Widget.fields.child]
 representation = "json"
 
 [target.terraform.models.Widget.fields.displayName]
@@ -80,6 +94,16 @@ rejected. Use Terraform null, not the JSON string `"null"`, for absent values.
 JSON numbers retain precision through `json.Number` when the SDK uses `any`.
 Default attribute names are snake_case; reserved Terraform names use `_value`.
 Generation reports collisions so you can specify explicit `name` overrides.
+
+### JSON field representations in this module
+
+{% for model in tf_models %}{% for field in model.fields %}{% if field.json_reason %}
+- `{{ model.name }}.{{ field.attribute }}`: {{ field.json_reason }}.
+{% endif %}{% endfor %}{% endfor %}
+
+These attributes contain JSON text. Configure them with `jsonencode(...)` in
+Terraform. Their internal properties do not have separate Terraform validators
+or plan modifiers; the adapters validate JSON against the SDK's Go type.
 
 ## Local SDK development
 

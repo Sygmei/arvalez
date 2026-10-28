@@ -68,6 +68,165 @@ fn openapi_30_nullable_generates_matching_sdk_and_terraform_models() {
     }
 }
 #[test]
+fn complex_openapi_generates_without_terraform_representation_annotations() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("arvalez.toml"),
+        r#"
+[common.package]
+version = "2.0.0"
+[target.terraform]
+module_path = "example.com/tfmodels"
+sdk_module_path = "example.com/sdk/v2"
+[target.terraform.package]
+name = "tfmodels"
+"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("openapi.json"), r##"{
+      "openapi":"3.1.0", "paths":{}, "components":{"schemas":{
+        "Node":{"type":"object","properties":{
+          "label":{"type":"string"},
+          "payload":{},
+          "choice":{"oneOf":[{"type":"string"},{"type":"integer"}]},
+          "children":{"type":"array","items":{"$ref":"#/components/schemas/Node"}},
+          "tuple":{"type":"array","prefixItems":[{"type":"string"},{"type":"integer"}],"items":false,"minItems":2},
+          "metadata":{"type":"object","additionalProperties":true}
+        }}
+      }}
+    }"##).unwrap();
+    success(run(
+        dir.path(),
+        &["generate-terraform", "--openapi", "openapi.json"],
+    ));
+    let output = dir.path().join("generated/terraform");
+    let adapters = fs::read_to_string(output.join("adapters.go")).unwrap();
+    assert!(adapters.contains("jsonCodec[[]sdk.Node]()"));
+    assert!(adapters.contains("jsonCodec[any]()"));
+    assert!(adapters.contains("jsonCodec[[2]any]()"));
+    assert!(adapters.contains("jsonCodec[map[string]any]()"));
+    let readme = fs::read_to_string(output.join("README.md")).unwrap();
+    assert!(readme.contains("`Node.children`: recursive model reference"));
+    assert!(!readme.contains("`Node.label`:"));
+}
+
+#[test]
+fn terraform_current_sdk_version_follows_go_version_precedence() {
+    let common = "[common.package]\nversion = \"2.3.0\"\n";
+    let go = "[common.package]\nversion = \"2.3.0\"\n[target.go.package]\nversion = \"2.4.0\"\n";
+    for (prefix, sdk_version, flags, expected) in [
+        ("", None, vec![], "v0.1.0"),
+        (common, None, vec![], "v2.3.0"),
+        (common, Some("current"), vec![], "v2.3.0"),
+        (go, None, vec![], "v2.4.0"),
+        (
+            go,
+            Some("current"),
+            vec!["--output-version", "2.5.0"],
+            "v2.5.0",
+        ),
+        (
+            go,
+            None,
+            vec!["--output-version", "v2.5.0-rc.1"],
+            "v2.5.0-rc.1",
+        ),
+        (
+            go,
+            Some("v2.0.0"),
+            vec!["--output-version", "2.5.0"],
+            "v2.0.0",
+        ),
+        (
+            go,
+            Some("v2.0.0"),
+            vec!["--sdk-version", "current"],
+            "v2.4.0",
+        ),
+        (
+            go,
+            Some("current"),
+            vec!["--sdk-version", "v2.6.0"],
+            "v2.6.0",
+        ),
+    ] {
+        let dir = tempdir().unwrap();
+        let setting = sdk_version
+            .map(|v| format!("sdk_version = \"{v}\"\n"))
+            .unwrap_or_default();
+        let sdk_module = if expected.starts_with("v2.") {
+            "example.com/sdk/v2"
+        } else {
+            "example.com/sdk"
+        };
+        let config = format!(
+            "{prefix}{}",
+            CONFIG
+                .replace("sdk_version = \"v2.0.0\"\n", &setting)
+                .replace("example.com/sdk/v2", sdk_module)
+                .replace(
+                    "name = \"adapters\"",
+                    "name = \"adapters\"\nversion = \"9.0.0\""
+                )
+        );
+        fs::write(dir.path().join("arvalez.toml"), config).unwrap();
+        fs::write(dir.path().join("openapi.json"), SPEC).unwrap();
+        let mut args = vec!["generate-terraform", "--openapi", "openapi.json"];
+        args.extend(flags);
+        success(run(dir.path(), &args));
+        let gomod = fs::read_to_string(dir.path().join("generated/terraform/go.mod")).unwrap();
+        assert!(
+            gomod.contains(&format!("{sdk_module} {expected}\n")),
+            "{gomod}"
+        );
+    }
+}
+
+#[test]
+fn aggregate_generation_resolves_current_and_rejects_invalid_versions_before_writing() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("openapi.json"), SPEC).unwrap();
+    fs::write(
+        dir.path().join("arvalez.toml"),
+        CONFIG.replace("sdk_version = \"v2.0.0\"\n", ""),
+    )
+    .unwrap();
+    success(run(
+        dir.path(),
+        &[
+            "generate",
+            "--openapi",
+            "openapi.json",
+            "--output-version",
+            "2.6.0",
+            "--no-python",
+            "--no-typescript",
+            "--no-nushell",
+        ],
+    ));
+    let gomod = fs::read_to_string(dir.path().join("generated/terraform/go.mod")).unwrap();
+    assert!(gomod.contains("example.com/sdk/v2 v2.6.0\n"));
+    assert!(dir.path().join("generated/go-client/models.go").exists());
+    for command in ["generate", "generate-terraform"] {
+        let output = run(
+            dir.path(),
+            &[
+                command,
+                "--openapi",
+                "openapi.json",
+                "--output-version",
+                "not-a-version",
+                "--output-directory",
+                "invalid",
+            ],
+        );
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("sdk_version must resolve"));
+        assert!(!dir.path().join("invalid").exists());
+    }
+}
+
+#[test]
 fn terraform_cli_resolves_config_and_overrides_without_installing_dependencies() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("openapi.json"), SPEC).unwrap();

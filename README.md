@@ -286,17 +286,20 @@ SDK; provider builders own the Terraform configuration and adapter module. The
 SDK has no Terraform dependency and requires no Terraform-specific annotations.
 
 ```toml
+[common.package]
+version = "2.0.0"
+
 [target.terraform]
 module_path = "github.com/acme/orchestrator-tfmodels"
 sdk_module_path = "github.com/acme/orchestrator-client/v2"
-sdk_version = "v2.0.0"
+# sdk_version = "current" # default; uses the Go SDK's configured version
 # sdk_import_path defaults to sdk_module_path; set it for an SDK subpackage.
 
 [target.terraform.package]
 name = "tfmodels"
 
-# Original IR model/field names identify these optional overrides.
-[target.terraform.models.Widget.fields.payload]
+# Provider authors can optionally force JSON for an otherwise typed field.
+[target.terraform.models.Widget.fields.child]
 representation = "json"
 
 [target.terraform.models.Widget.fields.displayName]
@@ -314,7 +317,14 @@ includes this target when `[target.terraform]` exists and is enabled;
 `--no-terraform` disables it. The dedicated command also accepts
 `--module-path`, `--sdk-module-path`, `--sdk-version`, `--sdk-import-path`,
 `--package-name`, `--output-directory`, and `--template-dir` overrides.
-Module paths and the pinned SDK version are required. Generate adapters from the
+Module paths are required. `sdk_version` defaults to `"current"`, resolving from
+`--output-version`, then `[target.go.package].version`, then
+`[common.package].version`, then `0.1.0`. A missing `v` prefix is added, and the
+generated `go.mod` contains a concrete version. The adapter's own
+`[target.terraform.package].version` does not change this SDK dependency.
+Set `sdk_version = "v2.0.0"` (or `--sdk-version v2.0.0`) to pin a different SDK
+release. `current` does not query a registry or select an unpublished local SDK;
+use `go work` for local development. Generate adapters from the
 same specification and Arvalez version as the standard Go SDK.
 
 For each object `Widget`, the module provides `WidgetModel`, `WidgetFromAPI`,
@@ -330,10 +340,14 @@ are omitted on Terraform null unless an optional nullable field opts into
 explicit JSON null. API omission and API null both become Terraform null, so
 conversion does not promise lossless preservation of that distinction.
 
-Unions, free-form JSON, tuples, and recursive edges need explicit JSON-string
-fallback configuration. Unsupported structures, invalid overrides, and naming
-collisions are rejected before Terraform files are written. Arrays map to lists;
-binary data uses base64 strings. Generation does not install dependencies.
+Unions, free-form values, tuples, and fields participating in recursive model
+cycles automatically use JSON strings. Collections containing unsupported types
+use JSON for the whole field; ordinary objects retain typed nested attributes.
+The generated README lists JSON fields and the reason for each choice. Provider
+authors can still force `representation = "json"` on another field; microservice
+authors do not need Terraform representation annotations. Invalid overrides and
+naming collisions are rejected before Terraform files are written. Other arrays
+map to lists; binary data uses base64 strings. Generation does not install dependencies.
 
 Generated modules require Go 1.24+ and pin Plugin Framework v1.18.0. Run
 `go mod tidy` after generation. Use a parent `go.work` to develop alongside an
