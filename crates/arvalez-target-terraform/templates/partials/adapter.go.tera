@@ -54,23 +54,39 @@ func codec{{ model.name }}() codec[sdk.{{ model.name }}] {
 }
 {% endif %}
 
-// {{ model.name }}FromAPI converts SDK values without interpreting resource schema roles.
-func {{ model.name }}FromAPI(ctx context.Context, value *sdk.{{ model.name }}) (*{{ model.name }}Model, diag.Diagnostics) {
+// {{ model.name }}ValueFromAPI converts an SDK value to a Terraform value without interpreting schema roles.
+// A nil input produces a typed null. On error, the result is a typed null with diagnostics.
+func {{ model.name }}ValueFromAPI(ctx context.Context, value *sdk.{{ model.name }}) ({{ model.tf_type }}, diag.Diagnostics) {
+    c := codec{{ model.name }}()
+    converted, diagnostics := pointerCodec(c).from(ctx, value, path.Empty())
+    if diagnostics.HasError() { return nullValue(c.node.typ).({{ model.tf_type }}), diagnostics }
+    return converted.({{ model.tf_type }}), diagnostics
+}
+
+// {{ model.name }}ValueToAPI converts a Terraform value to an SDK value. A typed null produces nil.
+// Unknown or unrepresentable values produce diagnostics. Schema roles do not omit fields.
+func {{ model.name }}ValueToAPI(ctx context.Context, value {{ model.tf_type }}) (*sdk.{{ model.name }}, diag.Diagnostics) {
+    return pointerCodec(codec{{ model.name }}()).to(ctx, value, path.Empty())
+}
+
+// {{ model.name }}ModelFromAPI converts an SDK value to a generated model. A nil input produces nil.
+func {{ model.name }}ModelFromAPI(ctx context.Context, value *sdk.{{ model.name }}) (*{{ model.name }}Model, diag.Diagnostics) {
     if value == nil { return nil, nil }
-    converted, diagnostics := codec{{ model.name }}().from(ctx, *value, path.Empty())
+    converted, diagnostics := {{ model.name }}ValueFromAPI(ctx, value)
     if diagnostics.HasError() { return nil, diagnostics }
 {% if model.object %}
     var result {{ model.name }}Model
-    diagnostics.Append(converted.(types.Object).As(ctx, &result, basetypes.ObjectAsOptions{})...)
+    diagnostics.Append(converted.As(ctx, &result, basetypes.ObjectAsOptions{})...)
 {% else %}
-    result := converted.({{ model.tf_type }})
+    result := converted
 {% endif %}
     if diagnostics.HasError() { return nil, diagnostics }
     return &result, diagnostics
 }
 
-// {{ model.name }}ToAPI requires known, representable values. Schema roles do not omit fields.
-func {{ model.name }}ToAPI(ctx context.Context, value *{{ model.name }}Model) (*sdk.{{ model.name }}, diag.Diagnostics) {
+// {{ model.name }}ModelToAPI converts a generated model to an SDK value. A nil input produces nil.
+// Unknown or unrepresentable values produce diagnostics. Schema roles do not omit fields.
+func {{ model.name }}ModelToAPI(ctx context.Context, value *{{ model.name }}Model) (*sdk.{{ model.name }}, diag.Diagnostics) {
     if value == nil { return nil, nil }
 {% if model.object %}
     converted, diagnostics := types.ObjectValueFrom(ctx, {{ model.name }}AttributeTypes(), value)
@@ -79,8 +95,8 @@ func {{ model.name }}ToAPI(ctx context.Context, value *{{ model.name }}Model) (*
     converted := *value
     var diagnostics diag.Diagnostics
 {% endif %}
-    result, d := codec{{ model.name }}().to(ctx, converted, path.Empty())
+    result, d := {{ model.name }}ValueToAPI(ctx, converted)
     diagnostics.Append(d...)
     if diagnostics.HasError() { return nil, diagnostics }
-    return &result, diagnostics
+    return result, diagnostics
 }

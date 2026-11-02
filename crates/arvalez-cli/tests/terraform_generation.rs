@@ -240,6 +240,17 @@ fn terraform_cli_resolves_config_and_overrides_without_installing_dependencies()
     assert!(models.contains("package adapters"));
     assert!(models.contains("tfsdk:\"count_value\""));
     assert!(models.contains("tfsdk:\"display_name\""));
+    let adapters = fs::read_to_string(output.join("adapters.go")).unwrap();
+    for name in [
+        "WidgetModelFromAPI",
+        "WidgetModelToAPI",
+        "WidgetValueFromAPI",
+        "WidgetValueToAPI",
+    ] {
+        assert!(adapters.contains(&format!("func {name}(")));
+    }
+    assert!(!adapters.contains("func WidgetFromAPI("));
+    assert!(!adapters.contains("func WidgetToAPI("));
     assert!(
         fs::read_to_string(output.join("runtime.go"))
             .unwrap()

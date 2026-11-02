@@ -327,10 +327,16 @@ release. `current` does not query a registry or select an unpublished local SDK;
 use `go work` for local development. Generate adapters from the
 same specification and Arvalez version as the standard Go SDK.
 
-For each object `Widget`, the module provides `WidgetModel`, `WidgetFromAPI`,
-`WidgetToAPI`, `WidgetAttributeTypes`, `WidgetResourceAttributes`, and
-`WidgetDataSourceAttributes`. Named enums have scalar counterparts and
-conversions. Schema helpers default every field to Computed; provider authors
+For each object `Widget`, the module provides `WidgetModel` and two conversion
+pairs: `WidgetModelFromAPI` / `WidgetModelToAPI` for tagged structs, and
+`WidgetValueFromAPI` / `WidgetValueToAPI` for native `types.Object` values.
+Named enums have both pairs using their scalar framework types. Both pairs
+return diagnostics and share conversion rules. Nil SDK pointers become nil
+models or typed null values; typed null values convert back to nil SDK pointers.
+The old `WidgetFromAPI` / `WidgetToAPI` names are replaced by the `Model` pair.
+
+Objects also provide `WidgetAttributeTypes`, `WidgetResourceAttributes`, and
+`WidgetDataSourceAttributes`. Schema helpers default every field to Computed; provider authors
 configure input roles and nested field options in Go through `SchemaOptions`.
 They can add their own validators and plan modifiers to the returned schemas.
 

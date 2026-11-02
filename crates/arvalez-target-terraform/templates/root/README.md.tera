@@ -18,9 +18,22 @@ model templates. No Terraform annotations are required in the service's API.
 
 ## Usage
 
-For an SDK model `Widget`, the generated functions are `WidgetFromAPI`,
-`WidgetToAPI`, `WidgetAttributeTypes`, `WidgetResourceAttributes`, and
-`WidgetDataSourceAttributes`. Named enums have scalar models and conversions.
+For an SDK object `Widget`, choose either conversion pair:
+
+| Functions | Terraform representation |
+| --- | --- |
+| `WidgetModelFromAPI` / `WidgetModelToAPI` | `*WidgetModel`, a struct with `tfsdk` tags |
+| `WidgetValueFromAPI` / `WidgetValueToAPI` | `types.Object`, a native framework value |
+
+Both pairs return diagnostics and share the same conversion rules. Named enums
+also have both pairs, using their concrete scalar framework type (for example,
+`types.String`) for values and a pointer to the generated model alias for models.
+Objects also provide `WidgetAttributeTypes`, `WidgetResourceAttributes`, and
+`WidgetDataSourceAttributes`.
+
+Migration: rename previous `WidgetFromAPI` / `WidgetToAPI` calls to
+`WidgetModelFromAPI` / `WidgetModelToAPI`. The old function names are no longer
+generated. Use the `Value` pair when working directly with framework values.
 
 ```go
 // In a provider Schema method:
@@ -33,7 +46,7 @@ resp.Diagnostics.Append(diags...)
 resp.Schema = schema.Schema{Attributes: attrs}
 
 // In Read, after your SDK call:
-model, diags := tfmodels.WidgetFromAPI(ctx, apiResponse)
+model, diags := tfmodels.WidgetModelFromAPI(ctx, apiResponse)
 resp.Diagnostics.Append(diags...)
 if resp.Diagnostics.HasError() { return }
 // Reconcile configured attributes before writing state if the API normalizes
@@ -41,10 +54,25 @@ if resp.Diagnostics.HasError() { return }
 if model != nil { resp.Diagnostics.Append(resp.State.Set(ctx, model)...) }
 
 // In Create/Update, after req.Plan.Get into the appropriate request model:
-request, diags := tfmodels.NewWidgetToAPI(ctx, &plan)
+request, diags := tfmodels.NewWidgetModelToAPI(ctx, &plan)
 resp.Diagnostics.Append(diags...)
 if resp.Diagnostics.HasError() { return }
 // Pass request to your SDK operation's input struct.
+```
+
+For a provider model whose `Widget` field is a `types.Object`:
+
+```go
+value, diags := tfmodels.WidgetValueFromAPI(ctx, apiResponse)
+resp.Diagnostics.Append(diags...)
+if resp.Diagnostics.HasError() { return }
+data.Widget = value
+
+// Convert a known Terraform object back to an SDK model:
+request, diags := tfmodels.WidgetValueToAPI(ctx, data.Widget)
+resp.Diagnostics.Append(diags...)
+if resp.Diagnostics.HasError() { return }
+// Pass request to an SDK operation that accepts this model.
 ```
 
 These snippets illustrate model names; use the names generated from your API.
@@ -56,11 +84,18 @@ added. Field names and types must continue to match the models.
 
 Conversions process all model fields independently of schema roles. Unknown
 values anywhere in an outbound request produce diagnostics, never empty values.
-Use SDK request models for writes. `FromAPI` performs structural conversion,
+Use SDK request models for writes. Both `FromAPI` variants perform structural conversion,
 not lifecycle or plan/state reconciliation. Provider code owns CRUD, IDs,
 imports, replacement rules, timeouts, API normalization, and error handling.
 
 ## Null and complex values
+
+At the top level, a nil SDK pointer becomes nil through `ModelFromAPI` and a
+typed Terraform null through `ValueFromAPI`. `ValueToAPI` maps a correctly typed
+null to a nil SDK pointer and rejects unknown values or incompatible object
+types with diagnostics. `ModelToAPI` accepts a nil model pointer; scalar model
+aliases containing null also convert to a nil SDK pointer. On conversion errors,
+model results are nil and value results are typed nulls; always check diagnostics.
 
 API omission and explicit JSON null both become Terraform null. Optional SDK
 fields are omitted on reverse conversion by default. For an optional nullable
