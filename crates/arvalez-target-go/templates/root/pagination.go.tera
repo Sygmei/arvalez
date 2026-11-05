@@ -1,0 +1,164 @@
+{%- set input_types = ir | go_input_types -%}
+{%- set has_pagination = ir | go_validate_pagination -%}
+package {{ package_name }}
+{% if has_pagination %}
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "math"
+    "strconv"
+    "bytes"
+)
+
+// Paginator fetches one page per Next call. It is not safe for concurrent use.
+// Items is the current page; always check Err after Next returns false.
+type Paginator[T any] struct {
+    next func() ([]T, bool, error)
+    items []T
+    done bool
+    err error
+}
+
+func (p *Paginator[T]) Next() bool {
+    p.items = nil
+    if p.err != nil || p.done { return false }
+    p.items, p.done, p.err = p.next()
+    if p.err != nil { p.items = nil; return false }
+    return true
+}
+
+func (p *Paginator[T]) Items() []T { return p.items }
+func (p *Paginator[T]) Err() error { return p.err }
+
+type paginationState struct {
+    strategy string
+    stopKind string
+    itemsPath []string
+    stopPath []string
+    position int64
+    size int64
+    pages int64
+    consumed int64
+    cursor string
+    seen map[string]bool
+}
+
+// paginationValue follows already validated JSON Pointer tokens without losing
+// integer precision. Only cursor termination permits a missing/null value.
+func paginationValue(raw json.RawMessage, tokens []string, optional bool) (json.RawMessage, error) {
+    for _, token := range tokens {
+        raw = bytes.TrimSpace(raw)
+        if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+            if optional { return nil, nil }
+            return nil, fmt.Errorf("pagination: missing response path %v", tokens)
+        }
+        switch raw[0] {
+        case '{':
+            var object map[string]json.RawMessage
+            if err := json.Unmarshal(raw, &object); err != nil { return nil, err }
+            var found bool
+            raw, found = object[token]
+            if !found {
+                if optional { return nil, nil }
+                return nil, fmt.Errorf("pagination: missing response path %v", tokens)
+            }
+        case '[':
+            var array []json.RawMessage
+            if err := json.Unmarshal(raw, &array); err != nil { return nil, err }
+            index, err := strconv.Atoi(token)
+            if err != nil || index < 0 || index >= len(array) {
+                return nil, fmt.Errorf("pagination: invalid array index %q", token)
+            }
+            raw = array[index]
+        default:
+            return nil, fmt.Errorf("pagination: cannot traverse response path %v", tokens)
+        }
+    }
+    raw = bytes.TrimSpace(raw)
+    if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+        if optional { return nil, nil }
+        return nil, fmt.Errorf("pagination: null response value at %v", tokens)
+    }
+    return raw, nil
+}
+
+func (s *paginationState) advance(raw json.RawMessage, count int) (bool, error) {
+    if s.pages == math.MaxInt64 || int64(count) > math.MaxInt64 - s.consumed {
+        return false, fmt.Errorf("pagination: counter overflow")
+    }
+    s.pages++
+    s.consumed += int64(count)
+    done := false
+    switch s.stopKind {
+    case "empty_page": done = count == 0
+    case "short_page": done = int64(count) < s.size
+    default:
+        value, err := paginationValue(raw, s.stopPath, s.stopKind == "cursor")
+        if err != nil { return false, err }
+        switch s.stopKind {
+        case "cursor":
+            var next string
+            if value != nil {
+                if err := json.Unmarshal(value, &next); err != nil { return false, fmt.Errorf("pagination: invalid next cursor: %w", err) }
+            }
+            done = next == ""
+            if !done && s.seen[next] { return false, fmt.Errorf("pagination: repeated cursor %q", next) }
+            if !done { s.seen[next] = true }
+            s.cursor = next
+        case "has_more":
+            var more bool
+            if err := json.Unmarshal(value, &more); err != nil { return false, fmt.Errorf("pagination: invalid has_more: %w", err) }
+            done = !more
+        default:
+            var total int64
+            if err := json.Unmarshal(value, &total); err != nil || total < 0 {
+                return false, fmt.Errorf("pagination: %s must be a nonnegative integer", s.stopKind)
+            }
+            switch s.stopKind {
+            case "total_pages": done = s.pages >= total
+            case "total_items": done = s.consumed >= total
+            case "last_page": done = s.position >= total
+            }
+        }
+    }
+    if done { return true, nil }
+    if s.strategy != "cursor" {
+        if count == 0 { return false, fmt.Errorf("pagination: empty page but termination signal indicates more results") }
+        step := int64(1)
+        if s.strategy == "offset" { step = int64(count) }
+        if s.position > math.MaxInt64 - step { return false, fmt.Errorf("pagination: position overflow") }
+        s.position += step
+    }
+    return false, nil
+}
+
+{% if config.group_by_tag %}
+{%- set tag_groups = operations | go_tag_groups %}
+{%- for op in operations %}
+{%- set primary_tag = op | go_primary_tag %}
+{%- if not primary_tag and op.attributes.arvalez_pagination %}
+{%- set receiver_type = "Client" %}
+{%- set client_expression = "c" %}
+{% include "partials/paginator.go.tera" %}
+{% endif %}
+{%- endfor %}
+{%- for group in tag_groups %}
+{%- for op in group.operations %}
+{%- if op.attributes.arvalez_pagination %}
+{%- set receiver_type = group.struct_name %}
+{%- set client_expression = "c.client" %}
+{% include "partials/paginator.go.tera" %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% else %}
+{%- for op in operations %}
+{%- if op.attributes.arvalez_pagination %}
+{%- set receiver_type = "Client" %}
+{%- set client_expression = "c" %}
+{% include "partials/paginator.go.tera" %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}

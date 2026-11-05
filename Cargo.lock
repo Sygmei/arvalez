@@ -99,7 +99,7 @@ checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
 name = "arvalez-cli"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-ir"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-openapi"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-core"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-go"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-nushell"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-python"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-pythonmini"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-terraform"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "arvalez-target-typescript"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "arvalez-ir",

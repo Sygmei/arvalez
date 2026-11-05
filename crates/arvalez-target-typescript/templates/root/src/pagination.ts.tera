@@ -1,0 +1,96 @@
+import { mergeQuery } from "./utils";
+import type { RequestOptions } from "./utils";
+
+interface PaginationSpec {
+  settings: { strategy: string; default_page_size: number | null; max_page_size: number | null };
+  position_name: string; size_name: string; start: number;
+  items_tokens: string[]; stop_tokens: string[]; stop_kind: string;
+}
+
+function valueAt(payload: unknown, tokens: string[], optional = false): unknown {
+  for (const token of tokens) {
+    if (payload == null && optional) return undefined;
+    if (typeof payload !== "object" || payload === null) throw new Error("pagination: invalid response path");
+    if (!Object.prototype.hasOwnProperty.call(payload, token)) {
+      if (optional && !Array.isArray(payload)) return undefined;
+      throw new Error("pagination: missing response path");
+    }
+    payload = (payload as Record<string, unknown>)[token];
+  }
+  if (payload == null && !optional) throw new Error("pagination: null response value");
+  return payload;
+}
+
+function integer(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new Error(`pagination: ${label} must be a nonnegative safe integer`);
+  return value;
+}
+
+export async function* paginate<T>(
+  spec: PaginationSpec, size: number | undefined,
+  options: RequestOptions | undefined,
+  fetchPage: (position: number | string | undefined, size: number, options: RequestOptions) => Promise<unknown>,
+): AsyncGenerator<T[], void, unknown> {
+  // Snapshot mutable query/header/cookie options before advancing between pages.
+  const query = mergeQuery(undefined, options) ?? new URLSearchParams();
+  if (options?.query instanceof URLSearchParams && options.query.getAll(spec.size_name).length > 1)
+    throw new Error("pagination: page size must have one value");
+  const override = query.get(spec.size_name);
+  if (override !== null) {
+    if (!/^\d+$/.test(override)) throw new Error("pagination: invalid page size");
+    size = Number(override);
+  }
+  size = size ?? spec.settings.default_page_size ?? undefined;
+  integer(size, "page size");
+  if (size === undefined || size === 0) throw new Error("pagination: page size must be positive");
+  if (spec.settings.max_page_size !== null) {
+    integer(spec.settings.max_page_size, "maximum page size");
+    if (size > spec.settings.max_page_size) throw new Error("pagination: page size exceeds maximum");
+  }
+  query.delete(spec.position_name);
+  query.set(spec.size_name, String(size));
+  const requestOptions: RequestOptions = {...options, query,
+    headers: options?.headers ? new Headers(options.headers) : undefined,
+    cookies: options?.cookies ? {...options.cookies} : undefined};
+  let position = integer(spec.start, "starting position");
+  let cursor: string | undefined;
+  let pages = 0;
+  let consumed = spec.settings.strategy === "offset" ? position : 0;
+  const seen = new Set<string>();
+  while (true) {
+    requestOptions.signal?.throwIfAborted();
+    const payload = await fetchPage(spec.settings.strategy === "cursor" ? cursor : position, size, requestOptions);
+    const items = valueAt(payload, spec.items_tokens);
+    if (!Array.isArray(items)) throw new Error("pagination: items must be an array");
+    pages = integer(pages + 1, "page count");
+    consumed = integer(consumed + items.length, "item count");
+    let done: boolean;
+    if (spec.stop_kind === "empty_page") done = items.length === 0;
+    else if (spec.stop_kind === "short_page") done = items.length < size;
+    else {
+      const value = valueAt(payload, spec.stop_tokens, spec.stop_kind === "cursor");
+      if (spec.stop_kind === "cursor") {
+        if (value != null && typeof value !== "string") throw new Error("pagination: invalid next cursor");
+        done = value == null || value === "";
+        if (!done) {
+          const next = value as string;
+          if (seen.has(next)) throw new Error("pagination: repeated cursor");
+          seen.add(next); cursor = next;
+        }
+      } else if (spec.stop_kind === "has_more") {
+        if (typeof value !== "boolean") throw new Error("pagination: has_more must be a boolean");
+        done = !value;
+      } else {
+        const total = integer(value, spec.stop_kind);
+        done = (spec.stop_kind === "total_pages" ? pages : spec.stop_kind === "total_items" ? consumed : position) >= total;
+      }
+    }
+    if (!done && spec.settings.strategy !== "cursor") {
+      if (items.length === 0) throw new Error("pagination: empty page but termination signal indicates more results");
+      position = integer(position + (spec.settings.strategy === "offset" ? items.length : 1), "position");
+    }
+    yield items as T[];
+    if (done) return;
+  }
+}

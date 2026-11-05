@@ -1,0 +1,11 @@
+    _arvalez_pagination = _arvalez_pagination_runtime
+    _arvalez_pagination_specs = {
+{% for pagination_op in operations %}{% if pagination_op.attributes.arvalez_pagination %}
+        {{ pagination_op.id | json_encode }}: _pagination_json.loads({{ pagination_op.attributes.arvalez_pagination | json_encode | json_encode }}),
+{% endif %}{% endfor %}
+    }
+    _arvalez_pagination_types = {
+{% for pagination_op in operations %}{% if pagination_op.attributes.arvalez_pagination %}
+        {{ pagination_op.id | json_encode }}: {{ pagination_op.attributes.arvalez_pagination.item_type | py_type(context="client_output") }},
+{% endif %}{% endfor %}
+    }

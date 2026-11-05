@@ -12,6 +12,8 @@
 
 mod model_policy;
 pub use model_policy::*;
+mod pagination;
+pub use pagination::*;
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -60,6 +62,9 @@ impl Default for PackageConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommonConfig {
     pub package: PackageConfig,
+    /// Service pagination defaults and operation-specific overrides.
+    #[serde(default)]
+    pub pagination: PaginationConfig,
     /// Resolved common and target model policies.
     #[serde(default)]
     pub models: ModelPolicies,

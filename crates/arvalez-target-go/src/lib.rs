@@ -6,6 +6,7 @@
 //! [`declare_target!`] wires the static parts together.
 
 mod sanitize;
+mod pagination;
 #[cfg(test)]
 mod tests;
 
@@ -47,6 +48,8 @@ fn default_module_path() -> String {
 // ── Templates ─────────────────────────────────────────────────────────────────
 
 pub const TEMPLATES: &[(&str, &str)] = &[
+    ("root/pagination.go.tera", include_str!("../templates/root/pagination.go.tera")),
+    ("partials/paginator.go.tera", include_str!("../templates/partials/paginator.go.tera")),
     ("root/go.mod.tera",                         include_str!("../templates/root/go.mod.tera")),
     ("root/README.md.tera",                      include_str!("../templates/root/README.md.tera")),
     ("root/params.go.tera",                      include_str!("../templates/root/params.go.tera")),
@@ -63,6 +66,7 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ──────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
+    pagination::register_filters(tera);
     tera.register_filter("go_input_types", |v: &Value, _: &HashMap<String, Value>| {
         Ok(arvalez_target_core::operation_input_type_names(v, sanitize_exported_identifier,
             &["Client", "ClientOptions", "RequestOptions", "RequestOption", "ErrorHandler", "APIError", "Nullable", "NewNullable", "Null", "WithRequestOptions", "SDKVersion"]))

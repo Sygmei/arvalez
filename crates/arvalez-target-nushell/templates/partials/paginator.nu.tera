@@ -1,0 +1,19 @@
+{%- set pg = op.attributes.arvalez_pagination -%}
+{%- set position_param = op.params | nth(n=pg.position_index) -%}
+{%- set size_param = op.params | nth(n=pg.size_index) -%}
+{% for helper in ["paginator", "collect"] %}
+# {% if helper == "paginator" %}Stream pages as records containing an items list.{% else %}Collect all items, failing if any page fails.{% endif %}
+export def "{{ _cmd }}-{{ helper }}" [
+{% for p in path_params %}    {{ p.identifier }}: {{ p.type_ref | nu_type }}
+{% endfor %}    --base-url: string = "{{ default_base_url }}"
+{% for p in flag_params %}{% if p.identifier != position_param.identifier %}    --{{ p.name | nu_cmd }}: {{ p.type_ref | nu_flag_type }}
+{% endif %}{% endfor %}{% if op.request_body %}    --body: any
+{% endif %}]: nothing -> list<any> {
+    let {{ op.pagination_spec_identifier }} = ({{ pg | json_encode | json_encode }} | from json)
+    arvalez-pagination-pages ${{ op.pagination_spec_identifier }} ${{ size_param.identifier }} {|{{ op.pagination_state_identifier }}|
+        let {{ position_param.identifier }} = {% if pg.settings.strategy == "cursor" %}${{ op.pagination_state_identifier }}.cursor{% else %}${{ op.pagination_state_identifier }}.position{% endif %}
+        let {{ size_param.identifier }} = ${{ op.pagination_state_identifier }}.size
+{% include "partials/request.nu.tera" %}
+    }{% if helper == "collect" %} | reduce --fold [] {|page, items| $items | append $page.items }{% endif %}
+}
+{% endfor %}

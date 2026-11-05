@@ -1,6 +1,10 @@
+{%- set pagination_enabled = operations | validate_pagination_helpers -%}
 from __future__ import annotations
 
 import warnings
+import json as _pagination_json
+from typing import Iterator, AsyncIterator
+from {{ package_name }} import _pagination as _arvalez_pagination_runtime
 from typing import Any, Never
 
 import httpx
@@ -9,6 +13,7 @@ import {{ package_name }}.models as models
 
 
 class ApiClient:
+{% include "partials/pagination_class.py.tera" %}
     def __init__(self, base_url: str, **kwargs: Any) -> None:
         self._client = httpx.Client(base_url=base_url, **kwargs)
 
@@ -106,4 +111,9 @@ class ApiClient:
         )
         response.raise_for_status()
         return response.json()
+{% if op.attributes.arvalez_pagination %}
+{% set pagination_mini = true %}
+{% set is_async = false %}
+{% include "partials/paginator.py.tera" %}
+{% endif %}
 {% endfor %}

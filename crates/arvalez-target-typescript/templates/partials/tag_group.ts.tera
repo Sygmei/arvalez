@@ -1,6 +1,10 @@
   readonly {{ tag_group.property_name }} = {
 {%- for binding in tag_group.bindings %}
     {{ binding.method_name }}: this.{{ binding.method_name }}.bind(this),
+{% if binding.paginated %}
+    {{ binding.method_name }}Paginator: this.{{ binding.method_name }}Paginator.bind(this),
+    {{ binding.method_name }}Collect: this.{{ binding.method_name }}Collect.bind(this),
+{% endif %}
     {{ binding.raw_method_name }}: this.{{ binding.raw_method_name }}.bind(this),
 {%- endfor %}
   };

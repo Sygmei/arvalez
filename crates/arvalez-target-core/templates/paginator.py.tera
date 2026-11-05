@@ -1,0 +1,24 @@
+{%- set pg = op.attributes.arvalez_pagination -%}
+{%- set position_param = op.params | nth(n=pg.position_index) -%}
+{%- set size_param = op.params | nth(n=pg.size_index) -%}
+{%- set py_name = op.name | py_id -%}
+{%- set item_type = pg.item_type | py_type(context="client_output") -%}
+{% for helper in ["paginator", "collect"] %}
+    {% if is_async and helper == "collect" %}async {% endif %}def {{ py_name }}_{{ helper }}(self, *{% for p in op.params %}{% if loop.index0 != pg.position_index %}, {{ p.identifier }}: {% if loop.index0 == pg.size_index %}int | None = None{% else %}{{ p.type_ref | py_type(context="client_input", attributes=p.attributes) }}{% if not p.required %} | None = None{% endif %}{% endif %}{% endif %}{% endfor %}{% if op.request_body %}, body: Any{% if not op.request_body.required %} = None{% endif %}{% endif %}{% if not pagination_mini %}, request_options: RequestOptions | None = None{% endif %}) -> {% if helper == "paginator" %}{% if is_async %}AsyncIterator{% else %}Iterator{% endif %}[list[{{ item_type }}]]{% else %}list[{{ item_type }}]{% endif %}:
+        """{% if helper == "paginator" %}Fetch pages lazily from the configured start, preserving filters.{% else %}Collect all items; any failed page raises an exception.{% endif %}"""
+{% if helper == "collect" %}
+        return {% if is_async %}await {% endif %}self._arvalez_pagination.collect{% if is_async %}_async{% endif %}(self.{{ py_name }}_paginator({% for p in op.params %}{% if loop.index0 != pg.position_index %}{{ p.identifier }}={{ p.identifier }}, {% endif %}{% endfor %}{% if op.request_body %}body=body, {% endif %}{% if not pagination_mini %}request_options=request_options{% endif %}))
+{% else %}
+        return self._arvalez_pagination.paginate{% if is_async %}_async{% endif %}(
+            self.{% if not pagination_mini %}_{% endif %}{{ py_name }}{% if not pagination_mini %}_raw{% endif %},
+            self._arvalez_pagination_specs[{{ op.id | json_encode }}],
+            { {% for p in op.params %}{% if loop.index0 != pg.position_index %}{{ p.identifier | json_encode }}: {{ p.identifier }}, {% endif %}{% endfor %}{% if op.request_body %}"body": body,{% endif %} },
+            {{ position_param.identifier | json_encode }}, {{ size_param.identifier | json_encode }}, self._arvalez_pagination_types[{{ op.id | json_encode }}],
+{% if pagination_mini %}
+            mini=True,
+{% else %}
+            request_options, self._on_error,
+{% endif %}
+        )
+{% endif %}
+{% endfor %}

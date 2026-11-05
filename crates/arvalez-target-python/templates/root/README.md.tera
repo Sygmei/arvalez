@@ -1,3 +1,14 @@
 # {{ package.name | replace(from="_", to="-") }}
 
 Generated Python SDK package.
+
+
+## Automatic pagination
+
+When configured, collection operations expose lazy paginator and collect helpers.
+They use the service pagination convention and per-operation overrides, including
+starting page/offset, default/maximum page size, and the termination rule. All
+filters and headers are retained. Collection fails if any page fails; use lazy
+paging for incremental processing and early stopping.
+
+Use `operation_paginator(...)` with `for` (sync) or `async for` (async). Each page is a typed item list. Use `operation_collect(...)` to collect everything, awaiting it on async clients.

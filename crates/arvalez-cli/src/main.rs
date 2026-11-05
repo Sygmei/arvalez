@@ -767,6 +767,7 @@ fn main() -> Result<()> {
                 target.resolve_template_dir(template_dir, config_file.common.template_dir.clone());
             let output = output_directory.unwrap_or_else(|| PathBuf::from("pythonmini-client"));
             let common = CommonConfig {
+                pagination: config_file.common.pagination.clone(),
                 package: arvalez_target_core::PackageConfig {
                     name: config::normalize_python_package_name(&target.resolve_package_name(
                         package_name,

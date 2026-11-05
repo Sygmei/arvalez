@@ -1,0 +1,98 @@
+{%- set op = op | go_operation(types=input_types) -%}
+{%- set pg = op.attributes.arvalez_pagination -%}
+{%- set position_field = op.input_fields | nth(n=pg.position_index) -%}
+{%- set size_field = op.input_fields | nth(n=pg.size_index) -%}
+{%- set method_name = op.name | go_exported -%}
+{%- set item_type = pg.item_type | go_type -%}
+// {{ method_name }}Paginator starts at the configured initial page/offset (or no cursor).
+// Pagination position inputs are managed internally. Page size comes from params,
+// then request options, falling back to the configured default. No request is made
+// until Next is called. The caller's params and request options are not modified.
+func (c *{{ receiver_type }}) {{ method_name }}Paginator(ctx context.Context, params *{{ op.params_type }}, opts ...RequestOption) *Paginator[{{ item_type }}] {
+    p := &Paginator[{{ item_type }}]{}
+    var inputs {{ op.params_type }}
+    if params != nil { inputs = *params }
+{% for field in op.input_fields %}
+{% if not field.optional and loop.index0 != pg.position_index and loop.index0 != pg.size_index %}
+    if params == nil { p.err = fmt.Errorf("{{ method_name }}: params are required"); return p }
+{% endif %}
+{% endfor %}
+    size := int64({{ pg.settings.default_page_size }})
+{% if size_field.pointer %}
+    if inputs.{{ size_field.field_name }} != nil { size = *inputs.{{ size_field.field_name }} }
+{% else %}
+    if inputs.{{ size_field.field_name }} != 0 { size = inputs.{{ size_field.field_name }} }
+{% endif %}
+    requestOptions := RequestOptions{}
+    if resolved := resolveRequestOptions(opts); resolved != nil { requestOptions = *resolved }
+    requestOptions.Headers = cloneHeaders(requestOptions.Headers)
+    requestOptions.Query = cloneQuery(requestOptions.Query)
+    requestOptions.Cookies = cloneCookies(requestOptions.Cookies)
+    if values, present := requestOptions.Query[{{ pg.size_name | go_string }}]; present {
+        if len(values) != 1 { p.err = fmt.Errorf("pagination: page size must have one value"); return p }
+        var err error
+        size, err = strconv.ParseInt(values[0], 10, 64)
+        if err != nil { p.err = fmt.Errorf("pagination: invalid page size: %w", err); return p }
+    }
+    if size <= 0 { p.err = fmt.Errorf("pagination: page size must be positive"); return p }
+{% if pg.settings.max_page_size %}
+    if size > {{ pg.settings.max_page_size }} { p.err = fmt.Errorf("pagination: page size exceeds maximum {{ pg.settings.max_page_size }}"); return p }
+{% endif %}
+    state := paginationState{
+        strategy: {{ pg.settings.strategy | go_string }}, stopKind: {{ pg.stop_kind | go_string }},
+        itemsPath: []string{ {% for token in pg.items_tokens %}{{ token | go_string }},{% endfor %} },
+        stopPath: []string{ {% for token in pg.stop_tokens %}{{ token | go_string }},{% endfor %} },
+        position: {{ pg.start }}, size: size, seen: map[string]bool{},
+{% if pg.settings.strategy == "offset" %}
+        consumed: {{ pg.start }},
+{% endif %}
+    }
+    p.next = func() ([]{{ item_type }}, bool, error) {
+        if err := ctx.Err(); err != nil { return nil, false, err }
+        requestOptions.Query.Set({{ pg.size_name | go_string }}, strconv.FormatInt(size, 10))
+{% if size_field.pointer %}
+        inputs.{{ size_field.field_name }} = &size
+{% else %}
+        inputs.{{ size_field.field_name }} = size
+{% endif %}
+{% if pg.settings.strategy == "cursor" %}
+        inputs.{{ position_field.field_name }} = nil
+        delete(requestOptions.Query, {{ pg.position_name | go_string }})
+        if state.cursor != "" {
+            inputs.{{ position_field.field_name }} = &state.cursor
+            requestOptions.Query.Set({{ pg.position_name | go_string }}, state.cursor)
+        }
+{% else %}
+{% if position_field.pointer %}
+        inputs.{{ position_field.field_name }} = &state.position
+{% else %}
+        inputs.{{ position_field.field_name }} = state.position
+{% endif %}
+        requestOptions.Query.Set({{ pg.position_name | go_string }}, strconv.FormatInt(state.position, 10))
+{% endif %}
+        response, err := c.execute{{ method_name }}(ctx, &inputs, &requestOptions)
+        if err != nil { return nil, false, err }
+        defer response.Body.Close()
+        if err := {{ client_expression }}.handleError(response, &requestOptions); err != nil { return nil, false, err }
+        var raw json.RawMessage
+        if err := {{ client_expression }}.decodeJSONResponse(response, &raw); err != nil { return nil, false, err }
+        value, err := paginationValue(raw, state.itemsPath, false)
+        if err != nil { return nil, false, err }
+        if value[0] != '[' { return nil, false, fmt.Errorf("pagination: items must be an array") }
+        var items []{{ item_type }}
+        if err := json.Unmarshal(value, &items); err != nil { return nil, false, err }
+        done, err := state.advance(raw, len(items))
+        return items, done, err
+    }
+    return p
+}
+
+// {{ method_name }}Collect collects every page. On any failure it returns nil
+// and the error; use the paginator to process pages incrementally instead.
+func (c *{{ receiver_type }}) {{ method_name }}Collect(ctx context.Context, params *{{ op.params_type }}, opts ...RequestOption) ([]{{ item_type }}, error) {
+    p := c.{{ method_name }}Paginator(ctx, params, opts...)
+    items := make([]{{ item_type }}, 0)
+    for p.Next() { items = append(items, p.Items()...) }
+    if err := p.Err(); err != nil { return nil, err }
+    return items, nil
+}

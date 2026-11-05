@@ -31,6 +31,8 @@ impl Default for TargetConfig {
 /// `.tera`, then expand `{var}` placeholders.  Templates under `partials/` are
 /// included by others and are never rendered directly to a file.
 pub const TEMPLATES: &[(&str, &str)] = &[
+    ("root/src/pagination.ts.tera", include_str!("../templates/root/src/pagination.ts.tera")),
+    ("partials/paginator.ts.tera", include_str!("../templates/partials/paginator.ts.tera")),
     ("root/package.json.tera",       include_str!("../templates/root/package.json.tera")),
     ("root/tsconfig.json.tera",      include_str!("../templates/root/tsconfig.json.tera")),
     ("root/README.md.tera",          include_str!("../templates/root/README.md.tera")),
@@ -47,6 +49,9 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ───────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
+    tera.register_filter("validate_pagination_helpers", |v: &Value, _: &HashMap<String, Value>| {
+        arvalez_target_core::validate_pagination_helper_names(v, sanitize_identifier, &["Paginator", "Collect"], &[]).map(Value::Bool)
+    });
     tera.register_filter("ts_input_types", |v: &Value, _: &HashMap<String, Value>| {
         Ok(arvalez_target_core::operation_input_type_names(v, sanitize_type_name, &["ApiClient", "ApiClientOptions", "RequestOptions", "ErrorHandler", "JsonValue"]))
     });
@@ -178,6 +183,7 @@ pub fn register_filters(tera: &mut Tera) {
                     groups.entry(tag).or_default().push(json!({
                         "method_name": method_name,
                         "raw_method_name": raw_method_name,
+                        "paginated": !op["attributes"][arvalez_target_core::PAGINATION].is_null(),
                     }));
                 }
             }

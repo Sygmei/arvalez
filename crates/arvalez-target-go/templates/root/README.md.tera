@@ -18,3 +18,20 @@ per-call settings. Raw methods return the HTTP response without decoding it.
 
 This calling convention replaces positional operation inputs from SDKs generated
 by Arvalez 1. See `params.go` for operation input types and `models.go` for bodies.
+
+{% if ir | go_validate_pagination %}
+## Automatic pagination
+
+Configured collection operations expose `OperationPaginator(ctx, params, opts...)`
+and `OperationCollect(ctx, params, opts...)` alongside the single-page method.
+Paginators start at the configured first page/offset or with no cursor. Page size
+comes from params or request options, falling back to the configured default;
+nonpositive sizes and sizes exceeding the configured maximum fail before a request.
+
+Call `Next()` to fetch a page, read its typed items with `Items()`, and check
+`Err()` after the loop. No request occurs until `Next()`. Filters, headers,
+cancellation, and error handlers are retained. Pagination position inputs are
+managed internally; the caller's params and request-option maps are not mutated.
+`Collect` returns all items, or nil and an error if any page fails. It keeps the
+entire result in memory; use the paginator for incremental processing.
+{% endif %}

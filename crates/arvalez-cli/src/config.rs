@@ -24,6 +24,8 @@ pub(crate) struct AppConfig {
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct AppCommonConfig {
     #[serde(default)]
+    pub(crate) pagination: arvalez_target_core::PaginationConfig,
+    #[serde(default)]
     pub(crate) models: arvalez_target_core::ModelPolicies,
     #[serde(default)]
     pub(crate) disabled: bool,
@@ -382,6 +384,7 @@ pub(crate) fn resolve_go_config(
     };
 
     let common_cfg = arvalez_target_core::CommonConfig {
+        pagination: common.pagination.clone(),
         package: arvalez_target_core::PackageConfig {
             name: package_name,
             version,
@@ -423,6 +426,7 @@ pub(crate) fn resolve_python_config(
     let effective_keyword_only = keyword_only || target.keyword_only;
 
     let common_cfg = CommonConfig {
+        pagination: common.pagination.clone(),
         package: PackageConfig {
             name: package_name,
             version,
@@ -457,6 +461,7 @@ pub(crate) fn resolve_typescript_config(
     let effective_group_by_tag = target.resolve_group_by_tag(group_by_tag, &common.output);
 
     let common_cfg = CommonConfig {
+        pagination: common.pagination.clone(),
         package: arvalez_target_core::PackageConfig {
             name: package_name,
             version,
@@ -498,6 +503,7 @@ pub(crate) fn resolve_nushell_config(
         .resolve_group_by_tag(group_by_tag, &common.output);
 
     let common_cfg = CommonConfig {
+        pagination: common.pagination.clone(),
         package: PackageConfig {
             name: package_name,
             version,
@@ -569,6 +575,7 @@ pub(crate) fn resolve_terraform_config(
         sdk_version
     };
     let common = CommonConfig {
+        pagination: config.common.pagination.clone(),
         package: PackageConfig {
             name: target.base.resolve_package_name(
                 overrides.package_name,

@@ -1,6 +1,10 @@
+{%- set pagination_enabled = operations | validate_pagination_helpers -%}
 from __future__ import annotations
 
 import warnings
+import json as _pagination_json
+from typing import Iterator, AsyncIterator
+from {{ package_name }} import _pagination as _arvalez_pagination_runtime
 from types import TracebackType
 from typing import Any, Never, Self
 from urllib.parse import quote
@@ -22,7 +26,9 @@ from {{ package_name }}.utils import (
 )
 
 
+{% set pagination_mini = false %}
 class _BaseApiClient:
+{% include "partials/pagination_class.py.tera" %}
     _on_error: ErrorHandler
     _validate_content_encodings: bool
 

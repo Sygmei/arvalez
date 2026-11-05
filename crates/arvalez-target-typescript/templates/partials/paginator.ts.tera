@@ -1,0 +1,40 @@
+{%- set operation = operation | ts_operation(types=input_types) -%}
+{%- set pg = operation.attributes.arvalez_pagination -%}
+{%- set pos = operation.input_fields | nth(n=pg.position_index) -%}
+{%- set size = operation.input_fields | nth(n=pg.size_index) -%}
+{%- set method = operation.name | ts_id -%}
+{%- set item = pg.item_type | ts_type -%}
+{%- set_global required_filters = false -%}
+{%- for field in operation.input_fields -%}
+{%- if field.required and loop.index0 != pg.position_index and loop.index0 != pg.size_index -%}
+{%- set_global required_filters = true -%}
+{%- endif -%}
+{%- endfor -%}
+  /** Fetch typed pages lazily from the configured starting position. */
+  {{ method }}Paginator(params: Omit<{{ operation.params_type }}, {{ pos.identifier | json_encode }} | {{ size.identifier | json_encode }}> & { {{ size.identifier }}?: number }{% if not required_filters %} = {}{% endif %}, requestOptions?: RequestOptions): AsyncGenerator<({{ item }})[], void, unknown> {
+    const inputs = {...params};
+    const spec = {{ pg | json_encode }};
+    return _arvalezPaginate<{{ item }}>(
+      spec, inputs.{{ size.identifier }}, requestOptions,
+      async (position, size, options) => {
+        const response = await this.{{ operation.name | ts_raw_method }}({
+          ...inputs, {{ pos.identifier }}: position as {% if pg.settings.strategy == "cursor" %}string | undefined{% else %}number{% endif %}, {{ size.identifier }}: size,
+        }, options);
+        try {
+          await handleError(response, this.onError, options);
+          return await response.json();
+        } finally {
+          if (response.body && !response.bodyUsed) await response.body.cancel();
+        }
+      },
+    );
+  }
+
+  /** Collect all items; any failed page rejects the promise. */
+  async {{ method }}Collect(params: Omit<{{ operation.params_type }}, {{ pos.identifier | json_encode }} | {{ size.identifier | json_encode }}> & { {{ size.identifier }}?: number }{% if not required_filters %} = {}{% endif %}, requestOptions?: RequestOptions): Promise<({{ item }})[]> {
+    const items: ({{ item }})[] = [];
+    for await (const page of this.{{ method }}Paginator(params, requestOptions)) {
+      for (const item of page) items.push(item);
+    }
+    return items;
+  }

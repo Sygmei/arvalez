@@ -34,6 +34,9 @@ impl Default for TargetConfig {
 /// then expand `{var}` placeholders.  Templates under `partials/` are included by
 /// others and are never rendered directly to a file.
 pub const TEMPLATES: &[(&str, &str)] = &[
+    ("partials/request.nu.tera", include_str!("../templates/partials/request.nu.tera")),
+    ("partials/paginator.nu.tera", include_str!("../templates/partials/paginator.nu.tera")),
+    ("partials/pagination_runtime.nu.tera", include_str!("../templates/partials/pagination_runtime.nu.tera")),
     ("root/README.md.tera", include_str!("../templates/root/README.md.tera")),
     ("root/mod.nu.tera", include_str!("../templates/root/mod.nu.tera")),
     ("root/client.nu.tera", include_str!("../templates/root/client.nu.tera")),
@@ -51,12 +54,25 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ──────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
+    tera.register_filter("validate_pagination_helpers", |v: &Value, _: &HashMap<String, Value>| {
+        arvalez_target_core::validate_pagination_helper_names(v, sanitize_command, &["-paginator", "-collect"], &["arvalez-pagination-pages", "arvalez-pagination-value"]).map(Value::Bool)
+    });
     tera.register_filter("nu_operation", |v: &Value, _: &HashMap<String, Value>| {
-        Ok(operation_with_identifiers(
+        let mut view = operation_with_identifiers(
             v,
             &["base_url", "path", "full_url", "query_parts", "headers", "body"],
             sanitize_variable,
-        ))
+        );
+        // Allocate paginator locals without renaming public flags.
+        for base in ["pagination_state", "pagination_spec"] {
+            let mut identifier = base.to_owned();
+            while view["params"].as_array().into_iter().flatten()
+                .any(|p| p["identifier"].as_str() == Some(identifier.as_str())) {
+                identifier.push('_');
+            }
+            view[format!("{base}_identifier")] = Value::String(identifier);
+        }
+        Ok(view)
     });
     // {{ type_ref | nu_type }} — TypeRef JSON → Nushell type annotation
     tera.register_filter("nu_type", |v: &Value, _: &HashMap<String, Value>| {
@@ -150,7 +166,7 @@ fn split_words(name: &str) -> Vec<String> {
     let mut words: Vec<String> = Vec::new();
     let mut current = String::new();
     for ch in name.chars() {
-        if ch == '_' || ch == '-' || ch == ' ' || ch == '.' {
+        if !ch.is_alphanumeric() {
             if !current.is_empty() {
                 words.push(current.to_lowercase());
                 current.clear();

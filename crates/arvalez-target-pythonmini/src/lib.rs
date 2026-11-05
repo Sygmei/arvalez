@@ -25,6 +25,9 @@ pub struct TargetConfig {}
 /// then expand `{var}` placeholders.  Templates under `partials/` are included by
 /// others and are never rendered directly to a file.
 pub const TEMPLATES: &[(&str, &str)] = &[
+    ("root/src/{package_name}/_pagination.py.tera", arvalez_target_core::PYTHON_PAGINATION_TEMPLATE),
+    ("partials/paginator.py.tera", arvalez_target_core::PYTHON_PAGINATOR_TEMPLATE),
+    ("partials/pagination_class.py.tera", arvalez_target_core::PYTHON_PAGINATION_CLASS_TEMPLATE),
     (
         "root/pyproject.toml.tera",
         include_str!("../templates/root/pyproject.toml.tera"),
@@ -50,6 +53,9 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ──────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
+    tera.register_filter("validate_pagination_helpers", |v: &Value, _: &HashMap<String, Value>| {
+        arvalez_target_core::validate_pagination_helper_names(v, |name| { let mut name = to_snake_identifier(name); if is_python_keyword(&name) { name.push('_'); } name }, &["_paginator", "_collect"], &["_arvalez_pagination", "_arvalez_pagination_specs", "_arvalez_pagination_types"]).map(Value::Bool)
+    });
     tera.register_filter("pymini_operation", |v: &Value, _: &HashMap<String, Value>| {
         Ok(operation_with_identifiers(
             v,
@@ -64,8 +70,9 @@ pub fn register_filters(tera: &mut Tera) {
         ))
     });
     // {{ type_ref | py_type }} — TypeRef JSON → Python type annotation
-    tera.register_filter("py_type", |v: &Value, _: &HashMap<String, Value>| {
-        Ok(Value::String(type_ref_to_py(v)))
+    tera.register_filter("py_type", |v: &Value, args: &HashMap<String, Value>| {
+        let prefix = if args.contains_key("context") { "models." } else { "" };
+        Ok(Value::String(type_ref_to_py_prefix(v, prefix)))
     });
     // {{ field | py_field_assignment(py_name=py_name) }} - field to default/alias suffix
     tera.register_filter(
@@ -192,7 +199,7 @@ fn py_literal(value: &Value) -> String {
 
 // ── TypeRef → Python type ─────────────────────────────────────────────────────
 
-fn type_ref_to_py(v: &Value) -> String {
+fn type_ref_to_py_prefix(v: &Value, prefix: &str) -> String {
     match v.get("kind").and_then(Value::as_str) {
         Some("primitive") => match v["name"].as_str().unwrap_or("any") {
             "string" => "str",
@@ -205,9 +212,9 @@ fn type_ref_to_py(v: &Value) -> String {
             _ => "Any",
         }
         .into(),
-        Some("named") => to_pascal_case(v["name"].as_str().unwrap_or("Any")),
-        Some("enum") => type_ref_to_py(&v["base"]),
-        Some("array") => format!("list[{}]", type_ref_to_py(&v["item"])),
+        Some("named") => format!("{prefix}{}", to_pascal_case(v["name"].as_str().unwrap_or("Any"))),
+        Some("enum") => type_ref_to_py_prefix(&v["base"], prefix),
+        Some("array") => format!("list[{}]", type_ref_to_py_prefix(&v["item"], prefix)),
         Some("tuple") => {
             let items = v
                 .get("items")
@@ -215,7 +222,7 @@ fn type_ref_to_py(v: &Value) -> String {
                 .map(|items| {
                     items
                         .iter()
-                        .map(type_ref_to_py)
+                        .map(|item| type_ref_to_py_prefix(item, prefix))
                         .collect::<Vec<_>>()
                         .join(", ")
                 })
@@ -226,11 +233,11 @@ fn type_ref_to_py(v: &Value) -> String {
                 .and_then(Value::as_str)
             {
                 Some("typed") if items.is_empty() => {
-                    format!("tuple[{}, ...]", type_ref_to_py(&v["rest"]["item"]))
+                    format!("tuple[{}, ...]", type_ref_to_py_prefix(&v["rest"]["item"], prefix))
                 }
                 Some("typed") => format!(
                     "tuple[{items}, *tuple[{}, ...]]",
-                    type_ref_to_py(&v["rest"]["item"])
+                    type_ref_to_py_prefix(&v["rest"]["item"], prefix)
                 ),
                 Some("any") if items.is_empty() => "tuple[Any, ...]".into(),
                 Some("any") => format!("tuple[{items}, *tuple[Any, ...]]"),
@@ -238,12 +245,12 @@ fn type_ref_to_py(v: &Value) -> String {
                 _ => format!("tuple[{items}]"),
             }
         }
-        Some("map") => format!("dict[str, {}]", type_ref_to_py(&v["value"])),
+        Some("map") => format!("dict[str, {}]", type_ref_to_py_prefix(&v["value"], prefix)),
         Some("union") => v["variants"]
             .as_array()
             .map(|vs| {
                 vs.iter()
-                    .map(type_ref_to_py)
+                    .map(|item| type_ref_to_py_prefix(item, prefix))
                     .collect::<Vec<_>>()
                     .join(" | ")
             })

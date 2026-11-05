@@ -15,3 +15,14 @@ defaults to `{}`. Omit an optional property to leave it unspecified; explicit
 This calling convention replaces positional operation inputs from SDKs generated
 by Arvalez 1. Input types are in `src/params.ts` and exported from the package index.
 Raw and tag-grouped methods use the same input objects.
+
+
+## Automatic pagination
+
+When configured, collection operations expose lazy paginator and collect helpers.
+They use the service pagination convention and per-operation overrides, including
+starting page/offset, default/maximum page size, and the termination rule. All
+filters and headers are retained. Collection fails if any page fails; use lazy
+paging for incremental processing and early stopping.
+
+Use `operationPaginator(...)` with `for await`. Each page is a typed item array. Await `operationCollect(...)` to collect everything. Both retain request options and abort signals.

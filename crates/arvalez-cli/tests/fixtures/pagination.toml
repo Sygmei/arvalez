@@ -1,0 +1,54 @@
+[common.package]
+name = "sdk"
+[common.pagination]
+strategy = "page"
+page_param = "query.page"
+page_size_param = "query.limit"
+default_page_size = 2
+max_page_size = 3
+items_path = "/items"
+total_pages_path = "/pages"
+
+[common.pagination.operations.PageZero]
+start_page = 0
+
+[common.pagination.operations.PageOne]
+
+
+[common.pagination.operations.TotalItems]
+total_items_path = "/total"
+
+[common.pagination.operations.LastPage]
+start_page = 0
+last_page_path = "/last"
+
+[common.pagination.operations.More]
+has_more_path = "/more"
+
+[common.pagination.operations.Short]
+stop_on = "short_page"
+
+[common.pagination.operations.Empty]
+stop_on = "empty_page"
+
+[common.pagination.operations.Offset]
+strategy = "offset"
+offset_param = "query.offset"
+start_offset = 2
+total_items_path = "/total"
+
+[common.pagination.operations.Cursor]
+strategy = "cursor"
+cursor_param = "query.cursor"
+next_cursor_path = "/next"
+
+[common.pagination.operations.Root]
+items_path = ""
+stop_on = "empty_page"
+
+[common.pagination.operations.Nested]
+items_path = "/a~1b/items"
+total_pages_path = "/a~1b/pages"
+
+[common.pagination.operations.Disabled]
+disabled = true

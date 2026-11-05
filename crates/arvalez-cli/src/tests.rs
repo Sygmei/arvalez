@@ -251,3 +251,49 @@ fn classifies_array_missing_items() {
         Some("#/definitions/DBResp/properties/Data")
     );
 }
+
+#[test]
+fn parses_pagination_defaults_and_operation_overrides() {
+    let config: AppConfig = toml::from_str(
+        r#"
+[common.pagination]
+strategy = "page"
+page_param = "query.page"
+page_size_param = "query.limit"
+start_page = 1
+default_page_size = 100
+max_page_size = 500
+items_path = "/items"
+total_pages_path = "/pages"
+[common.pagination.operations.GetAllEvents]
+start_page = 0
+default_page_size = 50
+max_page_size = 100
+[common.pagination.operations.GetAllCountries]
+disabled = true
+"#,
+    )
+    .unwrap();
+    let (common, _, _) = resolve_go_config(&config, None, None, None, false, None);
+    let events = common
+        .pagination
+        .defaults
+        .with_override(&common.pagination.operations["GetAllEvents"]);
+    assert_eq!(events.start_page, Some(0));
+    assert_eq!(events.max_page_size, Some(100));
+    assert_eq!(events.items_path.as_deref(), Some("/items"));
+    assert_eq!(
+        common.pagination.operations["GetAllCountries"].disabled,
+        Some(true)
+    );
+}
+
+#[test]
+fn rejects_unknown_pagination_settings() {
+    for input in [
+        "[common.pagination]\nstart_pgae = 0",
+        "[common.pagination.operations.GetAllEvents]\nmax_size = 10",
+    ] {
+        assert!(toml::from_str::<AppConfig>(input).is_err(), "{input}");
+    }
+}

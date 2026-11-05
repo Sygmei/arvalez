@@ -41,16 +41,13 @@ name = "acme_client"
 
 For APIs that always include every response field, `response_fields = "always_present"` makes response properties required and simplifies nullable types while preserving request models. See [response model policies](https://github.com/Sygmei/arvalez/wiki/Response-model-policies) before opting in.
 
+All client targets generate lazy paginators and collection helpers using service-wide pagination settings and per-operation overrides. See [automatic pagination](PAGINATION.md) for page, offset, and cursor configuration.
+
 ## Documentation
 
-The **[repository wiki](https://github.com/Sygmei/arvalez/wiki)** contains the detailed guides:
+The **[repository wiki](https://github.com/Sygmei/arvalez/wiki)** has two main sections:
 
-- [Getting started and Docker](https://github.com/Sygmei/arvalez/wiki/Getting-started)
-- [Per-language guides](https://github.com/Sygmei/arvalez/wiki/Languages)
-- [Configuration and overrides](https://github.com/Sygmei/arvalez/wiki/Configuration)
-- [Response model policies](https://github.com/Sygmei/arvalez/wiki/Response-model-policies)
-- [Template customization](https://github.com/Sygmei/arvalez/wiki/Templates)
-- [Terraform adapters](https://github.com/Sygmei/arvalez/wiki/Terraform-adapters)
-- [Development, tests, and releases](https://github.com/Sygmei/arvalez/wiki/Development)
+- **[Generate libraries with Arvalez](https://github.com/Sygmei/arvalez/wiki/Generating-libraries)** — installation, target configuration, [pagination settings](https://github.com/Sygmei/arvalez/wiki/Pagination-configuration), model policies, and templates.
+- **[Use generated libraries](https://github.com/Sygmei/arvalez/wiki/Using-generated-libraries)** — per-language installation, authentication, requests, [pagination helpers](https://github.com/Sygmei/arvalez/wiki/Pagination), errors, and testing.
 
 Upgrading generated Go or TypeScript clients from Arvalez 1? Follow the [Arvalez 2 migration guide](MIGRATION.md).

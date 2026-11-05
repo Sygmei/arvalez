@@ -475,3 +475,94 @@ fn rejects_missing_or_extra_path_parameter_declarations() {
     let error = generate_go_package(&ir, None, &default_common(), &TargetConfig::default()).unwrap_err();
     assert!(format!("{error:#}").contains("path {widget_id} not declared"));
 }
+
+fn pagination_fixture() -> (CoreIr, CommonConfig) {
+    let mut ir = sample_ir();
+    ir.operations.clear();
+    let mut page = arvalez_ir::Model::new("page", "Page");
+    page.fields = vec![
+        Field::new("items", TypeRef::array(TypeRef::named("Widget"))),
+        Field::new("pages", TypeRef::primitive("integer")),
+        Field::new("total", TypeRef::primitive("integer")),
+        Field::new("last", TypeRef::primitive("integer")),
+        Field::new("more", TypeRef::primitive("boolean")),
+        Field::new("next", TypeRef::primitive("string")),
+    ];
+    ir.models.push(page);
+    let mut nested = arvalez_ir::Model::new("nested", "Nested");
+    nested.fields.push(Field::new("a/b", TypeRef::named("Page")));
+    ir.models.push(nested);
+    let mut common = default_common();
+    for (name, extra) in [
+        ("PageZero", json!({"start_page":0})),
+        ("PageOne", json!({})),
+        ("TotalItems", json!({"total_items_path":"/total"})),
+        ("LastPage", json!({"start_page":0,"last_page_path":"/last"})),
+        ("More", json!({"has_more_path":"/more"})),
+        ("Short", json!({"stop_on":"short_page"})),
+        ("Empty", json!({"stop_on":"empty_page"})),
+        ("Offset", json!({"strategy":"offset","offset_param":"query.offset","start_offset":2,"total_items_path":"/total"})),
+        ("Cursor", json!({"strategy":"cursor","cursor_param":"query.cursor","next_cursor_path":"/next"})),
+        ("Root", json!({"items_path":"","stop_on":"empty_page"})),
+        ("Nested", json!({"items_path":"/a~1b/items","total_pages_path":"/a~1b/pages"})),
+    ] {
+        let defaults: arvalez_target_core::PaginationSettings = serde_json::from_value(json!({
+            "strategy":"page","page_param":"query.page","page_size_param":"query.limit",
+            "default_page_size":2,"max_page_size":3,"items_path":"/items","total_pages_path":"/pages"
+        })).unwrap();
+        common.pagination.operations.insert(name.into(), defaults.with_override(&serde_json::from_value(extra).unwrap()));
+        ir.operations.push(Operation {
+            id: format!("operation.{name}"), name: name.into(), path: format!("/{name}"),
+            params: ["page", "limit", "offset", "cursor", "filter"].into_iter().map(|field| Parameter {
+                name: field.into(), location: ParameterLocation::Query,
+                type_ref: TypeRef::primitive(if field == "cursor" || field == "filter" { "string" } else { "integer" }),
+                required: name == "PageOne" && (field == "page" || field == "limit"), attributes: Default::default(),
+            }).collect(),
+            responses: vec![Response { status: "200".into(), media_type: Some("application/json".into()),
+                type_ref: Some(match name {
+                    "Root" => TypeRef::array(TypeRef::named("Widget")),
+                    "Nested" => TypeRef::named("Nested"),
+                    _ => TypeRef::named("Page"),
+                }), attributes: Default::default() }],
+            attributes: Attributes::from([("tags".into(), json!(["widgets"]))]),
+            ..Default::default()
+        });
+    }
+    (ir, common)
+}
+
+#[test]
+fn generated_pagination_compiles_and_runs() {
+    let (ir, common) = pagination_fixture();
+    for grouped in [false, true] {
+        let dir = tempdir().unwrap();
+        let config = TargetConfig { group_by_tag: grouped, ..Default::default() };
+        let files = generate_go_package(&ir, None, &common, &config).unwrap();
+        write_go_package(dir.path(), &files).unwrap();
+        let tests = include_str!("pagination_test.go").replace("client.API.", if grouped { "client.Widgets." } else { "client." });
+        fs::write(dir.path().join("pagination_test.go"), tests).unwrap();
+        let files: Vec<_> = fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "go")).collect();
+        let output = Command::new("gofmt").arg("-w").args(files).output().expect("gofmt is required for pagination integration tests");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        for command in ["test", "vet"] {
+            let output = Command::new("go").args([command, "./..."]).current_dir(dir.path())
+                .env("GOCACHE", std::env::temp_dir().join("arvalez-pagination-go-cache"))
+                .output().expect("Go is required for pagination integration tests");
+            assert!(output.status.success(), "grouped={grouped} go {command}:\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}
+
+#[test]
+fn pagination_helper_collisions_fail_generation() {
+    let (mut ir, common) = pagination_fixture();
+    let mut collision = ir.operations[0].clone();
+    collision.name = "PageZeroCollect".into();
+    collision.id = "collision".into();
+    ir.operations.push(collision);
+    assert!(generate_go_package(&ir, None, &common, &TargetConfig::default()).is_err());
+    ir.operations.pop();
+    ir.models.push(arvalez_ir::Model::new("paginator", "Paginator"));
+    assert!(generate_go_package(&ir, None, &common, &TargetConfig::default()).is_err());
+}

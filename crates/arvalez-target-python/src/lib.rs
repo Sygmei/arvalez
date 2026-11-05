@@ -34,6 +34,9 @@ pub struct TargetConfig {
 // ── Templates ─────────────────────────────────────────────────────────────────
 
 pub const TEMPLATES: &[(&str, &str)] = &[
+    ("root/src/{package_name}/_pagination.py.tera", arvalez_target_core::PYTHON_PAGINATION_TEMPLATE),
+    ("partials/paginator.py.tera", arvalez_target_core::PYTHON_PAGINATOR_TEMPLATE),
+    ("partials/pagination_class.py.tera", arvalez_target_core::PYTHON_PAGINATION_CLASS_TEMPLATE),
     (
         "root/pyproject.toml.tera",
         include_str!("../templates/root/pyproject.toml.tera"),
@@ -83,6 +86,9 @@ pub const TEMPLATES: &[(&str, &str)] = &[
 // ── Tera filters ──────────────────────────────────────────────────────────────
 
 pub fn register_filters(tera: &mut Tera) {
+    tera.register_filter("validate_pagination_helpers", |v: &Value, _: &HashMap<String, Value>| {
+        arvalez_target_core::validate_pagination_helper_names(v, sanitize_identifier, &["_paginator", "_collect"], &["_arvalez_pagination", "_arvalez_pagination_specs", "_arvalez_pagination_types"]).map(Value::Bool)
+    });
     tera.register_filter("py_operation", |v: &Value, _: &HashMap<String, Value>| {
         Ok(operation_with_identifiers(
             v,

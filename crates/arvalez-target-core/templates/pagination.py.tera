@@ -1,0 +1,157 @@
+"""Shared pagination mechanics for generated Python clients."""
+from __future__ import annotations
+from typing import Any, AsyncIterator, Iterator
+from pydantic import TypeAdapter
+
+
+def _value(payload: Any, tokens: list[str], optional: bool = False) -> Any:
+    for token in tokens:
+        if payload is None and optional:
+            return None
+        if isinstance(payload, dict):
+            if token not in payload:
+                if optional:
+                    return None
+                raise ValueError(f"pagination: missing response path {tokens}")
+            payload = payload[token]
+        elif isinstance(payload, list) and token.isdecimal() and int(token) < len(payload):
+            payload = payload[int(token)]
+        else:
+            raise ValueError(f"pagination: cannot traverse response path {tokens}")
+    if payload is None and not optional:
+        raise ValueError(f"pagination: null response value at {tokens}")
+    return payload
+
+
+class _State:
+    def __init__(self, spec: dict[str, Any], size: Any):
+        self.spec = spec
+        if size is None:
+            size = spec["settings"]["default_page_size"]
+        if isinstance(size, str) and size.isdecimal():
+            size = int(size)
+        if type(size) is not int or size <= 0:
+            raise ValueError("pagination: page size must be a positive integer")
+        maximum = spec["settings"]["max_page_size"]
+        if maximum is not None and size > maximum:
+            raise ValueError(f"pagination: page size exceeds maximum {maximum}")
+        self.size = size
+        self.position = spec["start"]
+        self.cursor = None
+        self.pages = 0
+        self.consumed = self.position if spec["settings"]["strategy"] == "offset" else 0
+        self.seen: set[str] = set()
+
+    def advance(self, payload: Any, count: int) -> bool:
+        self.pages += 1
+        self.consumed += count
+        kind = self.spec["stop_kind"]
+        if kind == "empty_page":
+            done = count == 0
+        elif kind == "short_page":
+            done = count < self.size
+        else:
+            value = _value(payload, self.spec["stop_tokens"], kind == "cursor")
+            if kind == "cursor":
+                if value is not None and not isinstance(value, str):
+                    raise ValueError("pagination: next cursor must be a string")
+                done = value is None or value == ""
+                if not done and value in self.seen:
+                    raise ValueError("pagination: repeated cursor")
+                if not done:
+                    self.seen.add(value)
+                self.cursor = value
+            elif kind == "has_more":
+                if type(value) is not bool:
+                    raise ValueError("pagination: has_more must be a boolean")
+                done = not value
+            else:
+                if type(value) is not int or value < 0:
+                    raise ValueError(f"pagination: {kind} must be a nonnegative integer")
+                done = {"total_pages": self.pages, "total_items": self.consumed,
+                        "last_page": self.position}[kind] >= value
+        if not done and self.spec["settings"]["strategy"] != "cursor":
+            if count == 0:
+                raise ValueError("pagination: empty page but termination signal indicates more results")
+            self.position += count if self.spec["settings"]["strategy"] == "offset" else 1
+        return done
+
+
+def _setup(spec: dict[str, Any], kwargs: dict[str, Any], position_arg: str, size_arg: str,
+           options: dict[str, Any] | None):
+    kwargs = dict(kwargs)
+    copied = dict(options or {})
+    for key in ("params", "headers", "cookies", "extensions", "extra"):
+        if key in copied:
+            copied[key] = dict(copied[key])
+    query = copied.setdefault("params", {})
+    size = query.get(spec["size_name"], kwargs.pop(size_arg, None))
+    state = _State(spec, size)
+    # Position is always owned by the paginator, including request-option overrides.
+    query.pop(spec["position_name"], None)
+    query[spec["size_name"]] = state.size
+    kwargs[size_arg] = state.size
+    return state, kwargs, copied
+
+
+def _page_kwargs(state: _State, kwargs: dict[str, Any], position_arg: str) -> dict[str, Any]:
+    kwargs[position_arg] = state.cursor if state.spec["settings"]["strategy"] == "cursor" else state.position
+    return kwargs
+
+
+def _items(state: _State, payload: Any, adapter: TypeAdapter):
+    items = _value(payload, state.spec["items_tokens"])
+    if not isinstance(items, list):
+        raise ValueError("pagination: items must be an array")
+    parsed = adapter.validate_python(items)
+    return parsed, state.advance(payload, len(items))
+
+
+def paginate(fetch: Any, spec: dict[str, Any], kwargs: dict[str, Any], position_arg: str,
+             size_arg: str, item_type: Any, options: dict[str, Any] | None = None,
+             error_handler: Any = None, *, mini: bool = False) -> Iterator[list[Any]]:
+    state, kwargs, options = _setup(spec, kwargs, position_arg, size_arg, options)
+    adapter = TypeAdapter(list[item_type])
+    while True:
+        call = dict(_page_kwargs(state, kwargs, position_arg))
+        if mini:
+            payload = fetch(**call)
+        else:
+            response = fetch(**call, request_options=options)
+            try:
+                if response.is_error:
+                    (options.get("on_error") or error_handler)(response)
+                payload = response.json()
+            finally:
+                response.close()
+        items, done = _items(state, payload, adapter)
+        yield items
+        if done:
+            return
+
+
+async def paginate_async(fetch: Any, spec: dict[str, Any], kwargs: dict[str, Any], position_arg: str,
+                         size_arg: str, item_type: Any, options: dict[str, Any] | None = None,
+                         error_handler: Any = None) -> AsyncIterator[list[Any]]:
+    state, kwargs, options = _setup(spec, kwargs, position_arg, size_arg, options)
+    adapter = TypeAdapter(list[item_type])
+    while True:
+        response = await fetch(**_page_kwargs(state, kwargs, position_arg), request_options=options)
+        try:
+            if response.is_error:
+                (options.get("on_error") or error_handler)(response)
+            payload = response.json()
+        finally:
+            await response.aclose()
+        items, done = _items(state, payload, adapter)
+        yield items
+        if done:
+            return
+
+
+def collect(pages: Iterator[list[Any]]) -> list[Any]:
+    return [item for page in pages for item in page]
+
+
+async def collect_async(pages: AsyncIterator[list[Any]]) -> list[Any]:
+    return [item async for page in pages for item in page]

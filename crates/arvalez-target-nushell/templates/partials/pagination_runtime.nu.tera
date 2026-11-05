@@ -1,0 +1,63 @@
+def arvalez-pagination-value [payload: any, tokens: list<string>, optional: bool] {
+    mut value = $payload
+    for token in $tokens {
+        if $value == null and $optional { return null }
+        let kind = ($value | describe)
+        if ($kind | str starts-with 'record') {
+            if not ($token in ($value | columns)) {
+                if $optional { return null }
+                error make {msg: 'pagination: missing response path'}
+            }
+            $value = ($value | get $token)
+        } else if (($kind | str starts-with 'list') or ($kind | str starts-with 'table')) {
+            let index = ($token | into int)
+            if $index < 0 or $index >= ($value | length) { error make {msg: 'pagination: invalid array index'} }
+            $value = ($value | get $index)
+        } else { error make {msg: 'pagination: cannot traverse response path'} }
+    }
+    if $value == null and not $optional { error make {msg: 'pagination: null response value'} }
+    $value
+}
+
+def arvalez-pagination-pages [spec: record, requested_size: any, fetch_page: closure] {
+    let size = if $requested_size == null { $spec.settings.default_page_size } else { $requested_size }
+    if ($size | describe) != 'int' or $size <= 0 { error make {msg: 'pagination: page size must be a positive integer'} }
+    if $spec.settings.max_page_size != null and $size > $spec.settings.max_page_size { error make {msg: 'pagination: page size exceeds maximum'} }
+    let initial = {position: $spec.start, cursor: null, pages: 0, consumed: (if $spec.settings.strategy == 'offset' { $spec.start } else { 0 }), seen: [], size: $size}
+    generate {|previous|
+        mut state = $previous
+        let payload = (do $fetch_page $state)
+        let items = (arvalez-pagination-value $payload $spec.items_tokens false)
+        let kind = ($items | describe)
+        if not (($kind | str starts-with 'list') or ($kind | str starts-with 'table')) { error make {msg: 'pagination: items must be an array'} }
+        let count = ($items | length)
+        $state.pages = $state.pages + 1
+        $state.consumed = $state.consumed + $count
+        let stop = $spec.stop_kind
+        mut done = false
+        if $stop == 'empty_page' { $done = $count == 0 } else if $stop == 'short_page' { $done = $count < $size } else {
+            let value = (arvalez-pagination-value $payload $spec.stop_tokens ($stop == 'cursor'))
+            if $stop == 'cursor' {
+                if $value != null and ($value | describe) != 'string' { error make {msg: 'pagination: invalid next cursor'} }
+                $done = $value == null or $value == ''
+                if not $done {
+                    if $value in $state.seen { error make {msg: 'pagination: repeated cursor'} }
+                    $state.seen = ($state.seen | append $value)
+                    $state.cursor = $value
+                }
+            } else if $stop == 'has_more' {
+                if ($value | describe) != 'bool' { error make {msg: 'pagination: has_more must be a boolean'} }
+                $done = not $value
+            } else {
+                if ($value | describe) != 'int' or $value < 0 { error make {msg: 'pagination: termination value must be a nonnegative integer'} }
+                let progress = if $stop == 'total_pages' { $state.pages } else if $stop == 'total_items' { $state.consumed } else { $state.position }
+                $done = $progress >= $value
+            }
+        }
+        if not $done and $spec.settings.strategy != 'cursor' {
+            if $count == 0 { error make {msg: 'pagination: empty page but termination signal indicates more results'} }
+            $state.position = $state.position + (if $spec.settings.strategy == 'offset' { $count } else { 1 })
+        }
+        if $done { {out: {items: $items}} } else { {out: {items: $items}, next: $state} }
+    } $initial
+}

@@ -431,6 +431,14 @@ pub fn prepare_generation_ir(
     identifier: fn(&str) -> String,
 ) -> Result<CoreIr> {
     let mut prepared = prepare_response_models(ir, &common.models, target, identifier)?;
+    let pagination = crate::resolve_pagination(&prepared, &common.pagination)?;
+    for op in &mut prepared.operations {
+        // Metadata is derived from configuration, never trusted from source IR.
+        op.attributes.remove(crate::PAGINATION);
+        if let Some(resolved) = pagination.get(&op.id) {
+            op.attributes.insert(crate::PAGINATION.into(), serde_json::to_value(resolved)?);
+        }
+    }
     if common.skip_deprecated_operations {
         prepared
             .operations

@@ -110,3 +110,7 @@
 {%- else %}
         return parse_response(response, response_encoding={% if ret.content_encoding %}"{{ ret.content_encoding }}"{% else %}None{% endif %}, default_validate_content_encodings=self._validate_content_encodings, request_options=request_options)
 {%- endif %}
+
+{% if op.attributes.arvalez_pagination %}
+{% include "partials/paginator.py.tera" %}
+{% endif %}
