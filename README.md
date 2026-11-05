@@ -1,447 +1,55 @@
-# arvalez
+# Arvalez
 
-Modern OpenAPI client generator with a compiler-style core and typed IR.
+Generate typed API clients from OpenAPI, with shared configuration and customizable templates.
 
-## Current Scope
+| Target | Generated code |
+| --- | --- |
+| Go | Typed models and a `net/http` client |
+| TypeScript | Typed models and a `fetch` client |
+| Python | Pydantic models and sync/async `httpx` clients |
+| PythonMini | A compact Python client and Pydantic models |
+| Nushell | Client commands and model constructors |
+| Terraform | Opt-in adapters for Arvalez Go SDKs |
 
-This first implementation slice focuses on the OpenAPI importer and the target backends:
+## Quick start
 
-- shared IR types in Rust
-- a first Python backend that emits Pydantic models plus sync and async `httpx` clients
-- a first TypeScript backend that emits typed models plus a `fetch`-based client
-- a first Go backend that emits typed models plus a `net/http` client
-
-The OpenAPI importer is in place, and the generator can emit Python, TypeScript, and Go packages from `openapi.json`.
-
-## Named operation inputs
-
-Arvalez 2 generates TypeScript input objects and Go input structs:
-
-```ts
-await client.getWidget({ widgetId: 'abc', page: 0 });
-```
-
-```go
-params := (&sdk.GetWidgetParams{WidgetID: "abc"}).WithPage(0)
-widget, err := client.GetWidget(ctx, params)
-```
-
-Required Go fields are plain values; optional setters preserve explicit zero
-values without pointer helpers. Nullable model fields additionally support
-`WithXNull()`, and `WithoutX()` clears optional fields. Transport settings remain
-separate from API inputs. Python calling conventions are unchanged.
-
-This is a breaking change to generated Go and TypeScript SDKs. See the
-[migration guide](MIGRATION.md) for call-site changes, omission/null semantics,
-custom template changes, and downstream versioning.
-
-## Workspace Layout
-
-- `crates/arvalez-ir`: shared IR and validation
-- `crates/arvalez-openapi`: OpenAPI document loader and Core IR mapper
-- `crates/arvalez-target-go`: Go SDK generator
-- `crates/arvalez-target-python`: Python SDK generator
-- `crates/arvalez-target-typescript`: TypeScript SDK generator
-- `crates/arvalez-cli`: local CLI for inspecting IR and generating SDKs
-
-## Build
-
-Build Core IR from the local OpenAPI document:
+Install with Cargo, or download a [prebuilt binary](https://github.com/Sygmei/arvalez/releases):
 
 ```bash
-cargo run -p arvalez-cli -- build-ir --openapi openapi.json
+cargo install arvalez-cli --locked
+arvalez-cli generate --openapi openapi.json --output-directory generated
 ```
 
-Add `--timings` to print a per-phase breakdown for import and generation work:
+The aggregate command generates Go, TypeScript, Python, and Nushell clients. Terraform is opt-in; PythonMini uses `generate-python-mini`. To generate one target:
 
 ```bash
-cargo run -p arvalez-cli -- generate --openapi openapi.json --output-directory generated --timings
+arvalez-cli generate-go --openapi openapi.json --output-directory generated/go-client
 ```
 
-Generate a Python SDK package:
-
-```bash
-cargo run -p arvalez-cli -- generate-python --openapi openapi.json --output-directory generated/python-client
-```
-
-Generate a TypeScript SDK package:
-
-```bash
-cargo run -p arvalez-cli -- generate-typescript --openapi openapi.json --output-directory generated/typescript-client
-```
-
-Generate a Go SDK package:
-
-```bash
-cargo run -p arvalez-cli -- generate-go --openapi openapi.json --output-directory generated/go-client
-```
-
-The generators also read optional settings from `arvalez.toml`:
+Optional settings live in `arvalez.toml`:
 
 ```toml
-[common.output]
-directory = "generated"
-group_by_tag = true
-skip_deprecated_operations = false
-
 [common.package]
-name = "arvalez-client"
 version = "1.0.0"
 
 [target.go]
 module_path = "github.com/acme/client"
 
-[target.go.package]
-name = "client"
-version = "1.0.0"
-
-[target.python]
-template_dir = "./templates/python"
-# Keep operation parameters positional unless explicitly enabled.
-keyword_only = false
-
 [target.python.package]
-name = "arvalez_client"
-version = "1.0.1"
-
-[target.python.output]
-skip_deprecated_operations = true
-
-[target.typescript]
-template_dir = "./templates/typescript"
-
-[target.typescript.package]
-name = "@arvalez/client"
-version = "1.0.2"
+name = "acme_client"
 ```
 
-### Always-present response fields
+For APIs that always include every response field, `response_fields = "always_present"` makes response properties required and simplifies nullable types while preserving request models. See [response model policies](https://github.com/Sygmei/arvalez/wiki/Response-model-policies) before opting in.
 
-For services that return every declared response property (using JSON `null`
-where appropriate), enable a response-only model policy:
+## Documentation
 
-```toml
-[common.models]
-response_fields = "always_present"
+The **[repository wiki](https://github.com/Sygmei/arvalez/wiki)** contains the detailed guides:
 
-# A different default for one language.
-[target.typescript.models]
-response_fields = "schema"
+- [Getting started and Docker](https://github.com/Sygmei/arvalez/wiki/Getting-started)
+- [Configuration and overrides](https://github.com/Sygmei/arvalez/wiki/Configuration)
+- [Response model policies](https://github.com/Sygmei/arvalez/wiki/Response-model-policies)
+- [Template customization](https://github.com/Sygmei/arvalez/wiki/Templates)
+- [Terraform adapters](https://github.com/Sygmei/arvalez/wiki/Terraform-adapters)
+- [Development, tests, and releases](https://github.com/Sygmei/arvalez/wiki/Development)
 
-# A model exception across languages.
-[common.models.overrides.PartialResult]
-response_fields = "schema"
-
-# A model exception for one language.
-[target.go.models.overrides.PartialResult]
-response_fields = "always_present"
-```
-
-`schema` is the default and preserves existing generation. `always_present`
-makes declared response properties required without changing which properties
-allow null. It applies to success, error, and default responses, including nested
-models. Requests, map keys, and collection-element nullability are unaffected.
-
-Precedence is **target model override > common model override > target default >
-common default > `schema`**. Model keys are exact original IR names (normally
-OpenAPI schema names), before language sanitization or response suffixes. A model
-override affects only its own fields; each nested model resolves its own policy.
-Unknown model names and invalid policy values are errors.
-
-All language targets support the policy, including `[target.pythonmini.models]`
-for `generate-python-mini --config arvalez.toml`. Go uses pointers for nullable
-scalar/object fields and native nil-capable collection types, with no `omitempty`
-on affected fields. TypeScript removes optional property markers. Python and
-PythonMini produce required Pydantic fields without defaults, retaining `None`
-only for nullable fields. Nushell produces required constructor arguments and
-accepts null for nullable fields.
-
-Response-exclusive types retain their names. Shared request/response models are
-split only where necessary: the original remains the request type and a
-`<Name>Response` variant represents the response. Numeric suffixes resolve name
-collisions. Parent variants can be needed when only a nested model changes.
-
-The policy trusts the API contract rather than adding a new presence validator.
-Go still accepts unexpectedly missing properties as zero values or nil;
-TypeScript adds no runtime validation. Python's existing Pydantic validation
-rejects missing required response fields, including fields with schema defaults.
-
-Terraform automatically follows the resolved **Go** policy, including overrides,
-even when only adapters are generated. Do not configure a separate Terraform
-response policy. Existing `[target.terraform.models.<Model>.fields...]` settings
-remain adapter-specific; source-model settings are inherited by response variants,
-with explicit variant field settings taking precedence. Terraform null/unknown
-handling and schema lifecycle roles are unchanged. Regenerate the Go SDK and its
-adapters together after changing policy.
-
-For direct Rust library calls, supply the resolved policy in `CommonConfig.models`:
-
-```rust,ignore
-let common = CommonConfig {
-    models: ModelPolicies::resolve(&common_policies, &target_policies),
-    ..Default::default()
-};
-```
-
-`CommonConfig.skip_deprecated_operations` filters emitted operations after model
-projection, keeping model naming consistent with Terraform adapters. Existing
-Rust struct literals for `CommonConfig` can use `..Default::default()` for the
-new fields. Opting in changes generated public types; existing configurations
-that omit model policies preserve their previous behavior.
-
-### Output versions
-
-Override the configured output version from the CLI:
-
-```bash
-cargo run -p arvalez-cli -- generate-python --openapi openapi.json --output-directory generated/python-client --output-version 2.3.4
-```
-
-Generate all enabled backends into one output root:
-
-```bash
-cargo run -p arvalez-cli -- generate --openapi openapi.json --output-directory generated
-```
-
-Run the APIs.guru corpus as an on-demand generation test:
-
-```bash
-cargo run -p arvalez-cli -- test-apis-guru --report-directory reports/apis-guru
-```
-
-By default this command clones `APIs-guru/openapi-directory`, discovers every `openapi.json`, `openapi.yaml`, `swagger.json`, and `swagger.yaml`, and runs generation for each spec. Generated outputs go to a temporary directory unless you pass `--output-directory`, so the repository stays slim.
-The checkout is cached under `.arvalez/corpus/openapi-directory/` in the current workspace and refreshed on later runs, so you do not pay the full clone cost every time.
-Reports are written into the chosen directory only as timestamped JSON files like `apis-guru-1774593522.json`.
-The report dashboard is now a SvelteKit app in [web/corpus-dashboard](/Users/sygmei/Projects/arvalez/web/corpus-dashboard). It serves the report directory through a small local server, watches for new report JSON files, and updates the UI in real time.
-For local dashboard development, run `npm install` once in `web/corpus-dashboard/`, then:
-
-```bash
-REPORT_DIRECTORY=/absolute/path/to/reports/apis-guru npm run dev
-```
-
-If `REPORT_DIRECTORY` is not set, the app defaults to `../../reports/apis-guru` relative to `web/corpus-dashboard/`.
-Use `--jobs N` to control spec-level parallelism; by default Arvalez uses the machine's available parallelism.
-Pass `--ui` on a local terminal to get a live `ratatui` dashboard with progress, active specs, and recent completions. Press `q` to hide the UI and fall back to plain progress lines while the run continues.
-
-Disable a backend from the CLI:
-
-```bash
-cargo run -p arvalez-cli -- generate --openapi openapi.json --output-directory generated --no-typescript
-```
-
-Disable a backend from config:
-
-```toml
-[target.typescript]
-disabled = true
-
-[target.typescript.package]
-name = "@arvalez/client"
-```
-
-The Go backend also supports bundled default Tera templates with selective overrides:
-
-```bash
-cargo run -p arvalez-cli -- generate-go --openapi openapi.json --template-dir ./templates/go
-```
-
-Supported override names are:
-
-- `root/go.mod.tera`
-- `root/README.md.tera`
-- `root/models.go.tera`
-- `root/params.go.tera`
-- `root/client.go.tera`
-- `root/utils.go.tera`
-- `partials/input_setters.go.tera`
-- `partials/model_struct.go.tera`
-- `partials/service.go.tera`
-- `partials/client_method.go.tera`
-- `partials/array_parameter.go.tera`
-
-When `group_by_tag = true`, tagged operations are grouped under subclients. For example, Python becomes `client.ingredients.create_ingredient(...)` and TypeScript becomes `client.ingredients.createIngredient(...)`. Operations without tags stay on the root client, and multi-tag operations use the first tag.
-
-Shared settings in `[common.output]` and `[common.package]` act as defaults, and `[target.python.output]` / `[target.typescript.output]` / `[target.go.output]` can override output settings per target. That includes `group_by_tag`, `skip_deprecated_operations`, output directories, and package metadata such as `version`. Python operation parameters are positional by default; set `[target.python].keyword_only = true` or pass `--keyword-only` to `generate-python` to require keyword arguments. CLI flags like `--output-version` override config values.
-
-Override only selected Python templates:
-
-```bash
-cargo run -p arvalez-cli -- generate-python --openapi openapi.json --template-dir ./templates/python
-```
-
-The Python backend ships with bundled default Tera templates inside the binary. Override files are optional and can be provided selectively. Supported override names are:
-
-- `package/pyproject.toml.tera`
-- `package/README.md.tera`
-- `package/__init__.py.tera`
-- `package/models.py.tera`
-- `package/client.py.tera`
-- `partials/model_class.py.tera`
-- `partials/client_class.py.tera`
-- `partials/client_method.py.tera`
-
-To **suppress** a default output file entirely, place an empty file whose name starts with `~` in the same directory as the template it targets. For example, placing `package/~pyproject.toml.tera` in your template directory will prevent `pyproject.toml` from being generated at all.
-
-Override only selected TypeScript templates:
-
-```bash
-cargo run -p arvalez-cli -- generate-typescript --openapi openapi.json --template-dir ./templates/typescript
-```
-
-The TypeScript backend also ships with bundled default Tera templates inside the binary. Supported override names are:
-
-- `root/package.json.tera`
-- `root/tsconfig.json.tera`
-- `root/README.md.tera`
-- `root/src/models.ts.tera`
-- `root/src/params.ts.tera`
-- `root/src/client.ts.tera`
-- `root/src/utils.ts.tera`
-- `root/src/index.ts.tera`
-- `partials/model_interface.ts.tera`
-- `partials/client_method.ts.tera`
-- `partials/tag_group.ts.tera`
-
-Inspect the raw fixture IR:
-
-```bash
-cargo run -p arvalez-cli -- inspect-ir
-```
-
-## Docker
-
-Build a container image with the precompiled CLI:
-
-```bash
-docker build -t arvalez .
-```
-
-Run the bundled tool against files mounted from the current workspace:
-
-```bash
-docker run --rm -v "$PWD:/work" -w /work arvalez build-ir --openapi openapi.json
-```
-
-Generate a Python SDK from inside the container:
-
-```bash
-docker run --rm -v "$PWD:/work" -w /work arvalez generate-python --openapi openapi.json --output-directory generated/python-client
-```
-
-`Dockerfile.apiclient` validates `OPENAPI_DOCUMENT` with Redocly CLI's `spec`
-ruleset before any SDK generation stage runs.
-
-## Releases
-
-Publishing a GitHub release triggers `.github/workflows/release.yml`, which:
-
-- checks that the release tag matches the workspace version in `Cargo.toml`
-- uploads prebuilt `arvalez-cli` binaries for Windows, macOS, and Linux on x86 and arm64 targets
-- builds and pushes the multi-arch `arvalez/cli` image to Docker Hub
-- publishes the Rust crates to crates.io in dependency order
-
-The workflow expects these GitHub repository secrets:
-
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`
-- `CARGO_REGISTRY_TOKEN`
-
-Set up `pre-commit` once after cloning:
-
-```bash
-pre-commit install
-```
-
-The `pre-commit` config keeps internal workspace dependency versions aligned with the workspace version and regenerates `Cargo.lock` whenever Cargo manifests are part of the commit.
-
-## Terraform adapters for Go SDKs
-
-The opt-in Terraform target generates a separate Go module importing an existing
-Arvalez Go SDK. Microservice authors maintain their normal OpenAPI contract and
-SDK; provider builders own the Terraform configuration and adapter module. The
-SDK has no Terraform dependency and requires no Terraform-specific annotations.
-
-```toml
-[common.package]
-version = "2.0.0"
-
-[target.terraform]
-module_path = "github.com/acme/orchestrator-tfmodels"
-sdk_module_path = "github.com/acme/orchestrator-client/v2"
-# sdk_version = "current" # default; uses the Go SDK's configured version
-# sdk_import_path defaults to sdk_module_path; set it for an SDK subpackage.
-
-[target.terraform.package]
-name = "tfmodels"
-
-# Provider authors can optionally force JSON for an otherwise typed field.
-[target.terraform.models.Widget.fields.child]
-representation = "json"
-
-[target.terraform.models.Widget.fields.displayName]
-name = "display_name"
-null_behavior = "explicit_null" # requires an optional nullable SDK field
-```
-
-```sh
-cargo run -p arvalez-cli -- generate-terraform --openapi openapi.json
-cargo run -p arvalez-cli -- dump-templates --target terraform
-```
-
-Output defaults to `generated/terraform`. The aggregate `generate` command only
-includes this target when `[target.terraform]` exists and is enabled;
-`--no-terraform` disables it. The dedicated command also accepts
-`--module-path`, `--sdk-module-path`, `--sdk-version`, `--sdk-import-path`,
-`--package-name`, `--output-directory`, and `--template-dir` overrides.
-Module paths are required. `sdk_version` defaults to `"current"`, resolving from
-`--output-version`, then `[target.go.package].version`, then
-`[common.package].version`, then `0.1.0`. A missing `v` prefix is added, and the
-generated `go.mod` contains a concrete version. The adapter's own
-`[target.terraform.package].version` does not change this SDK dependency.
-Set `sdk_version = "v2.0.0"` (or `--sdk-version v2.0.0`) to pin a different SDK
-release. `current` does not query a registry or select an unpublished local SDK;
-use `go work` for local development. Generate adapters from the
-same specification and Arvalez version as the standard Go SDK.
-
-For each object `Widget`, the module provides `WidgetModel` and two conversion
-pairs: `WidgetModelFromAPI` / `WidgetModelToAPI` for tagged structs, and
-`WidgetValueFromAPI` / `WidgetValueToAPI` for native `types.Object` values.
-Named enums have both pairs using their scalar framework types. Both pairs
-return diagnostics and share conversion rules. Nil SDK pointers become nil
-models or typed null values; typed null values convert back to nil SDK pointers.
-The old `WidgetFromAPI` / `WidgetToAPI` names are replaced by the `Model` pair.
-
-Objects also provide `WidgetAttributeTypes`, `WidgetResourceAttributes`, and
-`WidgetDataSourceAttributes`. Schema helpers default every field to Computed; provider authors
-configure input roles and nested field options in Go through `SchemaOptions`.
-They can add their own validators and plan modifiers to the returned schemas.
-
-Adapters preserve zero values and handle nullable SDK wrappers explicitly.
-Unknown outbound values produce path-specific diagnostics. Optional API fields
-are omitted on Terraform null unless an optional nullable field opts into
-explicit JSON null. API omission and API null both become Terraform null, so
-conversion does not promise lossless preservation of that distinction.
-
-Unions, free-form values, tuples, and fields participating in recursive model
-cycles automatically use JSON strings. Collections containing unsupported types
-use JSON for the whole field; ordinary objects retain typed nested attributes.
-The generated README lists JSON fields and the reason for each choice. Provider
-authors can still force `representation = "json"` on another field; microservice
-authors do not need Terraform representation annotations. Invalid overrides and
-naming collisions are rejected before Terraform files are written. Other arrays
-map to lists; binary data uses base64 strings. Generation does not install dependencies.
-
-Generated modules require Go 1.24+ and pin Plugin Framework v1.18.0. Run
-`go mod tidy` after generation. Use a parent `go.work` to develop alongside an
-unpublished SDK without putting local replacements in the generated module.
-The generated README contains schema, state, and request conversion examples.
-Provider authors retain ownership of CRUD, identity/imports, replacement rules,
-and reconciliation when API responses normalize configured values.
-
-Nullability follows the shared IR and the SDK representation. Both OpenAPI 3.0
-`type: string` with `nullable: true` and OpenAPI 3.1 `type: ["string", "null"]`
-produce nullable SDK fields and Terraform conversions. In OpenAPI 3.0, declare
-`nullable` alongside an explicit `type`; for a `$ref`, put it on the referenced
-schema. Required nullable fields use `Nullable[T]`; optional nullable fields use
-`*Nullable[T]` to distinguish omission from explicit null. Regenerate both the
-SDK and adapters when adopting nullable declarations.
+Upgrading generated Go or TypeScript clients from Arvalez 1? Follow the [Arvalez 2 migration guide](MIGRATION.md).
