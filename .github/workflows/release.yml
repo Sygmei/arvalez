@@ -68,7 +68,7 @@ jobs:
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             asset_name: arvalez-cli-macos-x86_64
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
             asset_name: arvalez-cli-macos-arm64
           - runner: windows-2022
