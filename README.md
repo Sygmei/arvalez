@@ -4,12 +4,12 @@ Generate typed API clients from OpenAPI, with shared configuration and customiza
 
 | Target | Generated code |
 | --- | --- |
-| Go | Typed models and a `net/http` client |
-| TypeScript | Typed models and a `fetch` client |
-| Python | Pydantic models and sync/async `httpx` clients |
-| PythonMini | A compact Python client and Pydantic models |
-| Nushell | Client commands and model constructors |
-| Terraform | Opt-in adapters for Arvalez Go SDKs |
+| [Go](https://github.com/Sygmei/arvalez/wiki/Go) | Typed models and a `net/http` client |
+| [TypeScript](https://github.com/Sygmei/arvalez/wiki/TypeScript) | Typed models and a `fetch` client |
+| [Python](https://github.com/Sygmei/arvalez/wiki/Python) | Pydantic models and sync/async `httpx` clients |
+| [PythonMini](https://github.com/Sygmei/arvalez/wiki/PythonMini) | A compact Python client and Pydantic models |
+| [Nushell](https://github.com/Sygmei/arvalez/wiki/Nushell) | Client commands and model constructors |
+| [Terraform](https://github.com/Sygmei/arvalez/wiki/Terraform-adapters) | Opt-in adapters for Arvalez Go SDKs |
 
 ## Quick start
 
@@ -46,6 +46,7 @@ For APIs that always include every response field, `response_fields = "always_pr
 The **[repository wiki](https://github.com/Sygmei/arvalez/wiki)** contains the detailed guides:
 
 - [Getting started and Docker](https://github.com/Sygmei/arvalez/wiki/Getting-started)
+- [Per-language guides](https://github.com/Sygmei/arvalez/wiki/Languages)
 - [Configuration and overrides](https://github.com/Sygmei/arvalez/wiki/Configuration)
 - [Response model policies](https://github.com/Sygmei/arvalez/wiki/Response-model-policies)
 - [Template customization](https://github.com/Sygmei/arvalez/wiki/Templates)
