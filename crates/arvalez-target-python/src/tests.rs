@@ -31,6 +31,7 @@ fn make_package_from_ir(
             version: "0.1.0".into(),
             description: None,
         },
+        ..Default::default()
     };
     generate(&ir, template_dir.as_deref(), &common, &target)
 }

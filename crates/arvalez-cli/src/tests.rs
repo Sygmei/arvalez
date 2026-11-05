@@ -3,13 +3,16 @@ use crate::config::{
     resolve_python_config,
 };
 use crate::corpus::classify_failure;
-use crate::generate::filter_deprecated_operations;
+
 use arvalez_ir::{Attributes, CoreIr, Operation};
 use serde_json::json;
 
 #[test]
 fn normalize_python_package_name_replaces_hyphens() {
-    assert_eq!(normalize_python_package_name("arvalez-client"), "arvalez_client");
+    assert_eq!(
+        normalize_python_package_name("arvalez-client"),
+        "arvalez_client"
+    );
 }
 
 #[test]
@@ -106,12 +109,73 @@ fn filters_deprecated_operations_when_enabled() {
         ..Default::default()
     };
 
-    let filtered = filter_deprecated_operations(&ir, true);
+    let filtered = arvalez_target_core::prepare_generation_ir(
+        &ir,
+        &arvalez_target_core::CommonConfig {
+            skip_deprecated_operations: true,
+            ..Default::default()
+        },
+        arvalez_target_core::ModelTarget::Go,
+        arvalez_target_go::model_identifier,
+    )
+    .unwrap();
     assert_eq!(filtered.operations.len(), 1);
     assert_eq!(filtered.operations[0].name, "active");
 
-    let unfiltered = filter_deprecated_operations(&ir, false);
+    let unfiltered = arvalez_target_core::prepare_generation_ir(
+        &ir,
+        &arvalez_target_core::CommonConfig {
+            skip_deprecated_operations: false,
+            ..Default::default()
+        },
+        arvalez_target_core::ModelTarget::Go,
+        arvalez_target_go::model_identifier,
+    )
+    .unwrap();
     assert_eq!(unfiltered.operations.len(), 2);
+}
+
+#[test]
+fn corpus_uses_model_policies_before_filtering_deprecated_operations() {
+    use crate::corpus::{CorpusTestOptions, run_corpus_spec_inline};
+    let dir = tempfile::tempdir().unwrap();
+    let spec = dir.path().join("openapi.json");
+    let mut document: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/response_fields.json")).unwrap();
+    document["paths"]["/widgets"]["post"]["deprecated"] = json!(true);
+    std::fs::write(&spec, document.to_string()).unwrap();
+    let config: AppConfig = toml::from_str("[common.models]\nresponse_fields='always_present'\n[common.output]\nskip_deprecated_operations=true\n[target.typescript.models]\nresponse_fields='schema'").unwrap();
+    let output = dir.path().join("out");
+    let options = CorpusTestOptions {
+        config: dir.path().join("arvalez.toml"),
+        repository: String::new(),
+        reference: String::new(),
+        checkout_directory: None,
+        output_directory: Some(output.clone()),
+        report_directory: None,
+        ignore_unhandled: false,
+        no_go: false,
+        no_python: false,
+        no_typescript: false,
+        no_nushell: false,
+        output_version: None,
+        limit: None,
+        jobs: None,
+        ui: false,
+    };
+    let report = run_corpus_spec_inline(&config, &spec, "openapi.json", &options);
+    assert!(report.failure.is_none(), "{:?}", report.failure);
+    assert_eq!(report.targets.len(), 4);
+    for target in report.targets {
+        assert!(target.failure.is_none(), "{:?}", target.failure);
+    }
+    let go = std::fs::read_to_string(output.join("go-client/models.go")).unwrap();
+    assert!(go.contains("type WidgetResponse struct"));
+    assert!(go.contains("Nickname *string `json:\"nickname\"`"));
+    let ts = std::fs::read_to_string(output.join("typescript-client/src/models.ts")).unwrap();
+    assert!(!ts.contains("interface WidgetResponse"));
+    let client = std::fs::read_to_string(output.join("go-client/client.go")).unwrap();
+    assert!(!client.contains("func (c *Client) CreateWidget("));
 }
 
 #[test]

@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use arvalez_target_core::{CommonConfig, PackageConfig};
 use arvalez_target_go::TargetConfig as GoGenConfig;
 use arvalez_target_nushell::TargetConfig as NushellTargetConfig;
-use arvalez_target_python::sanitize_identifier as sanitize_python_identifier;
 use arvalez_target_python::TargetConfig as PythonTargetConfig;
+use arvalez_target_python::sanitize_identifier as sanitize_python_identifier;
 use arvalez_target_typescript::TargetConfig as TypeScriptTargetConfig;
 use serde::Deserialize;
 
@@ -23,6 +23,8 @@ pub(crate) struct AppConfig {
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct AppCommonConfig {
+    #[serde(default)]
+    pub(crate) models: arvalez_target_core::ModelPolicies,
     #[serde(default)]
     pub(crate) disabled: bool,
     pub(crate) template_dir: Option<PathBuf>,
@@ -169,6 +171,8 @@ pub(crate) fn is_target_enabled(common: &AppCommonConfig, target_disabled: bool)
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct GoTargetConfig {
+    #[serde(default)]
+    pub(crate) models: arvalez_target_core::ModelPolicies,
     #[serde(flatten)]
     pub(crate) base: TargetConfig,
     pub(crate) module_path: Option<String>,
@@ -176,9 +180,31 @@ pub(crate) struct GoTargetConfig {
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct NushellTargetConfigExt {
+    #[serde(default)]
+    pub(crate) models: arvalez_target_core::ModelPolicies,
     #[serde(flatten)]
     pub(crate) base: TargetConfig,
     pub(crate) default_base_url: Option<String>,
+}
+
+/// Language model policies are separate from Terraform's adapter model options.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct LanguageTargetConfig {
+    #[serde(flatten)]
+    pub(crate) base: TargetConfig,
+    #[serde(default)]
+    pub(crate) models: arvalez_target_core::ModelPolicies,
+}
+impl std::ops::Deref for LanguageTargetConfig {
+    type Target = TargetConfig;
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+impl std::ops::DerefMut for LanguageTargetConfig {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
+    }
 }
 
 // ── Target section ────────────────────────────────────────────────────────────
@@ -189,12 +215,12 @@ pub(crate) struct TargetSection {
     #[serde(default)]
     pub(crate) go: GoTargetConfig,
     #[serde(default)]
-    pub(crate) python: TargetConfig,
+    pub(crate) python: LanguageTargetConfig,
     #[allow(dead_code)]
     #[serde(default)]
-    pub(crate) pythonmini: TargetConfig,
+    pub(crate) pythonmini: LanguageTargetConfig,
     #[serde(default)]
-    pub(crate) typescript: TargetConfig,
+    pub(crate) typescript: LanguageTargetConfig,
     #[serde(default)]
     pub(crate) nushell: NushellTargetConfigExt,
 }
@@ -326,7 +352,11 @@ pub(crate) fn resolve_go_config(
     template_dir: Option<PathBuf>,
     group_by_tag: bool,
     output_version: Option<String>,
-) -> (arvalez_target_core::CommonConfig, GoGenConfig, Option<PathBuf>) {
+) -> (
+    arvalez_target_core::CommonConfig,
+    GoGenConfig,
+    Option<PathBuf>,
+) {
     let target = &config_file.target.go;
     let common = &config_file.common;
 
@@ -346,20 +376,26 @@ pub(crate) fn resolve_go_config(
 
     // Derive package_name from module_path if not explicitly set.
     let package_name = if resolved_package_name.is_empty() {
-        normalize_go_package_name(
-            module_path
-            .rsplit('/')
-            .next()
-            .unwrap_or("client"),
-        )
+        normalize_go_package_name(module_path.rsplit('/').next().unwrap_or("client"))
     } else {
         normalize_go_package_name(&resolved_package_name)
     };
 
     let common_cfg = arvalez_target_core::CommonConfig {
-        package: arvalez_target_core::PackageConfig { name: package_name, version, description: None },
+        package: arvalez_target_core::PackageConfig {
+            name: package_name,
+            version,
+            description: None,
+        },
+        models: arvalez_target_core::ModelPolicies::resolve(&common.models, &target.models),
+        skip_deprecated_operations: target
+            .base
+            .resolve_skip_deprecated_operations(&common.output),
     };
-    let target_cfg = GoGenConfig { module_path, group_by_tag: effective_group_by_tag };
+    let target_cfg = GoGenConfig {
+        module_path,
+        group_by_tag: effective_group_by_tag,
+    };
     (common_cfg, target_cfg, template_dir)
 }
 
@@ -392,6 +428,8 @@ pub(crate) fn resolve_python_config(
             version,
             description,
         },
+        models: arvalez_target_core::ModelPolicies::resolve(&common.models, &target.models),
+        skip_deprecated_operations: target.resolve_skip_deprecated_operations(&common.output),
     };
     let target_cfg = PythonTargetConfig {
         group_by_tag: effective_group_by_tag,
@@ -424,6 +462,8 @@ pub(crate) fn resolve_typescript_config(
             version,
             description,
         },
+        models: arvalez_target_core::ModelPolicies::resolve(&common.models, &target.models),
+        skip_deprecated_operations: target.resolve_skip_deprecated_operations(&common.output),
     };
     let target_cfg = TypeScriptTargetConfig {
         group_by_tag: effective_group_by_tag,
@@ -443,14 +483,19 @@ pub(crate) fn resolve_nushell_config(
     let common = &config_file.common;
 
     let package_name =
-        target.base.resolve_package_name(package_name, &common.package, "arvalez-client");
-    let template_dir =
-        target.base.resolve_template_dir(template_dir, config_file.common.template_dir.clone());
+        target
+            .base
+            .resolve_package_name(package_name, &common.package, "arvalez-client");
+    let template_dir = target
+        .base
+        .resolve_template_dir(template_dir, config_file.common.template_dir.clone());
     let version = target.base.resolve_version(output_version, &common.package);
     let base_url = default_base_url
         .or_else(|| target.default_base_url.clone())
         .unwrap_or_default();
-    let effective_group_by_tag = target.base.resolve_group_by_tag(group_by_tag, &common.output);
+    let effective_group_by_tag = target
+        .base
+        .resolve_group_by_tag(group_by_tag, &common.output);
 
     let common_cfg = CommonConfig {
         package: PackageConfig {
@@ -458,6 +503,10 @@ pub(crate) fn resolve_nushell_config(
             version,
             description: None,
         },
+        models: arvalez_target_core::ModelPolicies::resolve(&common.models, &target.models),
+        skip_deprecated_operations: target
+            .base
+            .resolve_skip_deprecated_operations(&common.output),
     };
     let target_cfg = NushellTargetConfig {
         default_base_url: base_url,
@@ -506,10 +555,11 @@ pub(crate) fn resolve_terraform_config(
         .unwrap_or_else(|| "current".into());
     let sdk_version = if sdk_version == "current" {
         // Match the SDK's version, even when the adapter package has its own.
-        let version = config.target.go.base.resolve_version(
-            overrides.output_version.clone(),
-            &config.common.package,
-        );
+        let version = config
+            .target
+            .go
+            .base
+            .resolve_version(overrides.output_version.clone(), &config.common.package);
         if version.starts_with('v') {
             version
         } else {
@@ -530,6 +580,11 @@ pub(crate) fn resolve_terraform_config(
                 .resolve_version(overrides.output_version, &config.common.package),
             description: target.base.resolve_description(&config.common.package),
         },
+        models: arvalez_target_core::ModelPolicies::resolve(
+            &config.common.models,
+            &config.target.go.models,
+        ),
+        skip_deprecated_operations: false,
     };
     let generator = arvalez_target_terraform::TargetConfig {
         module_path: overrides

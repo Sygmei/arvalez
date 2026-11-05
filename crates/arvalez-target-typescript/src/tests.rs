@@ -14,6 +14,7 @@ fn common(package_name: &str) -> CommonConfig {
             version: "0.1.0".into(),
             description: None,
         },
+        ..Default::default()
     }
 }
 

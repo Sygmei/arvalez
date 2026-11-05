@@ -583,6 +583,8 @@ arvalez_target_core::declare_target! {
     config:    TargetConfig,
     templates: TEMPLATES,
     filters:   register_filters,
+    model_target: arvalez_target_core::ModelTarget::TypeScript,
+    model_identifier: sanitize_type_name,
 }
 
 #[cfg(test)]

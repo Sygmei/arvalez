@@ -110,9 +110,8 @@ pub fn register_filters(tera: &mut Tera) {
         for field in &mut fields {
             field["field_name"] = Value::String(sanitize_exported_identifier(field["name"].as_str().unwrap_or("")));
             let ty = go_type_from_value(&field["type_ref"]);
-            let optional = field["optional"] == true;
-            let nullable = field["nullable"] == true;
-            let field_ty = go_field_type_from_value(&field["type_ref"], optional, nullable);
+            let field_ty = go_field_type(field);
+            field["native_nullable"] = Value::Bool(field["nullable"] == true && field["attributes"][arvalez_target_core::ALWAYS_PRESENT] == true);
             field["set_type"] = Value::String(ty.clone());
             field["type"] = Value::String(field_ty.clone());
             field["pointer"] = Value::Bool(field_ty == format!("*{ty}"));
@@ -140,10 +139,7 @@ pub fn register_filters(tera: &mut Tera) {
     });
     // {{ field | go_field_type }} → Go field type handling optional/nullable → pointer
     tera.register_filter("go_field_type", |v: &Value, _: &HashMap<String, Value>| {
-        let optional = v.get("optional").and_then(Value::as_bool).unwrap_or(false);
-        let nullable = v.get("nullable").and_then(Value::as_bool).unwrap_or(false);
-        let type_ref = v.get("type_ref").cloned().unwrap_or(Value::Null);
-        Ok(Value::String(go_field_type_from_value(&type_ref, optional, nullable)))
+        Ok(Value::String(go_field_type(v)))
     });
     // {{ field | go_json_tag }} → `json:"name"` or `json:"name,omitempty"`
     tera.register_filter("go_json_tag", |v: &Value, _: &HashMap<String, Value>| {
@@ -232,10 +228,10 @@ pub fn model_value_type(type_ref: &arvalez_ir::TypeRef, package: &str) -> String
     go_type_with_prefix(&serde_json::to_value(type_ref).expect("serializable type"), &prefix)
 }
 
-/// Whether an optional, non-nullable SDK field wraps its value in a pointer.
+/// Whether the generated SDK field wraps its underlying value in a pointer.
 pub fn model_field_is_pointer(field: &arvalez_ir::Field) -> bool {
-    let value = serde_json::to_value(&field.type_ref).expect("serializable type");
-    !field.nullable && go_field_type_from_value(&value, field.optional, false) == format!("*{}", go_type_from_value(&value))
+    let value = serde_json::to_value(field).expect("serializable field");
+    go_field_type(&value) == format!("*{}", go_type_from_value(&value["type_ref"]))
 }
 
 fn go_type_from_value(v: &Value) -> String {
@@ -276,6 +272,17 @@ fn go_type_with_prefix(v: &Value, prefix: &str) -> String {
         Some("map")   => format!("map[string]{}", go_type_with_prefix(&v["value"], prefix)),
         _             => "any".into(),
     }
+}
+
+fn go_field_type(field: &Value) -> String {
+    let ty = go_type_from_value(&field["type_ref"]);
+    if field["attributes"][arvalez_target_core::RECURSIVE_POINTER] == true {
+        return format!("*{ty}");
+    }
+    if field["attributes"][arvalez_target_core::ALWAYS_PRESENT] == true && field["nullable"] == true {
+        return if ty.starts_with("[]") || ty.starts_with("map[") || ty == "any" { ty } else { format!("*{ty}") };
+    }
+    go_field_type_from_value(&field["type_ref"], field["optional"] == true, field["nullable"] == true)
 }
 
 fn go_field_type_from_value(type_ref: &Value, optional: bool, nullable: bool) -> String {
@@ -568,4 +575,6 @@ arvalez_target_core::declare_target! {
     config:    TargetConfig,
     templates: TEMPLATES,
     filters:   register_filters,
+    model_target: arvalez_target_core::ModelTarget::Go,
+    model_identifier: model_identifier,
 }

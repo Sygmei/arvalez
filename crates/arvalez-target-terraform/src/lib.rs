@@ -112,7 +112,7 @@ mod template_tools {
     use super::*;
     #[allow(dead_code)]
     fn filters(_: &mut tera::Tera) {}
-    arvalez_target_core::declare_target! { config: TargetConfig, templates: TEMPLATES, filters: filters }
+    arvalez_target_core::declare_target! { config: TargetConfig, templates: TEMPLATES, filters: filters, model_target: arvalez_target_core::ModelTarget::Go, model_identifier: model_identifier }
 }
 pub use template_tools::{dump_erasers, dump_templates};
 
@@ -301,13 +301,23 @@ impl<'a> Resolver<'a> {
             .models
             .get(&model.name)
             .and_then(|m| m.fields.get(&field.name))
+            .or_else(|| {
+                model
+                    .attributes
+                    .get(arvalez_target_core::SOURCE_MODEL)
+                    .and_then(Value::as_str)
+                    .and_then(|name| self.config.models.get(name))
+                    .and_then(|m| m.fields.get(&field.name))
+            })
             .cloned()
             .unwrap_or_default()
     }
     fn field(&self, model: &Model, field: &Field, stack: &mut Vec<String>) -> Result<Shape> {
         let options = self.options(model, field);
+        let native =
+            field.attributes.get(arvalez_target_core::ALWAYS_PRESENT) == Some(&Value::Bool(true));
         if options.null_behavior == NullBehavior::ExplicitNull
-            && !(field.optional && field.nullable)
+            && !(field.nullable && (field.optional || native))
         {
             bail!("explicit_null requires an optional nullable field");
         }
@@ -322,7 +332,13 @@ impl<'a> Resolver<'a> {
         } else {
             self.shape(&field.type_ref, stack)?
         };
-        if field.nullable {
+        if native && field.nullable {
+            shape.codec = if model_field_is_pointer(field) {
+                format!("pointerCodec({})", shape.codec)
+            } else {
+                format!("nativeNullableCodec({})", shape.codec)
+            };
+        } else if field.nullable {
             shape.codec = format!("nullableCodec({})", shape.codec);
             if field.optional {
                 shape.codec = format!(
@@ -333,6 +349,9 @@ impl<'a> Resolver<'a> {
             }
         } else if model_field_is_pointer(field) {
             shape.codec = format!("pointerCodec({})", shape.codec);
+            if !field.optional {
+                shape.codec = format!("nonNullCodec({})", shape.codec);
+            }
         } else if field.optional
             && !matches!(
                 &field.type_ref,
@@ -452,6 +471,13 @@ pub fn generate(
     common: &CommonConfig,
     config: &TargetConfig,
 ) -> Result<Vec<GeneratedFile>> {
+    let prepared = arvalez_target_core::prepare_response_models(
+        ir,
+        &common.models,
+        arvalez_target_core::ModelTarget::Go,
+        model_identifier,
+    )?;
+    let ir = &prepared;
     let mut resolved = std::borrow::Cow::Borrowed(config);
     if config.sdk_version == "current" {
         let version = &common.package.version;
@@ -552,6 +578,16 @@ pub fn generate(
         .unwrap_or_default();
     let mut context = tera::Context::new();
     context.insert("tf_models", &models);
+    context.insert(
+        "native_nullable",
+        &ir.models.iter().any(|m| {
+            m.fields.iter().any(|f| {
+                f.nullable
+                    && f.attributes.get(arvalez_target_core::ALWAYS_PRESENT)
+                        == Some(&Value::Bool(true))
+            })
+        }),
+    );
     context.insert("sdk_import", import);
     arvalez_target_core::render_root_templates(
         &tera,

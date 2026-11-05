@@ -87,7 +87,9 @@ fn sample_ir() -> CoreIr {
 }
 
 fn default_common() -> CommonConfig {
-    CommonConfig { package: PackageConfig { name: "client".into(), version: "0.1.0".into(), description: None } }
+    CommonConfig { package: PackageConfig { name: "client".into(), version: "0.1.0".into(), description: None },
+        ..Default::default()
+    }
 }
 
 #[test]

@@ -20,8 +20,8 @@ use arvalez_openapi::{
 use arvalez_target_core::CommonConfig;
 use arvalez_target_go::{generate_go_package, write_go_package};
 use arvalez_target_nushell::{
-    generate as generate_nushell_package, write_package as write_nushell_package,
-    TargetConfig as NushellTargetConfig,
+    TargetConfig as NushellTargetConfig, generate as generate_nushell_package,
+    write_package as write_nushell_package,
 };
 use arvalez_target_python::{
     TargetConfig as PythonTargetConfig, generate as generate_python,
@@ -38,7 +38,7 @@ use crate::config::{AppConfig, is_target_enabled};
 use crate::corpus_ui::{
     CorpusMonitor, exit_status_signal, spawn_corpus_heartbeat, spawn_corpus_ui,
 };
-use crate::generate::{filter_deprecated_operations, openapi_options};
+use crate::generate::openapi_options;
 
 pub(crate) const CORPUS_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const CORPUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
@@ -339,55 +339,36 @@ pub(crate) fn run_corpus_spec_inline(
     let go_config = (!options.no_go
         && is_target_enabled(&config_file.common, config_file.target.go.base.disabled))
     .then(|| {
-        (
-            resolve_go_config(
-                config_file,
-                None,
-                None,
-                None,
-                false,
-                options.output_version.clone(),
-            ),
-            config_file
-                .target
-                .go
-                .base
-                .resolve_skip_deprecated_operations(&config_file.common.output),
+        resolve_go_config(
+            config_file,
+            None,
+            None,
+            None,
+            false,
+            options.output_version.clone(),
         )
     });
     let python_config = (!options.no_python
         && is_target_enabled(&config_file.common, config_file.target.python.disabled))
     .then(|| {
-        (
-            resolve_python_config(
-                config_file,
-                None,
-                None,
-                false,
-                false,
-                options.output_version.clone(),
-            ),
-            config_file
-                .target
-                .python
-                .resolve_skip_deprecated_operations(&config_file.common.output),
+        resolve_python_config(
+            config_file,
+            None,
+            None,
+            false,
+            false,
+            options.output_version.clone(),
         )
     });
     let typescript_config = (!options.no_typescript
         && is_target_enabled(&config_file.common, config_file.target.typescript.disabled))
     .then(|| {
-        (
-            resolve_typescript_config(
-                config_file,
-                None,
-                None,
-                false,
-                options.output_version.clone(),
-            ),
-            config_file
-                .target
-                .typescript
-                .resolve_skip_deprecated_operations(&config_file.common.output),
+        resolve_typescript_config(
+            config_file,
+            None,
+            None,
+            false,
+            options.output_version.clone(),
         )
     });
     let nushell_config = (!options.no_nushell
@@ -396,20 +377,13 @@ pub(crate) fn run_corpus_spec_inline(
             config_file.target.nushell.base.disabled,
         ))
     .then(|| {
-        (
-            resolve_nushell_config(
-                config_file,
-                None,
-                None,
-                None,
-                false,
-                options.output_version.clone(),
-            ),
-            config_file
-                .target
-                .nushell
-                .base
-                .resolve_skip_deprecated_operations(&config_file.common.output),
+        resolve_nushell_config(
+            config_file,
+            None,
+            None,
+            None,
+            false,
+            options.output_version.clone(),
         )
     });
 
@@ -420,39 +394,28 @@ pub(crate) fn run_corpus_spec_inline(
         Ok(OpenApiLoadResult { ir, warnings }) => {
             let mut targets = Vec::new();
 
-            if let Some((go_config, skip_deprecated)) = go_config.as_ref() {
-                targets.push(run_go_corpus_target(
-                    &ir,
-                    *skip_deprecated,
-                    relative_spec,
-                    options,
-                    go_config,
-                ));
+            if let Some(go_config) = go_config.as_ref() {
+                targets.push(run_go_corpus_target(&ir, relative_spec, options, go_config));
             }
-            if let Some((python_config, skip_deprecated)) = python_config.as_ref() {
+            if let Some(python_config) = python_config.as_ref() {
                 targets.push(run_python_corpus_target(
                     &ir,
-                    *skip_deprecated,
                     relative_spec,
                     options,
                     python_config,
                 ));
             }
-            if let Some((typescript_config, skip_deprecated)) = typescript_config.as_ref() {
+            if let Some(typescript_config) = typescript_config.as_ref() {
                 targets.push(run_typescript_corpus_target(
                     &ir,
-                    *skip_deprecated,
                     relative_spec,
                     options,
                     typescript_config,
                 ));
             }
-            if let Some(((tpl_dir, common, nushell_config), skip_deprecated)) =
-                nushell_config.as_ref()
-            {
+            if let Some((tpl_dir, common, nushell_config)) = nushell_config.as_ref() {
                 targets.push(run_nushell_corpus_target(
                     &ir,
-                    *skip_deprecated,
                     relative_spec,
                     options,
                     tpl_dir.as_deref(),
@@ -604,7 +567,6 @@ fn run_corpus_spec_subprocess(
 
 fn run_go_corpus_target(
     ir: &CoreIr,
-    skip_deprecated: bool,
     relative_spec: &str,
     options: &CorpusTestOptions,
     config: &(
@@ -613,8 +575,7 @@ fn run_go_corpus_target(
         Option<std::path::PathBuf>,
     ),
 ) -> CorpusTargetResult {
-    let target_ir = filter_deprecated_operations(ir, skip_deprecated);
-    match generate_go_package(&target_ir, config.2.as_deref(), &config.0, &config.1) {
+    match generate_go_package(ir, config.2.as_deref(), &config.0, &config.1) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,
@@ -635,14 +596,12 @@ fn run_go_corpus_target(
 
 fn run_python_corpus_target(
     ir: &CoreIr,
-    skip_deprecated: bool,
     relative_spec: &str,
     options: &CorpusTestOptions,
     config: &(CommonConfig, PythonTargetConfig, Option<std::path::PathBuf>),
 ) -> CorpusTargetResult {
     let (common, target, tpl) = config;
-    let target_ir = filter_deprecated_operations(ir, skip_deprecated);
-    match generate_python(&target_ir, tpl.as_deref(), common, target) {
+    match generate_python(ir, tpl.as_deref(), common, target) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,
@@ -663,7 +622,6 @@ fn run_python_corpus_target(
 
 fn run_typescript_corpus_target(
     ir: &CoreIr,
-    skip_deprecated: bool,
     relative_spec: &str,
     options: &CorpusTestOptions,
     config: &(
@@ -673,8 +631,7 @@ fn run_typescript_corpus_target(
     ),
 ) -> CorpusTargetResult {
     let (common, ts_config, template_dir) = config;
-    let target_ir = filter_deprecated_operations(ir, skip_deprecated);
-    match generate_typescript(&target_ir, template_dir.as_deref(), common, ts_config) {
+    match generate_typescript(ir, template_dir.as_deref(), common, ts_config) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,
@@ -695,15 +652,13 @@ fn run_typescript_corpus_target(
 
 fn run_nushell_corpus_target(
     ir: &CoreIr,
-    skip_deprecated: bool,
     relative_spec: &str,
     options: &CorpusTestOptions,
     template_dir: Option<&std::path::Path>,
     common: &CommonConfig,
     config: &NushellTargetConfig,
 ) -> CorpusTargetResult {
-    let target_ir = filter_deprecated_operations(ir, skip_deprecated);
-    match generate_nushell_package(&target_ir, template_dir, common, config) {
+    match generate_nushell_package(ir, template_dir, common, config) {
         Ok(files) => write_corpus_target_output(
             relative_spec,
             options,

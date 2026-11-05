@@ -2,7 +2,13 @@
 {%- if field.optional or field.nullable %}
 // {{ field.with_method }} supplies {{ field.field_name }} and returns the receiver.
 func (p *{{ input_type }}) {{ field.with_method }}(value {{ field.set_type }}) *{{ input_type }} {
-{%- if field.nullable %}
+{%- if field.native_nullable | default(value=false) %}
+{%- if field.pointer %}
+	p.{{ field.field_name }} = &value
+{%- else %}
+	p.{{ field.field_name }} = value
+{%- endif %}
+{%- elif field.nullable %}
 {%- if field.optional %}
 	p.{{ field.field_name }} = NewNullable(value)
 {%- else %}
@@ -26,7 +32,9 @@ func (p *{{ input_type }}) {{ field.without_method }}() *{{ input_type }} {
 {%- if field.nullable %}
 // {{ field.null_method }} supplies an explicit JSON null for {{ field.field_name }}.
 func (p *{{ input_type }}) {{ field.null_method }}() *{{ input_type }} {
-{%- if field.optional %}
+{%- if field.native_nullable | default(value=false) %}
+	p.{{ field.field_name }} = nil
+{%- elif field.optional %}
 	p.{{ field.field_name }} = Null[{{ field.set_type }}]()
 {%- else %}
 	p.{{ field.field_name }} = *Null[{{ field.set_type }}]()

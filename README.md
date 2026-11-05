@@ -115,6 +115,82 @@ name = "@arvalez/client"
 version = "1.0.2"
 ```
 
+### Always-present response fields
+
+For services that return every declared response property (using JSON `null`
+where appropriate), enable a response-only model policy:
+
+```toml
+[common.models]
+response_fields = "always_present"
+
+# A different default for one language.
+[target.typescript.models]
+response_fields = "schema"
+
+# A model exception across languages.
+[common.models.overrides.PartialResult]
+response_fields = "schema"
+
+# A model exception for one language.
+[target.go.models.overrides.PartialResult]
+response_fields = "always_present"
+```
+
+`schema` is the default and preserves existing generation. `always_present`
+makes declared response properties required without changing which properties
+allow null. It applies to success, error, and default responses, including nested
+models. Requests, map keys, and collection-element nullability are unaffected.
+
+Precedence is **target model override > common model override > target default >
+common default > `schema`**. Model keys are exact original IR names (normally
+OpenAPI schema names), before language sanitization or response suffixes. A model
+override affects only its own fields; each nested model resolves its own policy.
+Unknown model names and invalid policy values are errors.
+
+All language targets support the policy, including `[target.pythonmini.models]`
+for `generate-python-mini --config arvalez.toml`. Go uses pointers for nullable
+scalar/object fields and native nil-capable collection types, with no `omitempty`
+on affected fields. TypeScript removes optional property markers. Python and
+PythonMini produce required Pydantic fields without defaults, retaining `None`
+only for nullable fields. Nushell produces required constructor arguments and
+accepts null for nullable fields.
+
+Response-exclusive types retain their names. Shared request/response models are
+split only where necessary: the original remains the request type and a
+`<Name>Response` variant represents the response. Numeric suffixes resolve name
+collisions. Parent variants can be needed when only a nested model changes.
+
+The policy trusts the API contract rather than adding a new presence validator.
+Go still accepts unexpectedly missing properties as zero values or nil;
+TypeScript adds no runtime validation. Python's existing Pydantic validation
+rejects missing required response fields, including fields with schema defaults.
+
+Terraform automatically follows the resolved **Go** policy, including overrides,
+even when only adapters are generated. Do not configure a separate Terraform
+response policy. Existing `[target.terraform.models.<Model>.fields...]` settings
+remain adapter-specific; source-model settings are inherited by response variants,
+with explicit variant field settings taking precedence. Terraform null/unknown
+handling and schema lifecycle roles are unchanged. Regenerate the Go SDK and its
+adapters together after changing policy.
+
+For direct Rust library calls, supply the resolved policy in `CommonConfig.models`:
+
+```rust,ignore
+let common = CommonConfig {
+    models: ModelPolicies::resolve(&common_policies, &target_policies),
+    ..Default::default()
+};
+```
+
+`CommonConfig.skip_deprecated_operations` filters emitted operations after model
+projection, keeping model naming consistent with Terraform adapters. Existing
+Rust struct literals for `CommonConfig` can use `..Default::default()` for the
+new fields. Opting in changes generated public types; existing configurations
+that omit model policies preserve their previous behavior.
+
+### Output versions
+
 Override the configured output version from the CLI:
 
 ```bash

@@ -151,7 +151,8 @@ pub fn register_filters(tera: &mut Tera) {
             let default = v
                 .get("attributes")
                 .and_then(Value::as_object)
-                .and_then(|attributes| attributes.get("default"));
+                .and_then(|attributes| attributes.get("default"))
+                .filter(|_| v["attributes"][arvalez_target_core::ALWAYS_PRESENT] != true);
 
             let default_expr = default
                 .map(py_literal)
@@ -496,4 +497,6 @@ arvalez_target_core::declare_target! {
     config:    TargetConfig,
     templates: TEMPLATES,
     filters:   register_filters,
+    model_target: arvalez_target_core::ModelTarget::Python,
+    model_identifier: sanitize_class_name,
 }

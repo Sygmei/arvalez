@@ -9,7 +9,8 @@ import (
     "io"
     "math"
     "math/big"
-    "sort"
+    "sort"{% if native_nullable | default(value=false) %}
+    "reflect"{% endif %}
 
     sdk "{{ sdk_import }}"
     "github.com/hashicorp/terraform-plugin-framework/attr"
@@ -120,7 +121,22 @@ func optionalValueCodec[T any](inner codec[T]) codec[T] {
     }
     return result
 }
-func pointerCodec[T any](inner codec[T]) codec[*T] {
+{% if native_nullable | default(value=false) %}
+// Native nullable collections and interfaces preserve JSON null as Terraform null.
+func nativeNullableCodec[T any](inner codec[T]) codec[T] {
+    result := optionalValueCodec(inner)
+    result.from = func(ctx context.Context, v T, p path.Path) (attr.Value, diag.Diagnostics) {
+        value := reflect.ValueOf(v)
+        if !value.IsValid() { return nullValue(inner.node.typ), nil }
+        switch value.Kind() {
+        case reflect.Slice, reflect.Map, reflect.Pointer, reflect.Interface:
+            if value.IsNil() { return nullValue(inner.node.typ), nil }
+        }
+        return inner.from(ctx, v, p)
+    }
+    return result
+}
+{% endif %}func pointerCodec[T any](inner codec[T]) codec[*T] {
     return codec[*T]{node: inner.node,
         from: func(ctx context.Context, v *T, p path.Path) (attr.Value, diag.Diagnostics) {
             if v == nil { return nullValue(inner.node.typ), nil }; return inner.from(ctx, *v, p)

@@ -205,6 +205,7 @@ fn fixture() -> (CoreIr, TargetConfig, CommonConfig) {
             name: "tfmodels".into(),
             ..Default::default()
         },
+        ..Default::default()
     };
     (ir, config, common)
 }
@@ -434,6 +435,7 @@ fn generated_sdk_and_terraform_module_pass_framework_integration() {
             name: "sdk".into(),
             ..Default::default()
         },
+        ..Default::default()
     };
     let sdk_files = arvalez_target_go::generate_go_package(
         &ir,

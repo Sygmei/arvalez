@@ -20,5 +20,7 @@ jobs:
         run: cargo test --locked -p arvalez-target-terraform
       - name: Test CLI integration
         run: cargo test --locked -p arvalez-cli --test terraform_generation
+      - name: Test response policy generation and adapters
+        run: cargo test --locked -p arvalez-cli --test response_fields
       - name: Check existing Go generation
         run: cargo test --locked -p arvalez-target-go

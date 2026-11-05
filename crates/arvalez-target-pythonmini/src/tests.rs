@@ -13,6 +13,7 @@ fn make_package_from_ir(ir: CoreIr, package_name: &str) -> anyhow::Result<Vec<Ge
             version: "0.1.0".into(),
             description: None,
         },
+        ..Default::default()
     };
     generate(&ir, None, &common, &TargetConfig {})
 }

@@ -113,7 +113,7 @@ pub fn register_filters(tera: &mut Tera) {
             .map(|f| {
                 let name = f.get("name").and_then(Value::as_str).unwrap_or("field");
                 let type_val = f.get("type_ref").unwrap_or(&Value::Null);
-                format!("{}: {}", sanitize_variable(name), type_ref_to_nu(type_val))
+                format!("{}: {}", sanitize_variable(name), if f["nullable"] == true && f["attributes"][arvalez_target_core::ALWAYS_PRESENT] == true { "any".into() } else { type_ref_to_nu(type_val) })
             })
             .collect();
         Ok(Value::String(format!("record<{}>", parts.join(", "))))
@@ -200,6 +200,8 @@ arvalez_target_core::declare_target! {
     config:    TargetConfig,
     templates: TEMPLATES,
     filters:   register_filters,
+    model_target: arvalez_target_core::ModelTarget::Nushell,
+    model_identifier: sanitize_command,
 }
 
 #[cfg(test)]
@@ -299,14 +301,17 @@ mod tests {
     }
 
     fn default_common() -> CommonConfig {
-        CommonConfig { package: PackageConfig { name: "my-api".into(), version: "0.1.0".into(), description: None } }
+        CommonConfig { package: PackageConfig { name: "my-api".into(), version: "0.1.0".into(), description: None },
+        ..Default::default()
+    }
     }
 
     #[test]
     fn renders_basic_nushell_package() {
         let common = CommonConfig {
             package: PackageConfig { name: "my-api".into(), version: "1.0.0".into(), description: None },
-        };
+        ..Default::default()
+    };
         let config = TargetConfig {
             default_base_url: "https://api.example.com".into(),
             group_by_tag: false,

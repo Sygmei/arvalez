@@ -11,7 +11,9 @@ use anyhow::{Result, bail};
 use arvalez_openapi::{OpenApiLoadResult, load_openapi_to_ir_with_options};
 use arvalez_target_core::CommonConfig;
 use arvalez_target_go::{generate_go_package, write_go_package};
-use arvalez_target_nushell::{generate as generate_nushell_package, write_package as write_nushell_package};
+use arvalez_target_nushell::{
+    generate as generate_nushell_package, write_package as write_nushell_package,
+};
 use arvalez_target_python::{generate, write_package as write_python_package};
 use arvalez_target_pythonmini::{
     TargetConfig, generate as generate_pythonmini_package,
@@ -21,8 +23,8 @@ use arvalez_target_pythonmini::{
     dump_erasers as dump_pythonmini_erasers, dump_templates as dump_pythonmini_templates,
 };
 use arvalez_target_typescript::{
+    dump_erasers as dump_typescript_erasers, dump_templates as dump_typescript_templates,
     generate as generate_typescript, write_package as write_typescript_package,
-    dump_templates as dump_typescript_templates, dump_erasers as dump_typescript_erasers,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{
@@ -32,8 +34,8 @@ use config::{
 };
 use corpus::{CorpusTestOptions, run_apis_guru_corpus_test, run_corpus_spec_inline};
 use generate::{
-    TimingCollector, filter_deprecated_operations, load_input_ir, load_ir, openapi_options,
-    print_openapi_warnings, run_with_large_stack,
+    TimingCollector, load_input_ir, load_ir, openapi_options, print_openapi_warnings,
+    run_with_large_stack,
 };
 
 /// A target to dump templates or erasers for.
@@ -225,6 +227,8 @@ enum Command {
         timings: bool,
     },
     GeneratePythonMini {
+        #[arg(long, default_value = "arvalez.toml")]
+        config: PathBuf,
         #[arg(long)]
         ir: Option<PathBuf>,
         #[arg(long)]
@@ -424,21 +428,8 @@ fn main() -> Result<()> {
                     false,
                     output_version.clone(),
                 );
-                let target_ir = filter_deprecated_operations(
-                    &ir,
-                    config_file
-                        .target
-                        .go
-                        .base
-                        .resolve_skip_deprecated_operations(&config_file.common.output),
-                );
                 let files = timing_collector.measure_result("go_generate", || {
-                    generate_go_package(
-                        &target_ir,
-                        go_config.2.as_deref(),
-                        &go_config.0,
-                        &go_config.1,
-                    )
+                    generate_go_package(&ir, go_config.2.as_deref(), &go_config.0, &go_config.1)
                 })?;
                 let output = config_file
                     .target
@@ -454,29 +445,16 @@ fn main() -> Result<()> {
             }
 
             if python_enabled {
-                let (python_common, python_target, python_tpl) =
-                    resolve_python_config(
-                        &config_file,
-                        None,
-                        None,
-                        false,
-                        false,
-                        output_version.clone(),
-                    );
-                let target_ir = filter_deprecated_operations(
-                    &ir,
-                    config_file
-                        .target
-                        .python
-                        .resolve_skip_deprecated_operations(&config_file.common.output),
+                let (python_common, python_target, python_tpl) = resolve_python_config(
+                    &config_file,
+                    None,
+                    None,
+                    false,
+                    false,
+                    output_version.clone(),
                 );
                 let files = timing_collector.measure_result("python_generate", || {
-                    generate(
-                        &target_ir,
-                        python_tpl.as_deref(),
-                        &python_common,
-                        &python_target,
-                    )
+                    generate(&ir, python_tpl.as_deref(), &python_common, &python_target)
                 })?;
                 let output = config_file
                     .target
@@ -498,20 +476,8 @@ fn main() -> Result<()> {
                     false,
                     output_version.clone(),
                 );
-                let target_ir = filter_deprecated_operations(
-                    &ir,
-                    config_file
-                        .target
-                        .typescript
-                        .resolve_skip_deprecated_operations(&config_file.common.output),
-                );
                 let files = timing_collector.measure_result("typescript_generate", || {
-                    generate_typescript(
-                        &target_ir,
-                        ts_template_dir.as_deref(),
-                        &ts_common,
-                        &ts_config,
-                    )
+                    generate_typescript(&ir, ts_template_dir.as_deref(), &ts_common, &ts_config)
                 })?;
                 let output = config_file
                     .target
@@ -535,21 +501,8 @@ fn main() -> Result<()> {
                     false,
                     output_version.clone(),
                 );
-                let target_ir = filter_deprecated_operations(
-                    &ir,
-                    config_file
-                        .target
-                        .nushell
-                        .base
-                        .resolve_skip_deprecated_operations(&config_file.common.output),
-                );
                 let files = timing_collector.measure_result("nushell_generate", || {
-                    generate_nushell_package(
-                        &target_ir,
-                        template_dir.as_deref(),
-                        &common,
-                        &nushell_config,
-                    )
+                    generate_nushell_package(&ir, template_dir.as_deref(), &common, &nushell_config)
                 })?;
                 let output = config_file
                     .target
@@ -564,7 +517,10 @@ fn main() -> Result<()> {
                 eprintln!("generated {} files into {}", files.len(), output.display());
             }
             if let Some(files) = terraform_files {
-                let output = config_file.target.terraform.as_ref()
+                let output = config_file
+                    .target
+                    .terraform
+                    .as_ref()
                     .and_then(|t| t.base.output.directory.clone())
                     .unwrap_or_else(|| output_root.join("terraform"));
                 timing_collector.measure_result("terraform_write", || {
@@ -596,9 +552,16 @@ fn main() -> Result<()> {
             let config_file =
                 timing_collector.measure_result("config_load", || load_optional_config(&config))?;
             let default_target = config::TerraformTargetConfig::default();
-            let target = config_file.target.terraform.as_ref().unwrap_or(&default_target);
+            let target = config_file
+                .target
+                .terraform
+                .as_ref()
+                .unwrap_or(&default_target);
             let output = resolve_target_output_directory(
-                &config_file, &target.base, output_directory, "terraform",
+                &config_file,
+                &target.base,
+                output_directory,
+                "terraform",
             );
             let (common, generator, templates) = config::resolve_terraform_config(
                 &config_file,
@@ -654,21 +617,8 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
-            let target_ir = filter_deprecated_operations(
-                &ir,
-                config_file
-                    .target
-                    .go
-                    .base
-                    .resolve_skip_deprecated_operations(&config_file.common.output),
-            );
             let files = timing_collector.measure_result("go_generate", || {
-                generate_go_package(
-                    &target_ir,
-                    go_config.2.as_deref(),
-                    &go_config.0,
-                    &go_config.1,
-                )
+                generate_go_package(&ir, go_config.2.as_deref(), &go_config.0, &go_config.1)
             })?;
             timing_collector.measure_result("go_write", || write_go_package(&output, &files))?;
             eprintln!("generated {} files into {}", files.len(), output.display());
@@ -707,20 +657,8 @@ fn main() -> Result<()> {
                 keyword_only,
                 output_version,
             );
-            let target_ir = filter_deprecated_operations(
-                &ir,
-                config_file
-                    .target
-                    .python
-                    .resolve_skip_deprecated_operations(&config_file.common.output),
-            );
             let files = timing_collector.measure_result("python_generate", || {
-                generate(
-                    &target_ir,
-                    python_tpl.as_deref(),
-                    &python_common,
-                    &python_target,
-                )
+                generate(&ir, python_tpl.as_deref(), &python_common, &python_target)
             })?;
             timing_collector
                 .measure_result("python_write", || write_python_package(&output, &files))?;
@@ -758,20 +696,8 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
-            let target_ir = filter_deprecated_operations(
-                &ir,
-                config_file
-                    .target
-                    .typescript
-                    .resolve_skip_deprecated_operations(&config_file.common.output),
-            );
             let files = timing_collector.measure_result("typescript_generate", || {
-                generate_typescript(
-                    &target_ir,
-                    ts_template_dir.as_deref(),
-                    &ts_common,
-                    &ts_config,
-                )
+                generate_typescript(&ir, ts_template_dir.as_deref(), &ts_common, &ts_config)
             })?;
             timing_collector.measure_result("typescript_write", || {
                 write_typescript_package(&output, &files)
@@ -812,21 +738,8 @@ fn main() -> Result<()> {
                 group_by_tag,
                 output_version,
             );
-            let target_ir = filter_deprecated_operations(
-                &ir,
-                config_file
-                    .target
-                    .nushell
-                    .base
-                    .resolve_skip_deprecated_operations(&config_file.common.output),
-            );
             let files = timing_collector.measure_result("nushell_generate", || {
-                generate_nushell_package(
-                    &target_ir,
-                    tpl_dir.as_deref(),
-                    &common,
-                    &nushell_config,
-                )
+                generate_nushell_package(&ir, tpl_dir.as_deref(), &common, &nushell_config)
             })?;
             timing_collector
                 .measure_result("nushell_write", || write_nushell_package(&output, &files))?;
@@ -834,6 +747,7 @@ fn main() -> Result<()> {
             timing_collector.print();
         }
         Command::GeneratePythonMini {
+            config: config_path,
             ir,
             openapi,
             output_directory,
@@ -847,15 +761,27 @@ fn main() -> Result<()> {
             let (ir, warnings) =
                 load_input_ir(ir, openapi, ignore_unhandled, &mut timing_collector)?;
             print_openapi_warnings(&warnings);
+            let config_file = load_optional_config(&config_path)?;
+            let target = &config_file.target.pythonmini;
+            let template_dir =
+                target.resolve_template_dir(template_dir, config_file.common.template_dir.clone());
             let output = output_directory.unwrap_or_else(|| PathBuf::from("pythonmini-client"));
             let common = CommonConfig {
                 package: arvalez_target_core::PackageConfig {
-                    name: config::normalize_python_package_name(
-                        package_name.as_deref().unwrap_or("client"),
-                    ),
-                    version: version.unwrap_or_else(|| "0.1.0".into()),
-                    description: None,
+                    name: config::normalize_python_package_name(&target.resolve_package_name(
+                        package_name,
+                        &config_file.common.package,
+                        "client",
+                    )),
+                    version: target.resolve_version(version, &config_file.common.package),
+                    description: target.resolve_description(&config_file.common.package),
                 },
+                models: arvalez_target_core::ModelPolicies::resolve(
+                    &config_file.common.models,
+                    &target.models,
+                ),
+                skip_deprecated_operations: target
+                    .resolve_skip_deprecated_operations(&config_file.common.output),
             };
             let config = TargetConfig {};
             let files = timing_collector.measure_result("pythonmini_generate", || {

@@ -10,6 +10,9 @@
 //!
 //! This crate provides the single canonical implementation for all of them.
 
+mod model_policy;
+pub use model_policy::*;
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
@@ -54,17 +57,15 @@ impl Default for PackageConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommonConfig {
     pub package: PackageConfig,
-}
-
-impl Default for CommonConfig {
-    fn default() -> Self {
-        Self {
-            package: PackageConfig::default(),
-        }
-    }
+    /// Resolved common and target model policies.
+    #[serde(default)]
+    pub models: ModelPolicies,
+    /// Applied after model projection so model names do not depend on filtering.
+    #[serde(default)]
+    pub skip_deprecated_operations: bool,
 }
 
 // ── Output file ──────────────────────────────────────────────────────────────
@@ -312,6 +313,7 @@ pub fn render_root_templates(
         path_parameters(&serde_json::to_value(operation)?)?;
     }
     ctx.insert("ir", ir);
+    ctx.insert("model_policies", &common.models);
     ctx.insert("models", &serde_json::to_value(sorted_models(ir))?);
     ctx.insert("operations", &serde_json::to_value(sorted_operations(ir))?);
     // Common fields go in first, then target config fields override them.
@@ -557,6 +559,10 @@ fn rewrite_path_identifiers(path: &str, identifiers: &HashMap<String, String>) -
 #[macro_export]
 macro_rules! declare_target {
     (config: $config_ty:ty, templates: $templates:expr, filters: $filters:expr $(,)?) => {
+        $crate::declare_target! { config: $config_ty, templates: $templates, filters: $filters,
+            model_target: $crate::ModelTarget::TypeScript, model_identifier: $crate::to_pascal_case }
+    };
+    (config: $config_ty:ty, templates: $templates:expr, filters: $filters:expr, model_target: $model_target:expr, model_identifier: $model_identifier:path $(,)?) => {
         /// Generate all output files for the given IR and config.
         ///
         /// - `template_dir` overrides built-in templates found on disk.
@@ -567,6 +573,8 @@ macro_rules! declare_target {
             common: &$crate::CommonConfig,
             config: &$config_ty,
         ) -> $crate::anyhow::Result<::std::vec::Vec<$crate::GeneratedFile>> {
+            let prepared = $crate::prepare_generation_ir(ir, common, $model_target, $model_identifier)?;
+            let ir = &prepared;
             let mut tera = $crate::load_templates(template_dir, $templates)?;
             $filters(&mut tera);
             let config_val = $crate::serde_json::to_value(config)?;
